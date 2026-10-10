@@ -1,0 +1,266 @@
+# 单位。数值为初始草案（企划书 6.3 的 MVP 单位类别），具体平衡等批量对局后再调。
+#   layer: surface 地表 | air 空域；domain: land 陆军 | sea 舰船 | air 航空；category: military | civilian
+#   strength 近战战斗力；ranged_strength / range 远程战斗力与射程（航空单位的 range 是作战半径）
+#   moves 每回合移动力；sight 视野；cost 生产力；population 带走的人口；gold 一次性金钱；
+#   upkeep 每回合金钱维护费；hp 生命上限（默认 100）
+#   short 单位牌上的简称；icon 单位牌上的兵种符号（前端内置，北约军标风格）
+#   damage_vs_units / damage_vs_city 打部队 / 打城市的伤害倍率（百分比，默认 100）：炮兵削城防强、打部队弱
+#   torpedo 鱼雷（驱逐舰）：只打舰船，射程 range，近距离伤害很高
+#   carry 舰船能载运几支陆军（相邻的陆军登船，随船航行，到岸边下船；船沉了部队一起损失）
+#   air_capacity 航空母舰能搭载几支飞机（移动机场：飞机转场到航母上，随舰航行、从航母出击）
+#   anti_air 防空火力：只能打飞机（主动射击 range 内的敌方航空单位）；range 内的格子挨敌方空袭时，
+#            先对来袭飞机开火（高射火力），飞机带伤再投弹，血打光就被击落、炸不到目标
+#   tags 能力标签：found_city 建城、build_facility 建设施、scout 侦察、siege 攻城、
+#        area_damage 范围伤害（炮击伤到目标格里的所有敌军，城市也算）、
+#        indirect 间接射击（抛射，开炮不需要视线，山脉树林挡不住）、
+#        suppress 压制（打中的部队失去驻守加成，炮击波及的整格都算）……
+
+# ---- 将领 ----
+# 将领统御军团：身边的军团成员作战有加成（见 ruleset.yaml 的 generals）。星级出生时抽签决定。
+general:
+  name: 将领
+  short: 将
+  category: civilian
+  moves: 5
+  sight: 2
+  cost: 360
+  population: 1
+  gold: 100
+  upkeep: 3
+  tags: [general]
+  icon: general
+
+# ---- 平民 ----
+settler:
+  name: 开拓者
+  short: 拓
+  category: civilian
+  moves: 3
+  sight: 1
+  cost: 120
+  population: 1
+  gold: 30
+  tags: [found_city]
+  icon: settler
+
+engineer:
+  name: 工兵队
+  short: 工
+  category: civilian
+  moves: 3
+  sight: 1
+  cost: 75
+  population: 1
+  gold: 20
+  tags: [build_facility]
+  icon: engineer
+
+# ---- 陆军 ----
+recon:
+  name: 侦察营
+  short: 侦
+  strength: 4
+  moves: 5
+  sight: 4
+  cost: 60
+  population: 1
+  gold: 10
+  tags: [scout]
+  icon: recon
+
+infantry:
+  name: 步兵师
+  short: 步
+  strength: 10
+  hp: 180
+  moves: 3
+  cost: 60
+  population: 1
+  gold: 15
+  upkeep: 1
+  tags: [defensive]
+  modifiers:
+    - { stat: strength, op: mul, value: 125, when: { defending: true } }
+  icon: infantry
+
+motorized:
+  name: 摩托化师
+  short: 摩
+  strength: 12
+  moves: 6
+  cost: 155
+  population: 1
+  gold: 40
+  upkeep: 2
+  requires_resources: [rubber]
+  icon: motorized
+
+artillery:
+  name: 炮兵师
+  short: 炮
+  strength: 6
+  hp: 70
+  ranged_strength: 14
+  range: 2
+  damage_vs_units: 45
+  damage_vs_city: 260
+  moves: 2
+  cost: 195
+  population: 1
+  gold: 40
+  upkeep: 2
+  tags: [siege, area_damage, indirect, suppress]
+  icon: artillery
+
+anti_air:
+  name: 高射炮营
+  short: 高
+  strength: 6
+  anti_air: 16
+  range: 3
+  moves: 3
+  cost: 115
+  population: 1
+  gold: 30
+  upkeep: 1
+  icon: anti_air
+
+armor:
+  name: 装甲师
+  short: 装
+  strength: 24
+  hp: 200
+  moves: 4
+  cost: 235
+  population: 1
+  gold: 60
+  upkeep: 3
+  requires_resources: [iron, oil]
+  tags: [armored]
+  modifiers:
+    - { stat: strength, op: mul, value: 125, when: { defending: false } }   # 坦克进攻 +25%
+  icon: armor
+
+# ---- 海军 ----
+# 三级战舰：驱逐（快、鱼雷近战）→ 巡洋（中速、舰炮 2 格）→ 战列（慢、重炮 3 格、炮击整格）；
+# 越大的船载兵越多。运输船载 4 支陆军、没有攻击手段；航空母舰本身也没有攻击手段，靠舰载机作战。
+# 舰船航速是陆军的好几倍（原定数值的 1.8 倍）。
+destroyer:
+  name: 驱逐舰队
+  short: 驱
+  domain: sea
+  strength: 10
+  torpedo: 24
+  range: 2
+  damage_vs_units: 150
+  moves: 11
+  sight: 3
+  cost: 135
+  population: 1
+  gold: 40
+  upkeep: 2
+  carry: 1
+  icon: destroyer
+
+cruiser:
+  name: 巡洋舰队
+  short: 巡
+  domain: sea
+  strength: 14
+  ranged_strength: 16
+  range: 3
+  damage_vs_city: 170   # 舰炮削城防
+  moves: 9
+  sight: 3
+  cost: 240
+  population: 1
+  gold: 70
+  upkeep: 3
+  carry: 2
+  requires_resources: [iron]
+  icon: cruiser
+
+battleship:
+  name: 战列舰队
+  short: 战
+  domain: sea
+  strength: 18
+  ranged_strength: 22
+  range: 4
+  damage_vs_city: 200   # 重炮削城防
+  moves: 7
+  cost: 390
+  population: 2
+  gold: 100
+  upkeep: 4
+  carry: 3
+  requires_resources: [iron, oil]
+  tags: [area_damage, suppress]
+  icon: battleship
+
+transport:
+  name: 运输船
+  short: 运
+  domain: sea
+  strength: 4
+  moves: 9
+  sight: 2
+  cost: 110
+  population: 1
+  gold: 30
+  upkeep: 1
+  carry: 4
+  tags: [unarmed]
+  icon: transport
+
+carrier:
+  name: 航空母舰编队
+  short: 航
+  domain: sea
+  strength: 8
+  moves: 9
+  sight: 4
+  cost: 360
+  population: 2
+  gold: 120
+  upkeep: 4
+  air_capacity: 3
+  requires_resources: [iron, oil]
+  tags: [carrier]
+  icon: carrier
+
+# ---- 空军（P3 实装空战，先定义数据和单位牌） ----
+fighter:
+  name: 战斗机联队
+  short: 歼
+  layer: air
+  domain: air
+  strength: 10
+  range: 8
+  moves: 8
+  sight: 3
+  cost: 175
+  population: 1
+  gold: 50
+  upkeep: 2
+  requires_resources: [aluminum]
+  tags: [air_superiority]
+  icon: fighter
+
+bomber:
+  name: 轰炸机联队
+  short: 轰
+  layer: air
+  domain: air
+  strength: 4
+  ranged_strength: 20
+  range: 14
+  moves: 14
+  sight: 2
+  cost: 235
+  population: 1
+  gold: 70
+  upkeep: 3
+  requires_resources: [aluminum]
+  tags: [siege, suppress]
+  icon: bomber

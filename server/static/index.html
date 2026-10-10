@@ -1,0 +1,1648 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Project Sekai · 世界</title>
+<style>
+  :root {
+    --bg: #0f1720;
+    --side: #131b25;
+    --side-2: #18222e;
+    --line: rgba(232, 220, 196, 0.12);
+    --line-strong: rgba(232, 220, 196, 0.22);
+    --text: #ece5d6;
+    --muted: #a59e8f;
+    --gold: #d8b878;
+    --gold-ink: #1a140a;
+    --bad: #e07a62;
+    --sb-w: 330px;
+    --sb-h: 46vh;
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; height: 100%; background: var(--bg); color: var(--text); overflow: hidden; }
+  body { font: 13px/1.5 -apple-system, "PingFang SC", "Noto Sans SC", "Microsoft YaHei", sans-serif; }
+
+  /* ---- 布局：侧边栏 + 地图，互不遮挡 ---- */
+  .app { display: flex; height: 100%; width: 100%; }
+  .sidebar {
+    position: relative; flex: 0 0 var(--sb-w); width: var(--sb-w); min-width: 0; height: 100%;
+    display: flex; flex-direction: column; background: var(--side); border-right: 1px solid var(--line);
+  }
+  .stage { position: relative; flex: 1 1 auto; min-width: 0; min-height: 0; }
+  canvas#map { position: absolute; inset: 0; width: 100%; height: 100%; display: block; cursor: grab; touch-action: none; }
+  canvas#map.dragging { cursor: grabbing; }
+
+  .resizer { position: absolute; top: 0; right: -4px; width: 8px; height: 100%; cursor: ew-resize; z-index: 3; }
+  .resizer::after { content: ""; position: absolute; top: 0; bottom: 0; left: 3px; width: 2px; background: transparent; transition: background 0.15s; }
+  .resizer:hover::after, .resizer.active::after { background: rgba(216, 184, 120, 0.5); }
+
+  .sb-head { display: flex; align-items: center; gap: 8px; padding: 12px 12px 10px 16px; border-bottom: 1px solid var(--line); }
+  .brand { display: flex; align-items: baseline; gap: 8px; min-width: 0; flex: 1; }
+  .brand b { font: 600 16px/1 "Songti SC", "Noto Serif CJK SC", "Source Han Serif SC", Georgia, serif; letter-spacing: 0.06em; color: var(--gold); white-space: nowrap; }
+  .brand span { color: var(--muted); font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .icon-btn { width: 30px; height: 30px; padding: 0; display: grid; place-items: center; font-size: 15px; flex: none; }
+
+  .tabs { display: flex; gap: 2px; padding: 8px 10px 0; border-bottom: 1px solid var(--line); }
+  .tabs button { flex: 1; border: 0; border-radius: 7px 7px 0 0; background: none; color: var(--muted); padding: 8px 4px 9px; font-size: 13px; border-bottom: 2px solid transparent; }
+  .tabs button:hover { color: var(--text); background: rgba(255, 255, 255, 0.04); }
+  .tabs button.on { color: var(--gold); border-bottom-color: var(--gold); font-weight: 600; }
+  .sb-body { flex: 1; overflow: auto; padding: 4px 16px 20px; overscroll-behavior: contain; }
+  .tab { display: none; }
+  .tab.on { display: block; }
+
+  /* 收起后只留一条窄栏：展开按钮 + 三个分类的快捷按钮 */
+  .rail { display: none; flex-direction: column; align-items: center; gap: 6px; padding: 10px 0; }
+  .rail button { width: 32px; height: 32px; padding: 0; font-size: 13px; }
+  .app.collapsed .sidebar { flex-basis: 48px; width: 48px; }
+  .app.collapsed .sb-head, .app.collapsed .tabs, .app.collapsed .sb-body, .app.collapsed .resizer { display: none; }
+  .app.collapsed .rail { display: flex; }
+
+  h3 { margin: 18px 0 8px; font-size: 12px; font-weight: 600; color: var(--gold); letter-spacing: 0.04em; display: flex; align-items: center; gap: 8px; }
+  h3 small { color: var(--muted); font-weight: 400; letter-spacing: 0; }
+  h3 .grow { flex: 1; }
+
+  input, select, button {
+    font: inherit; color: var(--text); background: rgba(255, 255, 255, 0.05);
+    border: 1px solid var(--line-strong); border-radius: 6px; padding: 5px 8px; outline: none;
+  }
+  input:focus, select:focus, button:focus-visible { border-color: rgba(216, 184, 120, 0.7); }
+  select option, select optgroup { background: #1a222c; color: var(--text); }
+  button { cursor: pointer; }
+  button:hover { background: rgba(255, 255, 255, 0.1); }
+  button.primary { background: var(--gold); color: var(--gold-ink); border-color: var(--gold); font-weight: 600; }
+  button.primary:hover { background: #e4c88c; }
+  button:disabled { opacity: 0.5; cursor: not-allowed; }
+  button.primary:disabled { cursor: wait; }
+
+  /* ---- 表单：一行一个参数 ---- */
+  .row { display: grid; grid-template-columns: 52px 1fr auto; align-items: center; gap: 10px; margin: 9px 0; }
+  .row > label { color: var(--muted); font-size: 12px; }
+  .row input[type=number], .row select { width: 100%; }
+  .row input[type=range] { width: 100%; padding: 0; accent-color: var(--gold); background: none; border: 0; }
+  .row output { min-width: 40px; text-align: right; color: var(--text); font-variant-numeric: tabular-nums; font-size: 12px; }
+  .row.two { grid-template-columns: 52px 1fr auto; }
+  .gen-btn { width: 100%; padding: 8px; margin-top: 8px; font-size: 14px; }
+
+  /* ---- 显示：模式按钮、图层开关 ---- */
+  .seg { display: grid; grid-template-columns: repeat(4, 1fr); gap: 4px; }
+  .seg button { padding: 6px 0; font-size: 12px; color: var(--muted); }
+  .seg button.on { background: rgba(216, 184, 120, 0.9); color: var(--gold-ink); border-color: transparent; font-weight: 600; }
+  .chips { display: flex; flex-wrap: wrap; gap: 6px; }
+  .chip { padding: 4px 10px; border-radius: 999px; font-size: 12px; color: var(--muted); }
+  .chip.on { color: var(--gold-ink); background: rgba(216, 184, 120, 0.85); border-color: transparent; }
+  .legend { margin-top: 10px; padding: 8px 10px; border: 1px solid var(--line); border-radius: 8px; background: var(--side-2); display: none; }
+  .legend.show { display: block; }
+  .legend .grad { height: 8px; border-radius: 4px; }
+  .legend .ticks { display: flex; justify-content: space-between; margin-top: 4px; font-size: 11px; color: var(--muted); font-variant-numeric: tabular-nums; }
+  .legend .title { font-size: 11px; color: var(--muted); margin-bottom: 5px; }
+  .btn-row { display: flex; gap: 6px; flex-wrap: wrap; }
+  .btn-row button { flex: 1; min-width: 60px; }
+  .hint { color: var(--muted); font-size: 12px; margin: 6px 0 0; }
+  kbd { font: 11px/1 ui-monospace, monospace; padding: 2px 5px; border: 1px solid var(--line-strong); border-radius: 4px; color: var(--text); }
+
+  /* ---- 概况 ---- */
+  .kv { display: grid; grid-template-columns: auto 1fr; gap: 3px 12px; font-size: 12px; }
+  .kv span { color: var(--muted); }
+  .kv b { font-weight: 500; text-align: right; font-variant-numeric: tabular-nums; }
+  .bar-row { display: grid; grid-template-columns: 12px 48px 1fr 42px; gap: 8px; align-items: center; margin: 3px 0; font-size: 12px; }
+  .sw { width: 10px; height: 10px; border-radius: 2px; }
+  .dot { width: 9px; height: 9px; border-radius: 50%; box-shadow: 0 0 0 1px rgba(255,255,255,0.7); }
+  .track { height: 4px; background: rgba(255, 255, 255, 0.08); border-radius: 2px; overflow: hidden; }
+  .track i { display: block; height: 100%; }
+  .num { text-align: right; color: var(--muted); font-variant-numeric: tabular-nums; }
+  .meta { margin-top: 14px; color: var(--muted); font-size: 11px; word-break: break-all; }
+
+  /* ---- 对局 ---- */
+  .turnbar { display: flex; align-items: center; gap: 10px; margin-top: 12px; padding: 10px 12px; border: 1px solid var(--line); border-radius: 10px; background: var(--side-2); }
+  .turnbar .t { font: 600 20px/1 Georgia, serif; color: var(--gold); font-variant-numeric: tabular-nums; }
+  .turnbar .t small { font: 12px/1 inherit; color: var(--muted); margin-left: 4px; }
+  .turnbar .grow { flex: 1; color: var(--muted); font-size: 12px; }
+  .log { font-size: 12px; color: var(--muted); max-height: 240px; overflow: auto; overscroll-behavior: contain; }
+  .log div { padding: 3px 0 3px 8px; border-left: 2px solid transparent; line-height: 1.5; }
+  .log .head { padding-left: 0; color: var(--text); font-weight: 600; }
+  .log .war { border-left-color: #c9785f; }
+  .log .alert { border-left-color: #d9b154; color: #e5c78f; }
+  .log .build { border-left-color: #7fa883; }
+  .log .bad { color: var(--bad); }
+
+  /* 对局页：回合栏吸顶；各区块可折叠（折叠状态记在浏览器里） */
+  #tab-game .turnbar {
+    position: sticky; top: 0; z-index: 2; margin: 0 -16px; padding: 10px 16px;
+    border-radius: 0; border-width: 0 0 1px; background: var(--side);
+    box-shadow: 0 8px 12px -10px rgba(0, 0, 0, 0.7);
+  }
+  .turnbar .quick { padding: 5px 9px; font-size: 12px; color: var(--muted); }
+  .turnbar .quick[aria-pressed=true] { color: var(--gold); border-color: rgba(216, 184, 120, 0.65); background: rgba(216, 184, 120, 0.1); }
+  details.fold { margin-top: 10px; border-top: 1px solid var(--line); }
+  details.fold > summary {
+    list-style: none; cursor: pointer; display: flex; align-items: center; gap: 8px;
+    padding: 10px 0 6px; font-size: 12px; font-weight: 600; color: var(--gold); letter-spacing: 0.04em; user-select: none;
+  }
+  details.fold > summary::-webkit-details-marker { display: none; }
+  details.fold > summary::before {
+    content: ""; width: 5px; height: 5px; flex: none; border-right: 1.5px solid currentColor; border-bottom: 1.5px solid currentColor;
+    transform: rotate(-45deg); transition: transform 0.15s; margin: 0 2px;
+  }
+  details.fold[open] > summary::before { transform: rotate(45deg); }
+  details.fold > summary:hover { color: #e9cf96; }
+  details.fold > summary small { margin-left: auto; color: var(--muted); font-weight: 400; letter-spacing: 0; font-size: 11px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  details.fold .management-panel { margin-top: 2px; }
+  #city-management-panel > h3 { display: none; } /* 标题和托管状态已在折叠栏上 */
+  .plan-road { width: 100%; margin-top: 10px; }
+  #selection > .hint { margin: 10px 0 0; }
+  .tabs .tab-badge { margin-left: 5px; font-size: 10px; font-weight: 400; color: var(--muted); font-variant-numeric: tabular-nums; }
+  .tabs button.on .tab-badge { color: rgba(216, 184, 120, 0.75); }
+  @media (prefers-reduced-motion: reduce) { details.fold > summary::before { transition: none; } }
+  .card { margin-top: 10px; padding: 10px 12px; border: 1px solid var(--line); border-radius: 10px; background: var(--side-2); }
+  .card-head { display: flex; align-items: center; gap: 8px; margin-bottom: 6px; }
+  .card-head b { font-size: 14px; font-weight: 600; }
+  .card-head .grow { flex: 1; }
+  .card-head small { color: var(--muted); }
+  .pill { display: inline-block; padding: 1px 7px; border-radius: 999px; font-size: 11px; background: rgba(255,255,255,0.07); color: var(--muted); margin: 2px 4px 2px 0; }
+  .nation-dot { width: 10px; height: 10px; border-radius: 3px; flex: none; box-shadow: 0 0 0 1px rgba(255,255,255,0.5); }
+  .yields { display: flex; gap: 10px; font-size: 12px; color: var(--muted); margin: 4px 0; flex-wrap: wrap; }
+  .yields b { color: var(--text); font-weight: 500; }
+  .queue { margin: 6px 0; }
+  .qitem { display: flex; align-items: center; gap: 8px; font-size: 12px; padding: 3px 0; }
+  .qitem .grow { flex: 1; }
+  .qitem .prog { width: 60px; height: 4px; background: rgba(255,255,255,0.08); border-radius: 2px; overflow: hidden; }
+  .qitem .prog i { display: block; height: 100%; background: var(--gold); }
+  .unit-row { display: flex; align-items: center; gap: 8px; padding: 5px 0; font-size: 12px; }
+  .unit-row canvas { flex: none; border-radius: 3px; }
+  .unit-row .grow { flex: 1; min-width: 0; }
+  .unit-row .grow div:last-child { color: var(--muted); font-size: 11px; }
+  .unit-row .hp { width: 36px; height: 4px; background: rgba(255,255,255,0.08); border-radius: 2px; overflow: hidden; }
+  .unit-row .hp i { display: block; height: 100%; }
+  .nation-row { display: grid; grid-template-columns: 12px 1fr auto auto auto; gap: 8px; align-items: center; padding: 4px 6px; margin: 0 -6px; border-radius: 6px; font-size: 12px; cursor: pointer; }
+  .nation-row:hover { background: rgba(255,255,255,0.05); }
+  .nation-row span { color: var(--muted); font-variant-numeric: tabular-nums; text-align: right; }
+  .nation-row > div { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .nation-row.active { background: rgba(216, 184, 120, 0.1); }
+  .nation-row.gone { opacity: 0.45; }
+  .dl-link { margin-left: 8px; font-size: 11px; color: #d8b469; text-decoration: none; border: 1px solid rgba(216,180,105,.5); border-radius: 4px; padding: 1px 6px; }
+  .dl-link:hover { background: rgba(216,180,105,.15); }
+  #update-banner { position: fixed; left: 50%; bottom: 16px; transform: translateX(-50%); z-index: 61; padding: 10px 16px; border-radius: 8px; background: rgba(30,22,14,.95); border: 1px solid #c9a55c; color: #f3e6c8; font-size: 13px; max-width: calc(100vw - 32px); }
+  #update-banner a { color: #f0c46a; }
+  #city-alerts { position: fixed; top: 64px; left: 50%; transform: translateX(-50%); z-index: 60; display: grid; gap: 8px; width: min(420px, calc(100vw - 32px)); pointer-events: none; }
+  .city-alert { pointer-events: auto; cursor: pointer; display: grid; gap: 2px; padding: 10px 14px; border-radius: 8px; background: rgba(30, 22, 14, 0.94); border: 1px solid #c9a55c; box-shadow: 0 6px 24px rgba(0,0,0,.35); color: #f3e6c8; font-size: 13px; animation: alert-in .25s ease-out; }
+  .city-alert b { color: #f0c46a; font-size: 12px; letter-spacing: .08em; }
+  @keyframes alert-in { from { opacity: 0; transform: translateY(-8px); } to { opacity: 1; transform: none; } }
+  @media (prefers-reduced-motion: reduce) { .city-alert { animation: none; } }
+  .cargo-list { display: grid; gap: 4px; margin-top: 10px; padding-top: 8px; border-top: 1px solid var(--line); font-size: 12px; }
+  .cargo-list b { font-weight: 500; color: #d8c9a7; margin-right: 10px; }
+  .cargo-row { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 3px 0; }
+  .cargo-row small { color: var(--muted); margin-left: 4px; }
+  .cargo-row button { font-size: 11px; padding: 3px 9px; }
+  .nation-more { width: 100%; margin-top: 4px; padding: 4px; font-size: 11px; color: var(--muted); background: none; border-style: dashed; }
+  .nation-row em { font-style: normal; font-size: 10px; margin-left: 5px; padding: 0 5px; border-radius: 8px; }
+  .nation-row em.unrest { color: #f2c0b0; background: rgba(155, 47, 36, 0.35); border: 1px solid rgba(214, 102, 82, 0.5); }
+  .nation-row em.ai { color: var(--muted); border: 1px solid var(--line-strong); }
+  .legend-units { display: grid; grid-template-columns: 1fr 1fr; gap: 4px 10px; font-size: 12px; }
+  .legend-units div { display: flex; align-items: center; gap: 6px; }
+  .empty { color: var(--muted); font-size: 12px; padding: 6px 0; }
+
+  /* 城市与设施详情：石色字、铜金边线和地图景观预览。 */
+  .settlement-card { padding: 0; overflow: hidden; border-color: rgba(201,173,119,0.28); border-radius: 8px; }
+  .settlement-hero { position: relative; min-height: 126px; padding: 18px 14px; background: radial-gradient(ellipse at 85% 60%, #384940 0%, #243335 42%, #18252c 78%); border-bottom: 1px solid var(--line); }
+  .settlement-art { position: absolute; right: 0; top: 0; width: 144px; height: 126px; pointer-events: none; }
+  .settlement-title { position: relative; max-width: calc(100% - 110px); z-index: 1; }
+  .settlement-title small { display: block; color: var(--gold); font-size: 10px; letter-spacing: 0.12em; margin-bottom: 8px; }
+  .settlement-title b { display: block; font: 600 22px/1.35 "Songti SC", "Noto Serif CJK SC", Georgia, serif; color: #f0e5cd; }
+  .settlement-title span { display: block; color: #b7b7a5; font-size: 11px; margin-top: 8px; }
+  .settlement-body { padding: 12px 14px 14px; }
+  .settlement-yields { display: grid; grid-template-columns: repeat(4, 1fr); gap: 5px; margin-bottom: 14px; }
+  .settlement-yields span { border: 1px solid var(--line); background: rgba(255,255,255,0.025); border-radius: 4px; padding: 6px 2px; text-align: center; color: var(--muted); font-size: 10px; }
+  .settlement-yields b { display: block; font: 600 18px/1.4 Georgia, serif; color: #e3cf9e; font-variant-numeric: tabular-nums; }
+  .growth-line { margin: 10px 0 14px; }
+  .growth-line div { display: flex; justify-content: space-between; gap: 6px; margin-bottom: 5px; color: var(--muted); font-size: 11px; }
+  .growth-line b { color: #b6c89b; font-weight: 500; }
+  .growth-line .track { height: 3px; }
+  .growth-line .track i { background: #9cb47d; height: 100%; }
+  .settlement-buildings { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 5px; }
+  .settlement-buildings span { padding: 6px 8px; background: rgba(255,255,255,0.035); border-left: 2px solid #7e978b; border-radius: 2px; color: #cdc5b3; font-size: 11px; }
+  .settlement-body h3 { margin-top: 14px; }
+  .settlement-body .queue { margin-bottom: 0; }
+  .settlement-body .empty { font-size: 11px; }
+  .settlement-body .kv { font-size: 11px; }
+
+  /* ---- 地图上的提示 ---- */
+  .tip {
+    position: absolute; z-index: 3; pointer-events: none; display: none; padding: 6px 10px;
+    background: rgba(14, 19, 26, 0.94); border: 1px solid var(--line); border-radius: 6px; font-size: 12px;
+    white-space: nowrap; box-shadow: 0 4px 14px rgba(0, 0, 0, 0.35);
+  }
+  .tip b { color: var(--gold); font-weight: 600; }
+  .tip span { color: var(--muted); }
+  .loading {
+    position: absolute; inset: 0; z-index: 4; display: grid; place-items: center; pointer-events: none;
+    background: rgba(10, 14, 20, 0.45); transition: opacity 0.25s; font-size: 14px; color: var(--text);
+  }
+  .loading.hide { opacity: 0; }
+  .loading div { padding: 12px 18px; background: rgba(14, 19, 26, 0.94); border: 1px solid var(--line); border-radius: 8px; }
+
+  /* ---- 窄屏：地图在上，侧边栏在下 ---- */
+  @media (max-width: 760px) {
+    .app { flex-direction: column-reverse; }
+    .sidebar { flex: 0 0 var(--sb-h); width: 100%; height: var(--sb-h); border-right: 0; border-top: 1px solid var(--line); }
+    .resizer { top: -4px; right: 0; left: 0; width: 100%; height: 8px; cursor: ns-resize; }
+    .resizer::after { top: 3px; bottom: auto; left: 0; right: 0; width: auto; height: 2px; }
+    .app.collapsed .sidebar { flex-basis: 48px; width: 100%; height: 48px; }
+    .rail { flex-direction: row; justify-content: center; padding: 0 10px; height: 100%; }
+    .sb-head { padding: 8px 10px 6px 14px; }
+    .tabs { padding-top: 4px; }
+    .tabs button { padding: 6px 4px 7px; }
+    #collapse, #expand { transform: rotate(-90deg); } /* 侧边栏在下方：收起朝下、展开朝上 */
+  }
+
+  .tactical-card { border-color: #b49b6359; background: linear-gradient(145deg,#27343b,#17232d 70%); padding:14px; }
+  .tactical-heading { display:flex; justify-content:space-between; gap:8px; align-items:center; }
+  .tactical-heading small { display:block; font-size:10px; color:#9eacac; margin-bottom:4px; }
+  .tactical-heading b { font:600 21px/1.4 "Songti SC",Georgia,serif; color:#e7d5af; }
+  .tactical-health { font:600 24px/1 Georgia,serif; color:#b5cda1; }
+  .tactical-health small { font:11px/1 inherit; color:var(--muted); }
+  .experience { display:flex; align-items:center; gap:10px; padding:12px 0; }
+  .level-seal { width:30px; height:35px; display:grid; place-items:center; flex:none; color:#dfc68f; background:#ac925222; border:1px solid #b49b6359; clip-path:polygon(0 0,100% 0,100% 76%,50% 100%,0 76%); font:600 18px Georgia,serif; }
+  .experience>div { flex:1; min-width:0; }
+  .experience b { font-size:12px; font-weight:500; color:#d8c9a7; }
+  .experience span:not(.level-seal) { float:right; font-size:10px; color:#9ba8a8; }
+  .experience .track { height:3px; margin-top:6px; }
+  .experience .track i { background:#c4ab72; }
+  .tactical-stats { display:flex; justify-content:space-between; padding:8px 0 12px; border-top:1px solid var(--line); color:#a9b7b8; font-size:11px; }
+  .tactical-stats b { color:#e1d6be; margin-left:4px; }
+  .command-grid { display:grid; grid-template-columns:1fr 1fr; gap:6px; }
+  .command-button { display:flex; align-items:center; justify-content:center; gap:7px; min-height:35px; font-size:12px; }
+  .command-button svg { width:16px; height:16px; flex:none; }
+  .command-button[data-command=move] { color:#b0dce7; }
+  .command-button[data-command=attack] { color:#f1b18e; }
+  .command-warning { font-size:11px; color:#d5b28d; border-left:2px solid #a68453; padding-left:8px; margin:12px 0 0; }
+  .command-preview { margin-top:12px; padding:11px; border:1px solid #97b6b23d; border-radius:6px; background:#09192266; }
+  .command-preview>small { display:block; color:#98b5b8; font-size:10px; margin-bottom:4px; }
+  .command-preview>b { display:block; font-size:15px; color:#e4d6b8; }
+  .command-preview>span { display:block; color:var(--muted); font-size:11px; margin:5px 0; }
+  .command-preview>button { width:100%; margin-top:7px; min-height:33px; }
+  .damage-preview { display:flex; gap:16px; margin:8px 0; font-size:11px; color:#bcab9c; }
+  .damage-preview b { display:block; font:600 23px Georgia,serif; color:#ecc39c; }
+  .combat-mods { display:grid; gap:3px; margin:0 0 8px; font-size:11px; color:#bcab9c; line-height:1.45; }
+  .combat-mods i { font-style:normal; white-space:nowrap; }
+  .combat-mods .good { color:#9fcf8a; } .combat-mods .bad { color:#e59a7e; }
+  .attack-confirm { background:#e3ab7c !important; border-color:#e3ab7c !important; }
+  .unit-row.selectable { cursor:pointer; border:1px solid transparent; border-radius:5px; margin:2px -5px; padding:7px 5px; }
+  .unit-row.selectable:hover { background:#b3c4c910; }
+  .unit-row.active { border-color:#b49b6359; background:#bba97e12; }
+  .map-command { position:absolute; left:50%; bottom:22px; transform:translateX(-50%); max-width:calc(100% - 24px); width:max-content; display:flex; align-items:center; gap:24px; padding:11px 16px; border:1px solid #bda57866; border-radius:9px; background:#12232cf0; box-shadow:0 4px 24px #0005; backdrop-filter:blur(8px); }
+  .map-command[hidden] { display:none; }
+  .map-command b { display:block; color:#e4d0a2; font-size:13px; }
+  .map-command small { display:block; color:#a7b9b9; font-size:11px; margin-top:3px; }
+  .map-command button { font-size:11px; white-space:nowrap; }
+  .production-control { display:flex; gap:5px; margin-top:10px; }.production-control select { min-width:0; width:0; flex:1; font-size:11px; }.production-control button { font-size:11px; white-space:nowrap; }
+  .region-line { margin-top:9px; padding-top:8px; border-top:1px solid var(--line); }
+  .road-panel { margin-top:12px; padding:10px 12px; background:#182a31; border:1px solid #c1ae8240; border-radius:8px; }
+  .road-panel select { width:100%; margin:6px 0; }
+  @media(max-width:760px) { .map-command { bottom:10px; gap:12px; padding:8px 10px; }.map-command small{font-size:10px;} }
+
+  .stress-toggle { width:100%; display:flex; align-items:center; gap:12px; margin-top:14px; padding:11px; text-align:left; }
+  .stress-toggle b { display:block; color:#cdc6b4; font-size:12px; font-weight:500; }
+  .stress-toggle small { display:block; color:var(--muted); font-size:10px; margin-top:3px; }
+  .switch-track { width:32px; height:18px; border-radius:10px; background:#36414a; border:1px solid #657079; position:relative; flex:none; }
+  .switch-track i { position:absolute; width:12px; height:12px; border-radius:50%; top:2px; left:3px; background:#939fa2; transition:transform .16s; }
+  .stress-toggle[aria-pressed=true] { border-color:#c6ad7766; background:#beae7214; }
+  .stress-toggle[aria-pressed=true] .switch-track { background:#93824d; border-color:#c9b47b; }
+  .stress-toggle[aria-pressed=true] .switch-track i { background:#f0e1ba; transform:translateX(13px); }
+  .stress-report { margin-top:12px; padding:12px; border:1px solid #81969355; border-radius:8px; background:#192c30; }
+  .stress-report[hidden] { display:none; }
+  .stress-report h3 { margin:0 0 10px; }
+  .stress-counts { display:grid; grid-template-columns:repeat(3,1fr); gap:6px; margin:10px 0; }
+  .stress-counts span { color:#9dafaf; font-size:10px; }
+  .stress-counts b { display:block; font:600 18px Georgia,serif; color:#d8ccaa; }
+  .stress-report .kv { font-size:11px; gap:4px 8px; }
+  .stress-report .btn-row { margin-top:10px; }
+  .stress-report .btn-row button { font-size:11px; }
+  .stress-bench-row { padding-top:7px; margin-top:7px; border-top:1px solid var(--line); }
+  .management-panel { margin-top:14px; padding:14px; border:1px solid #b59b674a; border-radius:10px; background:linear-gradient(145deg,#243239,#19272d); }
+  #simulation-panel .btn-row { flex-wrap:wrap; }
+  #simulation-panel select { min-width:0; flex:1 1 170px; width:100%; }
+  .management-panel h3 { margin:0 0 10px; display:flex; align-items:center; justify-content:space-between; }
+  .management-state { font-size:10px; font-weight:400; color:#9daead; border:1px solid #647c7655; border-radius:12px; padding:3px 7px; }
+  .management-state.on { color:#ddd0a3; border-color:#bba26a66; background:#bcab6c14; }
+  .management-selects { display:flex; gap:6px; margin-bottom:9px; }.management-selects select { width:0; min-width:0; flex:1; font-size:11px; }
+  .management-ledger { display:grid; grid-template-columns:repeat(3,1fr); gap:6px; margin:12px 0; }
+  .management-ledger span { font-size:10px; color:var(--muted); }.management-ledger b { display:block; margin-bottom:4px; font:600 20px Georgia,serif; color:#d6c69e; }.management-ledger b.danger { color:#dfa68c; }
+  .management-panel .btn-row { display:flex; gap:5px; }.management-panel button { font-size:11px; }.management-panel .btn-row .primary { flex:1; }
+  .management-reason { margin:9px 0 0; font-size:11px; line-height:1.65; color:#becbc7; }
+  .management-alert { margin:7px 0; font-size:11px; line-height:1.6; color:#deb095; }
+  .city-management { margin-top:12px; padding:10px; border-left:2px solid #bea66d; border-radius:3px; background:#ad9c6110; }
+  .city-management .card-head { padding:0; margin:0 0 5px; }.city-management button { font-size:10px; padding:4px 7px; }
+  .city-management p { margin:5px 0 0; font-size:11px; line-height:1.65; color:#b8c7c3; }
+  .construction-progress { margin-top:10px; border:1px solid #b59d6950; border-radius:7px; padding:10px; }
+  .construction-progress .track { margin-top:8px; }.construction-progress b { color:#d3bd88; font-size:12px; }
+</style>
+</head>
+<body>
+<div id="city-alerts" aria-live="polite"></div>
+<div id="update-banner" role="status" hidden></div>
+<div class="app" id="app">
+  <aside class="sidebar" id="sidebar">
+    <header class="sb-head">
+      <div class="brand"><b>Project Sekai</b><span id="ruleset-title">世界</span><a class="dl-link" id="win-download" href="/downloads/windows/" target="_blank" rel="noopener" title="下载 Windows 版（本机运行，自动更新）">Windows 版</a></div>
+      <button type="button" class="icon-btn" id="collapse" title="收起侧边栏（H）">‹</button>
+    </header>
+    <nav class="tabs" id="tabs">
+      <button type="button" data-tab="gen" class="on">地形生成</button>
+      <button type="button" data-tab="view">显示</button>
+      <button type="button" data-tab="game">对局<span class="tab-badge" id="tab-turn"></span></button>
+    </nav>
+    <div class="rail" id="rail">
+      <button type="button" id="expand" title="展开侧边栏（H）">›</button>
+      <button type="button" data-open="gen" title="地形生成">地</button>
+      <button type="button" data-open="view" title="显示">显</button>
+      <button type="button" data-open="game" title="对局">局</button>
+    </div>
+
+    <div class="sb-body">
+      <!-- ================= 地形生成 ================= -->
+      <section class="tab on" id="tab-gen">
+        <form id="form" autocomplete="off">
+          <h3>世界参数</h3>
+          <div class="row"><label for="seed">种子</label><input type="number" id="seed" min="0" max="2147483647" value="42"><button type="button" id="random" title="随机种子">随机</button></div>
+          <div class="row"><label for="size">规模</label>
+            <select id="size">
+              <option value="40x25" data-nations="4">小 40×25</option>
+              <option value="80x50" data-nations="8" selected>标准 80×50</option>
+              <option value="128x80" data-nations="12">大 128×80</option>
+              <option value="256x150" data-nations="20">超大 256×150</option>
+              <option value="400x230" data-nations="24">地球 400×230</option>
+              <option value="800x460" data-nations="24">精细地球 800×460</option>
+            </select><span></span>
+          </div>
+          <div class="row"><label for="land">陆地</label><input type="range" id="land" min="10" max="90" step="1" value="38"><output id="land-val">38%</output></div>
+          <div class="row" title="全球气温：寒冷 ↔ 炎热"><label for="temp">气温</label><input type="range" id="temp" min="-100" max="100" step="5" value="0"><output id="temp-val">温和</output></div>
+          <div class="row" title="全球降雨：干旱 ↔ 湿润"><label for="rain">降雨</label><input type="range" id="rain" min="-100" max="100" step="5" value="0"><output id="rain-val">正常</output></div>
+          <div class="row" title="地形复杂度：平缓（海岸平滑、山少）↔ 崎岖（海岸破碎、山多）"><label for="rough">地形</label><input type="range" id="rough" min="0" max="100" step="5" value="50"><output id="rough-val">适中</output></div>
+          <div class="row"><label for="nations">国家</label><input type="number" id="nations" min="1" max="40" value="8"><span></span></div>
+          <button type="submit" class="primary gen-btn" id="go">生成世界</button>
+          <p class="hint">生成后自动开一局：每个起始点一个国家，首都 + 开局部队。</p>
+          <button type="button" id="stress-toggle" class="stress-toggle" aria-pressed="false"><span class="switch-track"><i></i></span><span><b>全陆地随机生成</b><small>默认关闭 · 城市 / 国家 / 军队 / 建筑 / 道路</small></span></button>
+          <p class="hint">开启后生成密集场景测试效果和负载；关闭可切回普通对局。</p>
+        </form>
+        <div id="world-info"></div>
+      </section>
+
+      <!-- ================= 显示 ================= -->
+      <section class="tab" id="tab-view">
+        <h3>地图模式</h3>
+        <div class="seg" id="modes">
+          <button type="button" data-mode="terrain" class="on">地形</button>
+          <button type="button" data-mode="nations" title="只显示国家领土，不画地形">国家</button>
+          <button type="button" data-mode="temperature">气温</button>
+          <button type="button" data-mode="rainfall">降雨</button>
+          <button type="button" data-mode="elevation">海拔</button>
+          <button type="button" data-mode="wind">风</button>
+          <button type="button" data-mode="areas">大区</button>
+          <button type="button" data-mode="plates">板块</button>
+        </div>
+        <div class="legend" id="legend"></div>
+
+        <h3>对局图层</h3>
+        <div class="chips">
+          <button type="button" class="chip on" data-game-layer="territory">领土</button>
+          <button type="button" class="chip on" data-game-layer="cities">城市</button>
+          <button type="button" class="chip on" data-game-layer="units">单位牌</button>
+          <button type="button" class="chip on" data-game-layer="roads">道路</button>
+          <button type="button" class="chip on" data-game-layer="facilities">设施</button>
+          <button type="button" class="chip" data-game-layer="capacity">城市承载</button>
+          <button type="button" class="chip on" data-game-layer="plans">作战计划</button>
+        </div>
+
+        <h3>地理图层</h3>
+        <div class="chips" id="layers">
+          <button type="button" class="chip on" data-layer="areas">大区边界</button>
+          <button type="button" class="chip on" data-layer="rivers">河流</button>
+          <button type="button" class="chip" data-layer="starts">起始点</button>
+          <button type="button" class="chip" data-layer="wind">风向</button>
+          <button type="button" class="chip" data-layer="currents">洋流</button>
+          <button type="button" class="chip" data-layer="resources">资源</button>
+          <button type="button" class="chip" data-layer="grid">网格</button>
+        </div>
+
+        <h3>视角</h3>
+        <div class="btn-row">
+          <button type="button" id="zoom-in" title="放大（+）">放大</button>
+          <button type="button" id="zoom-out" title="缩小（−）">缩小</button>
+          <button type="button" id="zoom-fit" title="显示全图">全图</button>
+        </div>
+        <p class="hint">拖动平移，滚轮 / 双指缩放，方向键也可以移动。<kbd>H</kbd> 收起 / 展开侧边栏，拖动侧边栏边缘调宽窄。</p>
+      </section>
+
+      <!-- ================= 对局 ================= -->
+      <section class="tab" id="tab-game">
+        <!-- 回合栏吸顶：滚动时“下一回合”和自动模拟开关一直在 -->
+        <div class="turnbar">
+          <div class="t" id="turn">—<small>回合</small></div>
+          <div class="grow" id="turn-note">没有对局</div>
+          <button type="button" class="quick" id="auto-sim-quick" aria-pressed="false" title="开启 / 暂停自动模拟" disabled>自动</button>
+          <button type="button" class="primary" id="next-turn" disabled>下一回合</button>
+        </div>
+        <!-- 选中的单位 / 城市放最上面：点地图后第一眼就能看到 -->
+        <div id="selection"><p class="hint">点选军事单位查看移动与攻击范围；点击单位列表可切换部队。城市也可以发动防御射击。</p></div>
+        <details class="fold" data-fold="log" open>
+          <summary>战报<small id="log-summary"></small></summary>
+          <div class="log" id="log"></div>
+        </details>
+        <details class="fold" data-fold="nations" open>
+          <summary>国家<small id="nation-count"></small></summary>
+          <div id="nation-list"></div>
+        </details>
+        <details class="fold" data-fold="sim">
+          <summary>自动模拟与国家 AI<small id="sim-summary"></small></summary>
+          <div class="management-panel" id="simulation-panel" hidden>
+            <div class="btn-row"><button type="button" class="primary" id="auto-sim" aria-pressed="false">开启自动模拟</button><select id="sim-speed" aria-label="模拟速度"><option value="1500">正常 · 等待 1.5 秒</option><option value="4000">慢速 · 等待 4 秒</option><option value="150">快速 · 等待 0.15 秒</option></select></div>
+            <p class="hint" id="simulation-status">默认关闭。开启后由国家自行建设、开拓和作战；暂停保留当前进度。</p>
+            <div class="btn-row"><button type="button" id="ai-all">全部国家交给 AI</button><button type="button" id="ai-stop">全部国家暂停 AI</button></div>
+          </div>
+        </details>
+        <details class="fold" data-fold="manage">
+          <summary>城市管理与道路<small id="manage-summary"></small></summary>
+          <div id="city-management-panel" class="management-panel" hidden></div>
+          <button type="button" id="plan-road" class="plan-road">规划道路与桥梁</button>
+        </details>
+        <div id="stress-report" class="stress-report" hidden></div>
+        <details class="fold" data-fold="legend">
+          <summary>兵牌图例</summary>
+          <div class="legend-units" id="unit-legend"></div>
+        </details>
+      </section>
+    </div>
+    <div class="resizer" id="resizer" title="拖动调整侧边栏大小"></div>
+  </aside>
+
+  <main class="stage" id="stage">
+    <canvas id="map"></canvas>
+    <div class="map-command" id="map-command" hidden><div><b id="command-name"></b><small id="command-hint"></small></div><button id="command-cancel" type="button">取消</button></div>
+    <div class="tip" id="tip"></div>
+    <div class="loading hide" id="loading"><div id="loading-text">正在生成世界…</div></div>
+  </main>
+</div>
+
+<script type="module">
+import { init, loadWorld, setLayer, setMode, zoomBy, fitView, MODES, windName, setOverlay, redraw, centerOn, terrainInfo, measureScenePerformance } from "/static/viewer.js";
+import * as game from "/static/game.js";
+
+const $ = (id) => document.getElementById(id);
+const esc = (s) => String(s).replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]);
+const fmt = (n) => Number(n).toLocaleString("zh-CN");
+const store = {
+  get(k) { try { return localStorage.getItem("sekai." + k); } catch { return null; } },
+  set(k, v) { try { localStorage.setItem("sekai." + k, v); } catch { /* 隐私模式等：只是不记住 */ } },
+};
+let nationsTouched = false;
+let world = null; // 当前世界的元信息
+let gameId = null;
+let worldBusy = false;
+let autoSim = false, simulationTimer = null, simulationEpoch = 0;
+let stressEnabled = false;
+let normalGameId = null;
+let stressBenchmark = null;
+
+// ================================================================ 侧边栏：分类、收起、调宽
+
+const app = $("app");
+const narrow = () => window.matchMedia("(max-width: 760px)").matches;
+
+function openTab(name) {
+  for (const b of document.querySelectorAll("#tabs [data-tab]")) b.classList.toggle("on", b.dataset.tab === name);
+  for (const s of document.querySelectorAll(".tab")) s.classList.toggle("on", s.id === "tab-" + name);
+  store.set("tab", name);
+}
+function setCollapsed(on) {
+  app.classList.toggle("collapsed", on);
+  store.set("collapsed", on ? "1" : "0");
+}
+for (const b of document.querySelectorAll("#tabs [data-tab]")) b.addEventListener("click", () => openTab(b.dataset.tab));
+for (const b of document.querySelectorAll("#rail [data-open]")) b.addEventListener("click", () => { setCollapsed(false); openTab(b.dataset.open); });
+$("collapse").onclick = () => setCollapsed(true);
+$("expand").onclick = () => setCollapsed(false);
+
+(function sidebarSize() {
+  const w = parseInt(store.get("width") || "", 10);
+  if (w >= 240 && w <= 640) document.documentElement.style.setProperty("--sb-w", w + "px");
+  const h = parseFloat(store.get("height") || "");
+  if (h >= 20 && h <= 80) document.documentElement.style.setProperty("--sb-h", h + "vh");
+  const rz = $("resizer");
+  rz.addEventListener("pointerdown", (e) => {
+    e.preventDefault();
+    rz.setPointerCapture(e.pointerId);
+    rz.classList.add("active");
+    const move = (ev) => {
+      if (narrow()) {
+        const vh = Math.min(80, Math.max(20, ((window.innerHeight - ev.clientY) / window.innerHeight) * 100));
+        document.documentElement.style.setProperty("--sb-h", vh.toFixed(1) + "vh");
+        store.set("height", vh.toFixed(1));
+      } else {
+        const w = Math.round(Math.min(Math.max(240, ev.clientX), Math.min(640, window.innerWidth * 0.7)));
+        document.documentElement.style.setProperty("--sb-w", w + "px");
+        store.set("width", String(w));
+      }
+    };
+    const up = () => {
+      rz.classList.remove("active");
+      rz.removeEventListener("pointermove", move);
+      rz.removeEventListener("pointerup", up);
+      rz.removeEventListener("pointercancel", up);
+    };
+    rz.addEventListener("pointermove", move);
+    rz.addEventListener("pointerup", up);
+    rz.addEventListener("pointercancel", up);
+  });
+})();
+
+// ================================================================ 地形生成
+
+function readForm() {
+  const [width, height] = $("size").value.split("x").map(Number);
+  return {
+    seed: Math.max(0, Math.min(2147483647, parseInt($("seed").value || "0", 10))),
+    width, height,
+    nations: Math.max(1, Math.min(40, parseInt($("nations").value || "8", 10))),
+    land: (parseInt($("land").value, 10) / 100).toFixed(2),
+    temp: (parseInt($("temp").value, 10) / 100).toFixed(2),
+    rain: (parseInt($("rain").value, 10) / 100).toFixed(2),
+    rough: (parseInt($("rough").value, 10) / 100).toFixed(2),
+  };
+}
+
+const WORDS = {
+  temp: (v) => (v <= -60 ? "极寒" : v <= -20 ? "寒冷" : v < 20 ? "温和" : v < 60 ? "炎热" : "酷热"),
+  rain: (v) => (v <= -60 ? "极干" : v <= -20 ? "干旱" : v < 20 ? "正常" : v < 60 ? "湿润" : "多雨"),
+  rough: (v) => (v <= 20 ? "平缓" : v <= 40 ? "较缓" : v < 60 ? "适中" : v < 80 ? "崎岖" : "险峻"),
+};
+function syncLabels() {
+  $("land-val").textContent = $("land").value + "%";
+  for (const k of ["temp", "rain", "rough"]) $(k + "-val").textContent = WORDS[k](parseInt($(k).value, 10));
+}
+
+function setUrl() {
+  const p = readForm();
+  const q = new URLSearchParams({ seed: p.seed, size: `${p.width}x${p.height}`, land: p.land, temp: p.temp, rain: p.rain, rough: p.rough, nations: p.nations, mode });
+  if (gameId) q.set("game", gameId);
+  history.replaceState(null, "", "?" + q.toString());
+}
+
+function fromUrl() {
+  const q = new URLSearchParams(location.search);
+  if (q.has("seed")) $("seed").value = parseInt(q.get("seed"), 10) || 0;
+  if (q.has("size") && [...$("size").options].some((o) => o.value === q.get("size"))) $("size").value = q.get("size");
+  if (q.has("land")) $("land").value = Math.round(parseFloat(q.get("land")) * 100) || 38;
+  if (q.has("nations")) { $("nations").value = parseInt(q.get("nations"), 10) || 8; nationsTouched = true; }
+  for (const k of ["temp", "rain", "rough"]) if (q.has(k)) $(k).value = Math.round(parseFloat(q.get(k)) * 100) || $(k).value;
+  if (q.has("rough") && parseFloat(q.get("rough")) === 0) $("rough").value = 0;
+  syncLabels();
+  return { mode: q.get("mode") || "terrain", game: q.get("game") };
+}
+
+function bars(items, counts, total, shape) {
+  const max = Math.max(1, ...Object.values(counts));
+  return items.filter((it) => counts[it.id]).map((it) => {
+    const n = counts[it.id];
+    return `<div class="bar-row"><span class="${shape}" style="background:${it.color}"></span><span>${esc(it.name)}</span>` +
+      `<span class="track"><i style="width:${(100 * n) / max}%;background:${it.color}"></i></span>` +
+      `<span class="num">${total ? ((100 * n) / total).toFixed(1) + "%" : n}</span></div>`;
+  }).join("");
+}
+
+function showMeta(m) {
+  const s = m.stats;
+  $("ruleset-title").textContent = m.ruleset.title;
+  const water = new Set(m.ruleset.terrain.filter((t) => t.water).map((t) => t.id));
+  const landCounts = Object.fromEntries(Object.entries(s.terrain).filter(([k]) => !water.has(k)));
+  $("world-info").innerHTML =
+    `<h3>世界概况</h3><div class="kv">` +
+    `<span>尺寸</span><b>${s.size}（${fmt(s.tiles)} 格）</b>` +
+    `<span>陆地</span><b>${fmt(s.land_tiles)} 格 · ${(s.land_ratio * 100).toFixed(1)}%</b>` +
+    `<span>大区 / 海域</span><b>${fmt(m.land_areas)} / ${fmt(m.sea_areas)}</b>` +
+    `<span>河流</span><b>${fmt(s.rivers)} 条</b>` +
+    `<span>陆地均温</span><b>${s.avg_temperature_c}°C</b>` +
+    `<span>陆地平均降雨</span><b>${fmt(s.avg_rainfall_mm)} mm</b>` +
+    `<span>板块</span><b>${s.plates} 块（大陆 ${s.continental_plates}）</b>` +
+    `<span>种子</span><b>${s.seed}</b></div>` +
+    `<h3>陆地地形</h3>${bars(m.ruleset.terrain, landCounts, s.land_tiles, "sw")}` +
+    `<h3>资源</h3>${bars(m.ruleset.resources, s.resources, 0, "dot")}` +
+    `<div class="meta">规则集 ${esc(m.ruleset.id)}<br>地图哈希 ${s.hash}</div>`;
+}
+
+async function generate({ restoreGame = null } = {}) {
+  if (commandBusy || worldBusy) return;
+  stopSimulation();
+  worldBusy = true;
+  ++tacticsRequest; ++roadRequest;
+  const p = readForm();
+  $("go").disabled = true;
+  $("loading-text").textContent = p.width * p.height > 40000 ? "正在生成世界…（地球规格约需 5–25 秒）" : "正在生成世界…";
+  $("loading").classList.remove("hide");
+  game.clearGame();
+  gameId = null;
+  renderGame();
+  try {
+    world = await loadWorld(p);
+    if (!world) return; // 被更新的一次生成取代了
+    showMeta(world);
+    if(stressEnabled)$("loading-text").textContent="正在生成全陆地城市、军队、设施与道路…";
+    await startGame(p, restoreGame);
+  } catch (e) {
+    $("loading-text").textContent = "生成失败，请检查参数后重试";
+    console.error(e);
+    return;
+  } finally {
+    worldBusy = false;
+    $("go").disabled = false;
+    renderGame();
+  }
+  $("loading").classList.add("hide");
+}
+
+// ================================================================ 显示
+
+let mode = "terrain";
+function applyMode(m) {
+  mode = MODES[m] ? m : "terrain";
+  for (const b of document.querySelectorAll("[data-mode]")) b.classList.toggle("on", b.dataset.mode === mode);
+  setMode(mode);
+  game.G.political = mode === "nations";
+  updateLegend();
+  setUrl();
+}
+
+function updateLegend() {
+  const spec = MODES[mode];
+  const lg = $("legend");
+  const swatch = (c, n) => `<span><i style="display:inline-block;width:10px;height:10px;border-radius:2px;background:${c};margin-right:4px;vertical-align:-1px"></i>${esc(n)}</span>`;
+  if (mode === "nations") {
+    const nations = game.G.snap?.nations ?? [];
+    lg.innerHTML = `<div class="title">国家（不显示地形；虚线 = 城市辖区分界）</div><div class="ticks" style="flex-wrap:wrap;gap:6px 12px;justify-content:flex-start">` +
+      nations.map((n) => swatch(n.color, n.name)).join("") + swatch("#d8d1bf", "无主地") + "</div>";
+    lg.classList.add("show");
+  } else if (spec.swatches) {
+    lg.innerHTML = `<div class="title">${spec.name}（箭头 = 板块运动方向）</div><div class="ticks" style="flex-wrap:wrap;gap:6px 12px;justify-content:flex-start">` +
+      spec.swatches.map(([c, n]) => `<span><i style="display:inline-block;width:10px;height:10px;border-radius:2px;background:${c};margin-right:4px;vertical-align:-1px"></i>${n}</span>`).join("") + "</div>";
+    lg.classList.add("show");
+  } else if (spec.stops) {
+    const grad = spec.stops.map(([t, c]) => `${c} ${(t * 100).toFixed(0)}%`).join(", ");
+    const title = mode === "wind" ? "地面风速（箭头 = 风向）" : spec.name;
+    lg.innerHTML = `<div class="title">${title}</div><div class="grad" style="background:linear-gradient(90deg, ${grad})"></div>` +
+      `<div class="ticks">${spec.ticks.map((t) => `<span>${t}</span>`).join("")}</div>`;
+    lg.classList.add("show");
+  } else {
+    lg.classList.remove("show");
+  }
+}
+
+// ================================================================ 对局
+
+async function api(path, body) {
+  const started=performance.now();
+  const r = await fetch(path, body === undefined ? {} : { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+  if (!r.ok) { let data; try { data = await r.json(); } catch {} throw new Error(typeof data?.detail === "string" ? data.detail : `操作失败（${r.status}）`); }
+  const content=await r.text(), received=performance.now();
+  const data=JSON.parse(content);
+  data._timing={request_ms:Math.round(received-started),parse_ms:Math.round(performance.now()-received),response_mb:new Blob([content]).size/1048576};
+  return data;
+}
+
+async function startGame(p, restoreId) {
+  const params = { seed: p.seed, width: p.width, height: p.height, nations: p.nations, land: +p.land, temp: +p.temp, rain: +p.rain, rough: +p.rough };
+  let snap = null;
+  if (restoreId) {
+    try {
+      snap = await api(`/api/games/${encodeURIComponent(restoreId)}`);
+    } catch { snap = null; } // 服务重启后对局没了：重新开一局
+    // 地址里的世界参数被改过：对局不属于这张地图，重新开一局
+    if (snap && (Object.entries(params).some(([k, v]) => snap.world[k] !== v) || !!snap.stress !== stressEnabled)) snap = null;
+  }
+  if (!snap) snap = await api("/api/games", {...params, stress_mode: stressEnabled});
+  stressBenchmark = null;
+  game.setGame(snap, snap.rules, world.width, world.height);
+  gameId = snap.id;
+  if (document.querySelector('#tab-gen.on')) openTab('game'); // 开局后直接看对局
+  setUrl();
+  setOverlay({ under: game.drawUnder, over: game.drawOver, tick: game.tickEffects });
+  updateLegend();
+  logLines = [];
+  renderGame();
+  renderLegend();
+}
+
+let logLines = [];
+let managementNation = null;
+let developmentOptionsKey = null;
+const developmentOptionsCache = new Map();
+// 攻击预览里的战斗力修正：我方（进攻方）的加成是好事，敌方（防守方）的加成是坏事
+function modifierHtml(info) {
+  const mods = info.modifiers ?? [];
+  const row = (side, title) => {
+    const items = mods.filter(m => m.side === side);
+    if (!items.length) return '';
+    return `<span>${title}：${items.map(m => `<i class="${(m.value > 0) === (side === 'attacker') ? 'good' : 'bad'}">${esc(m.label)} ${m.value > 0 ? '+' : ''}${m.value}%</i>`).join('、')}</span>`;
+  };
+  const html = row('attacker', '我方') + row('defender', '敌方');
+  return html ? `<div class="combat-mods">${html}</div>` : '';
+}
+// 战报分类着色：战事（红）、动荡 / 饥荒等警报（黄）、建设与成长（绿）
+const EVENT_KIND = {
+  combat: 'war', unit_destroyed: 'war', city_captured: 'war', battle_plan: 'war', battle_ended: 'war',
+  pillaged: 'war', anti_air_fire: 'war', unit_encircled: 'war', city_encircled: 'war',
+  city_unrest: 'alert', city_independence: 'alert', famine: 'alert', production_blocked: 'alert',
+  city_founded: 'build', building_completed: 'build', facility_built: 'build', unit_created: 'build',
+  level_up: 'build', gold_assist: 'build',
+};
+function logHtml() {
+  return logLines.map((l) => `<div class="${l.bad ? 'bad' : l.head ? 'head' : l.kind ?? ''}">${esc(l.text)}</div>`).join('');
+}
+const KIND_TEXT = { melee: "近战交锋", air: "航空打击", ranged: "远程攻击", anti_air: "防空射击", torpedo: "鱼雷攻击" };
+const EVENT_TEXT = {
+  policy_changed: e => `${game.nationOf(e.nation)?.name ?? e.nation} ${e.enabled ? '开启城市托管 · ' + (game.G.rules.city_policies[e.policy]?.name ?? e.policy) : '暂停城市托管'}`,
+  city_management_changed: e => `${cityName(e.city)} ${e.enabled ? '恢复国家管理' : '改为手动管理'}`,
+  gold_assist_changed: e => `${cityName(e.city)} ${e.enabled ? '开启金币补足建设' : '停止金币补足建设'}`,
+  gold_assist: e => `${cityName(e.city)} 用 ${e.gold} 金补足${e.project} ${e.production} 点生产力`,
+  development_started: e => `${cityName(e.city)} 开始建设${game.G.rules.buildings[e.facility].name}，工期 ${e.turns} 回合`,
+  directive_report: e => `${e.city ? cityName(e.city) : game.nationOf(e.nation)?.name ?? '国家'}：${e.reason}`,
+  combat: (e) => `${e.kind === 'air' ? '起飞出击，' : ''}${KIND_TEXT[e.kind] ?? "远程攻击"}：敌方损失 ${e.damage}${e.retaliation ? `，己方损失 ${e.retaliation}` : ""}${e.suppressed?.length ? `，压制 ${e.suppressed.length} 支部队的驻守` : ""}${e.kind === 'air' ? (e.attacker_hp > 0 ? '，返航降落' : '，飞机没能返航') : ''}`,
+  anti_air_fire: (e) => `高射炮对来袭飞机开火：飞机损失 ${e.damage}${e.target_hp <= 0 ? "，被击落" : ""}`,
+  unit_destroyed: (e) => `${unitName(e.unit_type)} 损失${e.reason ? `（${e.reason}）` : ""}`,
+  unit_moved: (e) => `部队沿路线移动 ${e.path.length-1} 格`,
+  group_formed: (e) => `${e.units.length} 支部队合成编队，按最慢成员移动`,
+  group_disbanded: () => '编队已解散；分散到不同格子后可以攻击',
+  general_appointed: (e) => `${game.nationOf(e.nation)?.name ?? ''} 任命将领 ${e.name}（${'★'.repeat(e.rank)}），组建${e.title}`,
+  corps_assigned: (e) => `${e.units.length} 支部队编入${e.title}（${e.name}）`,
+  corps_left: (e) => `一支部队离开${e.title || '军团'}`,
+  city_captured: (e) => `${cityName(e.city)} 被占领`,
+  level_up: (e) => `${e.kind === 'unit' ? '部队晋升' : e.kind === 'city' ? '城市发展' : '设施发展'}至 Lv.${e.level}`,
+  road_built: (e) => `修建 ${e.segments.length} 段道路，花费 ${e.cost} 金`,
+  city_founded: (e) => `建立城市 ${e.name}`,
+  unit_created: (e) => `${unitName(e.unit_type)} 编成`,
+  building_completed: (e) => `${cityName(e.city)} 建成 ${game.G.rules.buildings[e.building].name}`,
+  facility_built: (e) => `${game.G.rules.buildings[e.facility].name} 竣工`,
+  city_grew: (e) => `${cityName(e.city)} 人口增长到 ${e.population}`,
+  famine: (e) => `${cityName(e.city)} 饥荒，人口降到 ${e.population}`,
+  borders_grew: (e) => `${cityName(e.city)} 辖区扩大 ${e.tiles.length} 格`,
+  ai_changed: e => `${game.nationOf(e.nation)?.name??e.nation} ${e.enabled?"开启":"暂停"}国家规则 AI`,
+  production_blocked: (e) => `${cityName(e.city)} 生产受阻：${e.reason}`,
+  embarked: (e) => `${unitName(e.unit_type)} 登上${unitName(e.ship_type)}`,
+  disembarked: (e) => `${unitName(e.unit_type)} 下船登陆`,
+  road_demolished: (e) => `${game.nationOf(e.nation)?.name ?? ''} 拆掉了 ${e.edges.length} 段道路`,
+  pillaged: (e) => `${game.nationOf(e.nation)?.name ?? e.nation} 破坏了${e.city ? cityName(e.city) + '的' : ''}${e.target}，掠走 ${e.loot} 金`,
+  city_unrest: (e) => `${cityName(e.city)} 陷入动荡：稳定度降到 ${e.stability}${e.reasons?.length ? `（${e.reasons.join('、')}）` : ''}`,
+  city_independence: (e) => `${e.cities.map(cityName).join('、')} 脱离${game.nationOf(e.previous)?.name ?? e.previous}，宣布独立，成立${e.name}`,
+  battle_plan: (e) => `${game.nationOf(e.nation)?.name ?? e.nation} 开辟新战线，发动${e.name}：${e.overseas?'跨海登陆后':''}排开战线向${cityName(e.target)}推进，两翼包抄`,
+  battle_ended: (e) => `${game.nationOf(e.nation)?.name ?? e.nation} 的${e.name}结束：${e.result}${e.why ? `（${e.why}）` : ''}`,
+};
+function unitName(type) { return game.G.rules.units[type]?.name ?? type; }
+function cityName(id) { return game.G.cities.get(id)?.name ?? id; }
+
+// Windows 版：显示版本号，有新版本时在底部提示（网页版显示“Windows 版”下载链接）
+async function checkClientUpdate() {
+  try {
+    const r = await fetch('/api/client/update');
+    if (!r.ok) return;
+    const u = await r.json();
+    if (!u.desktop) return;
+    $('win-download').hidden = true;
+    if (u.current) $('ruleset-title').title = `版本 ${u.current}`;
+    const banner = $('update-banner');
+    if (!u.available) { banner.hidden = true; return; }
+    banner.innerHTML = u.full_required
+      ? `发现新版本 ${esc(u.latest)}，需要重新下载完整包：<a href="${esc(u.page_url ?? '/downloads/windows/')}" target="_blank" rel="noopener">打开下载页</a>`
+      : `发现新版本 ${esc(u.latest)}：关掉游戏窗口、重新启动就会自动更新`;
+    banner.hidden = false;
+  } catch {}
+}
+checkClientUpdate();
+setInterval(checkClientUpdate, 2 * 3600 * 1000);
+
+// 城市易主弹窗：被攻占、宣布独立都弹一条（顶部居中，几秒后自动消失，点一下也能关）
+function cityAlerts(events) {
+  const box = $('city-alerts');
+  if (!box) return;
+  for (const e of events ?? []) {
+    let title = null, text = null;
+    if (e.type === 'city_captured') {
+      const now = game.nationOf(e.nation)?.name ?? e.nation, was = game.nationOf(e.previous)?.name ?? e.previous;
+      title = '城市易主';
+      text = `${cityName(e.city)} 被${now}攻占（原属${was}）`;
+    } else if (e.type === 'city_independence') {
+      title = '城市独立';
+      text = `${e.cities.map(cityName).join('、')} 脱离${game.nationOf(e.previous)?.name ?? e.previous}，成立${e.name}`;
+    }
+    if (!text) continue;
+    const card = document.createElement('div');
+    card.className = 'city-alert'; card.setAttribute('role', 'status');
+    card.innerHTML = `<b>${esc(title)}</b><span>${esc(text)}</span>`;
+    card.onclick = () => card.remove();
+    box.appendChild(card);
+    while (box.children.length > 4) box.firstChild.remove();
+    setTimeout(() => card.remove(), 7000);
+  }
+}
+
+async function nextTurn() {
+  if (!gameId) return;
+  if (commandBusy || worldBusy) return false;
+  commandBusy = true;
+  const before = game.G.snap;
+  $("next-turn").disabled = true;
+  try {
+    const res = await api(`/api/games/${encodeURIComponent(gameId)}/turn`, {autoplay: false});
+    game.setGame(res, null, world.width, world.height);
+    game.playEvents(res.events, before);
+    cityAlerts(res.events);
+    ++roadRequest; game.G.roadPlan=null; game.G.roadStart=null; game.G.actionMode="inspect";
+    if (!game.G.units.has(game.G.actor) && !game.G.cities.has(game.G.actor)) game.G.actor=null;
+    const actor=game.G.units.get(game.G.actor)??game.G.cities.get(game.G.actor);
+    if(actor)game.select(actor.tile);
+    await refreshTactics();
+    const lines = [];
+    for (const r of res.rejected) lines.push({ bad: true, text: `指令被拒：${r.message}` });
+    let moved = 0, blocked = 0;
+    for (const e of res.events) {
+      if (e.type === "unit_moved") { moved++; continue; }
+      if (e.type === "move_blocked") { blocked++; continue; }
+      if (e.type === "directive_report" && e.status === "started") continue; // AI 的例行报告不进战报，只留受阻 / 失败
+      const f = EVENT_TEXT[e.type];
+      if (f) lines.push({ text: f(e), kind: EVENT_KIND[e.type] });
+    }
+    if (moved || blocked) lines.unshift({ text: `${moved} 支部队移动` + (blocked ? `，${blocked} 支受阻（目的地被先到的部队占满）` : "") });
+    // 同一回合里一模一样的条目合并成一条（×N）
+    const merged = new Map();
+    for (const l of lines) { const m = merged.get(l.text); if (m) m.n++; else merged.set(l.text, { ...l, n: 1 }); }
+    const compact = [...merged.values()].map((l) => (l.n > 1 ? { ...l, text: `${l.text}（×${l.n}）` } : l));
+    logLines = [{ head: true, text: `第 ${res.turn - 1} 回合结算` }, ...compact.slice(0, 40)];
+    return true;
+  } catch (e) {
+    stopSimulation();
+    logLines = [{ bad: true, text: "结算失败：" + e.message + "（对局可能因服务重启丢失，重新生成即可）" }];
+  } finally {
+    commandBusy = false;
+    renderGame(); updateCommandHint();
+    redraw();
+  }
+}
+
+function stopSimulation() {
+  autoSim=false; ++simulationEpoch;
+  clearTimeout(simulationTimer); simulationTimer=null;
+  if($('auto-sim')){$('auto-sim').textContent='开启自动模拟';$('auto-sim').setAttribute('aria-pressed','false');}
+}
+async function setAllAI(enabled) {
+  if(commandBusy||worldBusy||!game.G.snap)return;
+  await executeCommand(game.G.snap.nations.map(n=>({type:'set_ai',issuer:n.id,enabled})));
+}
+async function toggleSimulation() {
+  if(autoSim){stopSimulation();renderGame();return;}
+  if(commandBusy||worldBusy||!game.G.snap)return;
+  const id=gameId;
+  await setAllAI(true);
+  if(id!==gameId||!game.G.snap.nations.every(n=>n.ai_enabled))return;
+  autoSim=true; const epoch=++simulationEpoch;
+  renderGame();
+  const tick=async()=>{
+    if(!autoSim||epoch!==simulationEpoch||id!==gameId)return;
+    if(!commandBusy&&!worldBusy&&document.visibilityState==='visible')await nextTurn();
+    if(autoSim&&epoch===simulationEpoch)simulationTimer=setTimeout(tick,Number($('sim-speed').value));
+  };
+  simulationTimer=setTimeout(tick,Number($('sim-speed').value));
+}
+
+function yieldsHtml(y) {
+  return `<div class="yields"><span>粮 <b>${y.food}</b></span><span>产 <b>${y.production}</b></span><span>金 <b>${y.gold}</b></span><span>研 <b>${y.science}</b></span></div>`;
+}
+
+function unitBadge(u, w = 30, h = 22) {
+  const c = document.createElement("canvas");
+  const dpr = Math.min(2, window.devicePixelRatio || 1);
+  c.width = w * dpr; c.height = h * dpr; c.style.width = w + "px"; c.style.height = h + "px";
+  const ctx = c.getContext("2d");
+  ctx.scale(dpr, dpr);
+  const def = typeof u === "string" ? game.G.rules.units[u] : game.unitDef(u);
+  const color = typeof u === "string" ? "#6b7a8c" : game.nationOf(u.nation).color;
+  ctx.fillStyle = color;
+  ctx.fillRect(0, 0, w, h);
+  ctx.fillStyle = "#f7f1e3";
+  const bw = w * 0.66, bh = h * 0.64;
+  ctx.fillRect((w - bw) / 2, (h - bh) / 2, bw, bh);
+  ctx.strokeStyle = "#1f1a12";
+  ctx.lineWidth = 1;
+  ctx.strokeRect((w - bw) / 2, (h - bh) / 2, bw, bh);
+  game.SYMBOLS.drawSymbol(ctx, def.icon, w / 2, h / 2, bw * 0.78, bh * 0.72, "#1f1a12");
+  return c;
+}
+
+function renderLegend() {
+  const el = $("unit-legend");
+  el.innerHTML = "";
+  for (const [id, d] of Object.entries(game.G.rules?.units ?? {})) {
+    if (d.category !== "military") continue;
+    const row = document.createElement("div");
+    row.appendChild(unitBadge(id, 26, 19));
+    const t = document.createElement("span");
+    t.textContent = d.name;
+    row.appendChild(t);
+    el.appendChild(row);
+  }
+}
+
+function unitStatus(u) {
+  if (u.task) return `施工中：${game.G.rules.buildings[u.task.facility].name}（还剩 ${u.task.turns_left} 回合）`;
+  if (u.destination) return `行军中 → (${u.destination[0]}, ${u.destination[1]})`;
+  if (u.fortified) return "驻守";
+  const corps = u.corps != null ? game.G.units.get(u.corps) : null;
+  return `移动力 ${u.moves_left+(u.road_credit??0)/(game.G.rules.move_steps??3)}/${game.unitDef(u).moves}${u.formation!=null?" · 编队":""}${corps?.title?` · ${corps.title}`:""}`;
+}
+
+function settlementPreview(box, draw) {
+  const canvas = document.createElement("canvas");
+  const dpr = Math.min(2, window.devicePixelRatio || 1);
+  canvas.width = 144 * dpr; canvas.height = 126 * dpr;
+  canvas.className = "settlement-art"; canvas.setAttribute("aria-hidden", "true");
+  const ctx = canvas.getContext("2d"); ctx.scale(dpr, dpr);
+  draw(ctx, 74, 78, 54);
+  box.querySelector(".settlement-hero").appendChild(canvas);
+}
+
+function settlementYields(y = {}) {
+  return `<div class="settlement-yields">${[["food", "粮食"], ["production", "生产"], ["gold", "金钱"], ["science", "科研"]].map(([k, label]) => `<span><b>${y[k] ?? 0}</b>${label}</span>`).join("")}</div>`;
+}
+
+function cityCard(city) {
+  const nation = game.nationOf(city.nation);
+  const box = document.createElement("div"); box.className = "card settlement-card";
+  const growth = Math.min(100, city.food / Math.max(1, city.food_to_grow) * 100);
+  let html = `<div class="settlement-hero"><div class="settlement-title"><small>${city.capital ? "首都" : "城市"}</small><b>${esc(city.name)}</b><span>${esc(nation.name)}</span></div></div>` +
+    `<div class="settlement-body">${xpHtml(city,"city")}${settlementYields(city.yields)}` +
+    `<div class="kv"><span>人口</span><b>${city.population}</b><span>本城粮食结余</span><b>${signed(city.food_balance ?? city.yields.food-city.population*2)} / 回合</b><span>城防</span><b>${city.defense}</b><span>辖区半径</span><b>${city.radius} 格</b><span>稳定度</span><b class="${(city.stability ?? 100) < (game.G.rules.stability_unrest ?? 30) ? 'danger' : ''}">${city.stability ?? 100} / 100${city.stability_lack?.length ? ' · ' + city.stability_lack.join('、') : ''}${city.garrisoned && city.stability_lack?.length ? '（驻军减轻）' : ''}</b></div>` +
+    `<div class="growth-line"><div><span>人口增长</span><b>存粮 ${city.food} / ${city.food_to_grow}</b></div><div class="track"><i style="width:${growth}%"></i></div></div>` +
+    `<h3>市中心建筑 <small>${city.buildings.length}</small></h3><div class="settlement-buildings">${city.buildings.map(b => `<span>${esc(game.G.rules.buildings[b].name)}</span>`).join("")}</div>`;
+  html += '<h3>城市生产</h3><div class="queue">';
+  if (!city.queue.length) html += '<div class="empty">当前没有生产项目</div>';
+  city.queue.forEach((item, i) => {
+    const [kind, key] = item.split(":");
+    const def = kind === "unit" ? game.G.rules.units[key] : game.G.rules.buildings[key];
+    const prog = i === 0 ? Math.min(1, city.production / Math.max(1, def.cost)) : 0;
+    html += `<div class="qitem"><span class="grow">${esc(def.name)} <span class="num">${def.cost} 产</span></span><span class="prog"><i style="width:${prog * 100}%"></i></span></div>`;
+  });
+  box.innerHTML = html + '</div></div>';
+  const managed=city.managed && nation.city_management, report=city.management??{};
+  const management=document.createElement('div');management.className='city-management';
+  management.innerHTML=`<div class="card-head"><b>${managed?'国家管理 · '+esc(game.G.rules.city_policies[nation.policy]?.name??'均衡发展'):'手动管理'}</b><span class="grow"></span></div><p>${esc(managed ? report.reason ?? '下一回合按国家方针安排' : city.managed ? '国家尚未开启托管' : '手动安排优先，国家不会改动本城队列')}</p>${(managed?report.alerts??[]:[]).map(a=>`<div class="management-alert">${esc(a)}</div>`).join('')}`;
+  const environment=document.createElement('p');environment.className='hint';
+  const env=city.environment??{},net=city.network??{};
+  environment.textContent=`环境 ${env.description??'—'} · 区域城市 ${env.regional_cities??0} / ${env.regional_capacity??0} · 当地间距 ${env.min_distance??4} 格。城市人口和辖区无固定上限。${net.production_percent?' 首都道路：生产 +'+net.production_percent+'%。':''}${net.trade_gold?' 对外道路贸易：+'+net.trade_gold+' 金 / 回合。':''}`;
+  box.querySelector('.settlement-body').appendChild(environment);
+  const manageButton=document.createElement('button');manageButton.textContent=city.managed?'接管本城':'交回国家管理';manageButton.disabled=commandBusy;
+  manageButton.onclick=()=>executeCommand({type:'city_management',issuer:city.nation,city:city.id,enabled:!city.managed});
+  management.querySelector('.card-head').appendChild(manageButton);
+  // 金币补足建设：基础设施（城外设施、市中心建筑）缺的生产力用国库金币补，小城发展更快
+  const assistButton=document.createElement('button');assistButton.disabled=commandBusy;
+  assistButton.textContent=city.gold_assist?'停止金币补建设':'金币补足建设';
+  assistButton.title=`开启后，城外设施工程款和市中心建筑缺的生产力按 ${game.G.rules.gold_per_production??2} 金 1 点用国库补（部队、兵营、城防、军事基地、机场不能买）`;
+  if(city.gold_assist)assistButton.classList.add('primary');
+  assistButton.onclick=()=>executeCommand({type:'gold_assist',issuer:city.nation,city:city.id,enabled:!city.gold_assist});
+  management.querySelector('.card-head').appendChild(assistButton);
+  box.querySelector('.settlement-body').appendChild(management);
+  if(city.construction){
+    const p=city.construction,def=game.G.rules.buildings[p.facility],section=document.createElement('div');section.className='construction-progress';
+    section.innerHTML=`<b>${esc(def.name)} · 国家施工</b><div class="kv"><span>地块</span><b>(${p.tile%game.G.W}, ${Math.floor(p.tile/game.G.W)})</b><span>工期</span><b>剩余 ${p.turns_left} / ${p.turns_total} 回合</b></div><div class="track"><i style="width:${100*(p.turns_total-p.turns_left)/p.turns_total}%"></i></div><p class="hint">${esc(p.reason??report.development_reason??'按已安排的工程继续施工')}</p>`;
+    box.querySelector('.settlement-body').appendChild(section);
+  }else{
+    const development=document.createElement('div');development.className='production-control';
+    development.innerHTML=`<select aria-label="${esc(city.name)}辖区开发" disabled><option>正在查看可开发地块…</option></select><button type="button" disabled>开始施工</button>`;
+    box.querySelector('.settlement-body').appendChild(development);
+    loadCityDevelopment(city,development);
+  }
+  const cityControls = document.createElement('div'); cityControls.className='command-grid';
+  cityControls.appendChild(commandButton('城防射击', 'attack', async()=>{ await chooseActor(city.id);setCommandMode('attack'); }, commandBusy||!!city.attack_blocked, city.attack_blocked??''));
+  cityControls.appendChild(commandButton('规划道路', 'road', ()=>beginRoad(city.nation,city.tile), commandBusy));
+  box.querySelector('.settlement-body').appendChild(cityControls);
+  const production = document.createElement('div');production.className='production-control';
+  const available = [...Object.entries(game.G.rules.units).filter(([id,d])=>(d.category==='military'||d.tags?.includes('found_city')||d.tags?.includes('general'))).map(([id,d])=>['unit:'+id,d.name,d.cost]),
+    ...Object.entries(game.G.rules.buildings).filter(([id,d])=>d.placement==='center'&&d.buildable&&!city.buildings.includes(id)).map(([id,d])=>['building:'+id,d.name,d.cost])];
+  production.innerHTML=`<select aria-label="${esc(city.name)}生产项目">${available.map(([id,name,cost])=>`<option value="${esc(id)}">${esc(name)} · ${cost} 产</option>`).join('')}</select>`;
+  const build=document.createElement('button');build.textContent='加入队列';build.disabled=commandBusy||city.queue.length>=10;
+  build.onclick=()=>executeCommand({type:'city_order',issuer:city.nation,city:city.id,queue:[...city.queue,production.querySelector('select').value]});
+  production.appendChild(build);box.querySelector('.settlement-body').appendChild(production);
+  if(city.queue.length){const clear=document.createElement('button');clear.textContent='清空队列';clear.disabled=commandBusy;clear.onclick=()=>executeCommand({type:'city_order',issuer:city.nation,city:city.id,queue:[]});box.querySelector('.settlement-body').appendChild(clear);}
+  const health = document.createElement('p');health.className='hint';health.textContent=`城市生命 ${city.hp??200} / 200 · 城市每回合可射击一次`;
+  box.querySelector('.settlement-body').appendChild(health);
+  settlementPreview(box, (ctx, x, y, z) => game.drawCityTile(ctx, x, y, z, city, nation.rgb));
+  return box;
+}
+
+async function loadCityDevelopment(city,control){
+  const hash=game.G.snap.state_hash,key=gameId+':'+hash;
+  if(developmentOptionsKey!==key){developmentOptionsCache.clear();developmentOptionsKey=key;}
+  let request=developmentOptionsCache.get(city.id);
+  if(!request){request=api(`/api/games/${encodeURIComponent(gameId)}/city-options?city=${encodeURIComponent(city.id)}`);developmentOptionsCache.set(city.id,request);}
+  try{
+    const data=await request;
+    if(!control.isConnected||game.G.snap.state_hash!==data.state_hash)return;
+    const entries=data.options.flatMap(o=>o.facilities.map(fid=>({fid,to:o.to,def:game.G.rules.buildings[fid]})));
+    const select=control.querySelector('select'),button=control.querySelector('button');
+    select.innerHTML=entries.length?entries.map((e,i)=>`<option value="${i}">(${e.to.join(', ')}) ${esc(e.def.name)} · ${e.def.build_turns} 回合</option>`).join(''):'<option>暂无合法的空闲开发地块</option>';
+    select.disabled=button.disabled=commandBusy||!entries.length;
+    button.onclick=()=>{const e=entries[Number(select.value)];if(e)executeCommand({type:'develop_city',issuer:city.nation,city:city.id,facility:e.fid,to:e.to});};
+  }catch{if(control.isConnected)control.querySelector('select').innerHTML='<option>暂时无法查看地块</option>';developmentOptionsCache.delete(city.id);}
+}
+
+function signed(value){return value>0?'+'+value:String(value);}
+function renderCityManagement(){
+  const el=$('city-management-panel'),snap=game.G.snap;el.hidden=!snap;if(!snap)return;
+  const selected=game.G.selected?game.tileInfo(game.G.selected.tile):null;
+  const n=snap.nations.find(n=>n.id===managementNation)??snap.nations.find(n=>n.id===selected?.city?.nation)??snap.nations[0];
+  if(!n){el.hidden=true;return;}managementNation=n.id;
+  $('manage-summary').textContent=`${n.name} · ${n.city_management?'托管中':'手动'}`;
+  const report=n.management??{},net=n.income-n.upkeep,own=snap.cities.filter(c=>c.nation===n.id),managed=own.filter(c=>c.managed).length;
+  const hungry=own.filter(c=>c.food_balance<0).length,blocked=own.filter(c=>c.managed&&c.management?.status==='blocked').length;
+  el.innerHTML=`<h3>国家城市管理 <span class="management-state ${n.city_management?'on':''}">${n.city_management?'托管中':'手动'}</span></h3><div class="management-selects"><select aria-label="管理国家">${snap.nations.map(x=>`<option value="${x.id}" ${x.id===n.id?'selected':''}>${esc(x.name)}</option>`).join('')}</select><select aria-label="国家发展方针">${Object.entries(game.G.rules.city_policies).map(([key,p])=>`<option value="${key}" ${key===n.policy?'selected':''}>${esc(p.name)}</option>`).join('')}</select></div><div class="management-ledger"><span><b>${fmt(n.gold)}</b>国库</span><span><b class="${net<0?'danger':''}">${signed(net)}</b>金钱 / 回合</span><span><b>${n.city_management?managed:0}<small> / ${own.length}</small></b>托管城市</span></div><div class="kv"><span>收入 / 维护费</span><b>${n.income} / ${n.upkeep}</b>${n.city_management&&report.turn!=null?`<span>国库保留目标</span><b>${report.reserve} 金</b><span>军备 / 目标</span><b>${report.army} / ${report.military_target}</b><span>在产部队</span><b>${report.pending_units}</b>`:''}</div><div class="btn-row" style="margin-top:10px"><button type="button" class="primary" data-manage-toggle>${n.city_management?'暂停本国托管':'开启本国托管'}</button><button type="button" data-manage-all>全部开启</button><button type="button" data-manage-stop>全部关闭</button></div><p class="management-reason">${esc(n.city_management?report.road_reason??'下一回合开始安排生产、辖区开发和道路':'开启后，在每次推进回合时按国家方针安排城市。')}</p>${hungry||blocked?`<div class="management-alert">${hungry?hungry+' 座城缺粮':''}${hungry&&blocked?' · ':''}${blocked?blocked+' 座城生产受阻':''}</div>`:''}<p class="hint">粮食和生产留在本城，金钱与维护费全国统筹。手动安排可接管单城。</p>`;
+  const [nationSelect,policySelect]=el.querySelectorAll('select');
+  nationSelect.onchange=()=>{managementNation=nationSelect.value;renderCityManagement();};
+  policySelect.onchange=()=>executeCommand({type:'set_policy',issuer:n.id,enabled:n.city_management,policy:policySelect.value});
+  el.querySelector('[data-manage-toggle]').onclick=()=>executeCommand({type:'set_policy',issuer:n.id,enabled:!n.city_management,policy:policySelect.value});
+  el.querySelector('[data-manage-all]').onclick=()=>executeCommand(snap.nations.map(x=>({type:'set_policy',issuer:x.id,enabled:true,policy:policySelect.value})));
+  el.querySelector('[data-manage-stop]').onclick=()=>executeCommand(snap.nations.map(x=>({type:'set_policy',issuer:x.id,enabled:false,policy:x.policy})));
+  for(const control of el.querySelectorAll('button,select'))control.disabled=commandBusy||worldBusy;
+}
+
+function facilityCard(info) {
+  const def = game.G.rules.buildings[info.facility];
+  const box = document.createElement("div"); box.className = "card settlement-card";
+  box.innerHTML = `<div class="settlement-hero"><div class="settlement-title"><small>城外设施</small><b>${esc(def.name)}</b><span>${esc(info.owner?.name ?? "无主地")}</span></div></div>` +
+    `<div class="settlement-body">${xpHtml(game.facilityProgress(info.tile),"facility")}<h3 style="margin-top:0">设施基础产出</h3>${settlementYields(def.yields)}` +
+    `<div class="kv"><span>所需人口</span><b>${def.workers ?? 0}</b><span>维护费</span><b>${def.upkeep ?? 0} / 回合</b></div></div>`;
+  const nation = info.owner ? game.nationOf(info.owner.id) : null;
+  const terrain = terrainInfo(info.col, info.row);
+  settlementPreview(box, (ctx, x, y, z) => game.drawFacilityTile(ctx, def.icon, x, y, z, nation?.rgb ?? [120,120,120], terrain, info.tile));
+  return box;
+}
+
+function unitRow(u) {
+  const def = game.unitDef(u);
+  const nation = game.nationOf(u.nation);
+  const row = document.createElement("div");
+  row.className = "unit-row";
+  if (def.category === 'military' || def.tags?.includes('found_city') || u.rank) {
+    row.classList.add('selectable');row.classList.toggle('active',game.G.actor===u.id);
+    row.tabIndex=0;row.setAttribute('role','button');row.setAttribute('aria-pressed',String(game.G.actor===u.id));row.dataset.unit=u.id;
+    row.onclick=()=>chooseActor(u.id);row.onkeydown=e=>{if(e.key==='Enter'||e.key===' '){e.preventDefault();chooseActor(u.id);}};
+  }
+  row.appendChild(unitBadge(u));
+  const mid = document.createElement("div");
+  mid.className = "grow";
+  const str = u.rank ? `${u.title} 统帅 ${u.name} ${'★'.repeat(u.rank)}` : def.category === "civilian" ? "平民" : def.ranged_strength ? `战斗力 ${u.combat_strength??def.strength} · 远程 ${u.ranged_strength??def.ranged_strength}（射程 ${def.range}）` : def.anti_air ? `战斗力 ${u.combat_strength??def.strength} · 防空 ${u.ranged_strength??def.anti_air}（覆盖 ${def.range} 格）` : def.torpedo ? `战斗力 ${u.combat_strength??def.strength} · 鱼雷 ${u.ranged_strength??def.torpedo}（${def.range} 格，只打舰船）` : `战斗力 ${u.combat_strength??def.strength}`;
+  mid.innerHTML = `<div>${esc(def.name)} <span class="pill">Lv.${u.level??0}</span> <span class="num">${esc(nation.name)}</span></div><div>${str} · ${esc(unitStatus(u))}</div>`;
+  row.appendChild(mid);
+  const hp = document.createElement("div");
+  hp.className = "hp";
+  const pct = 100 * u.hp / (u.max_hp ?? 100);
+  hp.title = `生命 ${u.hp}/${u.max_hp ?? 100}`;
+  hp.innerHTML = `<i style="width:${pct}%;background:${pct > 66 ? "#5fbf5a" : pct > 33 ? "#e0b84a" : "#d0573f"}"></i>`;
+  row.appendChild(hp);
+  return row;
+}
+
+function renderSelection() {
+  const el = $("selection");
+  el.innerHTML = "";
+  const sel = game.G.selected;
+  if (game.G.snap && game.G.actionMode === "road" && !sel) { el.appendChild(roadCard()); return; }
+  if (!game.G.snap || !sel) {
+    el.innerHTML = '<p class="hint">点选军事单位查看移动与攻击范围；点击单位列表可切换部队。城市也可以发动防御射击。</p>';
+    return;
+  }
+  const info = game.tileInfo(sel.tile);
+  const actor=game.G.units.get(game.G.actor)??game.G.cities.get(game.G.actor);
+  if(actor)el.appendChild(tacticalCard(actor));
+  if(game.G.actionMode==='road')el.appendChild(roadCard());
+  if (info.city) el.appendChild(cityCard(info.city));
+  if (info.facility) el.appendChild(facilityCard(info));
+  if(info.construction){
+    const p=info.construction,c=game.G.cities.get(p.city),card=document.createElement('div');card.className='card construction-progress';
+    card.innerHTML=`<b>${esc(game.G.rules.buildings[p.facility].name)} · 国家施工</b><p class="hint">${esc(c?.name??'城市')}辖区 · 剩余 ${p.turns_left} 回合</p>`;
+    const view=document.createElement('button');view.textContent='查看管理城市';view.onclick=()=>{if(c){game.select(c.tile);managementNation=c.nation;renderGame();centerOn(c.col,c.row,32);redraw();}};
+    card.appendChild(view);el.appendChild(card);
+  }
+  const head = document.createElement("div");
+  head.className = "card";
+  const owner = info.owner ? `<span class="nation-dot" style="background:${info.owner.color}"></span><small>${esc(info.owner.name)}领土</small>` : "<small>无主地</small>";
+  const fac = info.facility ? `<span class="pill">${esc(game.G.rules.buildings[info.facility].name)}</span>` : "";
+  head.innerHTML = `<div class="card-head"><b>(${info.col}, ${info.row})</b>${fac}<span class="grow"></span>${owner}</div>`;
+  const units = [...info.surface, ...info.air];
+  if (units.length) {
+    for (const u of units) head.appendChild(unitRow(u));
+  } else {
+    head.insertAdjacentHTML("beforeend", '<div class="empty">这一格没有单位</div>');
+  }
+  const terrain=terrainInfo(info.col,info.row);
+  if(terrain&&terrain.area!==65535){
+    const region=game.G.snap.regions?.[terrain.area]??{xp:0,level:1,xp_floor:0,xp_next:60};
+    head.insertAdjacentHTML('beforeend',`<div class="region-line"><small class="hint">${terrain.water?'海域':'大区'} ${terrain.area+1}</small>${xpHtml(region,'region')}</div>`);
+  }
+  el.appendChild(head);
+}
+
+function renderNations() {
+  const el = $("nation-list");
+  el.innerHTML = "";
+  if (!game.G.snap) return;
+  const head = document.createElement("div");
+  head.className = "nation-row";
+  head.style.cursor = "default";
+  head.innerHTML = '<i></i><span style="text-align:left">国家</span><span>金钱</span><span>城</span><span>兵</span>';
+  el.appendChild(head);
+  const unrestLine = game.G.rules.stability_unrest ?? 30;
+  const unrest = new Map();
+  for (const c of game.G.snap.cities) if ((c.stability ?? 100) < unrestLine) unrest.set(c.nation, (unrest.get(c.nation) ?? 0) + 1);
+  const alive = game.G.snap.nations.filter((n) => n.cities > 0).length;
+  $("nation-count").textContent = `${alive} 国存续 / 共 ${game.G.snap.nations.length}`;
+  // 已灭亡的国家（独立后又被吞并的叛军会越积越多）收成一行，点开再看
+  const gone = game.G.snap.nations.filter((n) => !n.cities && !n.units);
+  const shown = showGoneNations ? game.G.snap.nations : game.G.snap.nations.filter((n) => n.cities || n.units);
+  for (const n of shown) {
+    const row = document.createElement("div");
+    row.className = "nation-row" + (n.id === managementNation ? " active" : "") + (n.cities ? "" : " gone");
+    const restless = unrest.get(n.id) ?? 0;
+    row.title = `维护费 ${n.upkeep}/回合 · 科研累计 ${n.science}${restless ? ` · ${restless} 座城市动荡` : ""}`;
+    row.innerHTML = `<i class="nation-dot" style="background:${n.color}"></i><div>${esc(n.name)}${restless ? `<em class="unrest">动荡 ${restless}</em>` : ""}${n.ai_enabled ? '<em class="ai">AI</em>' : ""}</div><span>${fmt(n.gold)}</span><span>${n.cities}</span><span>${n.units}</span>`;
+    row.addEventListener("click", () => {
+      managementNation=n.id;
+      const cap = game.G.cities.get(n.capital);
+      if (!cap) return;
+      centerOn(cap.col, cap.row, 14);
+      game.select(cap.tile);
+      renderGame();
+      redraw();
+    });
+    el.appendChild(row);
+  }
+  if (gone.length) {
+    const more = document.createElement("button");
+    more.type = "button"; more.className = "nation-more";
+    more.textContent = showGoneNations ? "收起已灭亡的国家" : `已灭亡 ${gone.length} 国 · 展开`;
+    more.onclick = () => { showGoneNations = !showGoneNations; renderNations(); };
+    el.appendChild(more);
+  }
+}
+let showGoneNations = false;
+
+function renderGame() {
+  const snap = game.G.snap;
+  $("turn").innerHTML = snap ? `${snap.turn}<small>回合</small>` : "—<small>回合</small>";
+  $("turn-note").textContent = snap ? autoSim ? '自动模拟中' : '战术指挥' : '没有对局';
+  $('simulation-panel').hidden=!snap;
+  $('auto-sim').textContent=autoSim?'暂停自动模拟':'开启自动模拟';
+  $('auto-sim').setAttribute('aria-pressed',String(autoSim));
+  $('auto-sim').disabled=!autoSim&&(commandBusy||worldBusy||!snap);
+  $('ai-all').disabled=$('ai-stop').disabled=commandBusy||worldBusy||!snap;
+  $('simulation-status').textContent=autoSim?'模拟中：国家建设、开拓与作战。切到后台会暂缓回合推进。':`自动推进已暂停 · ${snap?.nations.filter(n=>n.ai_enabled).length??0} 个国家启用规则 AI；可手动推进回合。`;
+  $("next-turn").disabled = !snap || commandBusy || worldBusy;
+  $("plan-road").disabled = !snap || commandBusy || worldBusy;
+  $("go").disabled = commandBusy || worldBusy;
+  $("stress-toggle").disabled = commandBusy || worldBusy;
+  $("log").innerHTML = logHtml();
+  $("log-summary").textContent = logLines[0]?.head ? `${logLines[0].text} · ${logLines.length - 1} 条` : "";
+  // 回合栏的自动模拟快捷开关、标签上的回合数、折叠栏上的状态摘要
+  $("tab-turn").textContent = snap ? snap.turn : "";
+  $("auto-sim-quick").disabled = $("auto-sim").disabled;
+  $("auto-sim-quick").setAttribute("aria-pressed", String(autoSim));
+  $("auto-sim-quick").textContent = autoSim ? "暂停" : "自动";
+  $("sim-summary").textContent = !snap ? "" : autoSim ? "自动模拟中" : `${snap.nations.filter((n) => n.ai_enabled).length} 国启用 AI`;
+  renderSelection();
+  renderNations();
+  renderCityManagement();
+  renderStressReport();
+}
+
+// ================================================================ 战术指挥
+let commandBusy = false;
+let tacticsRequest = 0;
+let roadRequest = 0;
+const RANKS = ['新兵', '熟练', '老兵', '精锐', '王牌'];  // 部队 Lv.0–4，每级战斗力 +12.5%
+const ICONS = {
+  move: '<path d="M3 12h14M12 5l7 7-7 7"/>',
+  attack: '<circle cx="12" cy="12" r="6"/><path d="M12 1v5m0 12v5M1 12h5m12 0h5"/>',
+  fortify: '<path d="M12 3l8 3v7c0 4-8 8-8 8S4 17 4 13V6z"/>',
+  pillage: '<path d="M12 3c2.5 3 5.5 5.5 5.5 10a5.5 5.5 0 0 1-11 0c0-2.4 1.2-3.8 2.4-4.8 0 2 1 3.2 2.2 3.4C11 9 10.6 6 12 3z"/>',
+  group: '<rect x="3" y="9" width="12" height="10" rx="2"/><path d="M7 9V5h12v10h-4"/>',
+  road: '<path d="M5 21L9 3m10 18L15 3M12 4v3m0 4v3m0 4v3"/>',
+};
+function commandButton(label, icon, handler, disabled = false, title = '') {
+  const b = document.createElement('button'); b.type = 'button'; b.className = 'command-button';
+  b.disabled = disabled; b.title = title; b.dataset.command = icon;
+  b.innerHTML = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" aria-hidden="true">${ICONS[icon] ?? ICONS.group}</svg><span>${label}</span>`;
+  b.onclick = handler; return b;
+}
+function xpHtml(data, kind) {
+  const lv = data.level ?? (kind === 'unit' ? 0 : 1), xp = data.xp ?? 0;
+  const fraction = data.xp_next == null ? 100 : Math.min(100, (xp-(data.xp_floor??0))/Math.max(1,data.xp_next-(data.xp_floor??0))*100);
+  return `<div class="experience"><span class="level-seal">${lv}</span><div><b>Lv.${lv} · ${kind==='unit' ? `${RANKS[Math.min(lv, RANKS.length - 1)]} · 战斗力 +${lv * 12.5}%` : kind==='city' ? '城市等级' : kind==='region' ? '区域发展' : '设施等级'}</b><span>${data.xp_next==null?'最高等级':`经验 ${xp} / ${data.xp_next}`}</span><div class="track"><i style="width:${fraction}%"></i></div></div></div>`;
+}
+async function chooseActor(id) {
+  game.G.actor = id; game.G.actionMode = 'inspect'; game.G.pending = null;
+  game.setTactics(null); renderSelection(); updateCommandHint(); redraw();
+  await refreshTactics();
+}
+async function refreshTactics() {
+  const actor = game.G.actor, id = gameId, token = ++tacticsRequest;
+  if (!actor || !id) { game.setTactics(null); return; }
+  try {
+    const data = await api(`/api/games/${encodeURIComponent(id)}/tactics?actor=${encodeURIComponent(actor)}`);
+    if (token !== tacticsRequest || gameId !== id || game.G.actor !== actor) return;
+    if (data.state_hash !== game.G.snap.state_hash) return;
+    game.setTactics(data); renderSelection(); updateCommandHint(); redraw();
+  } catch (e) { if (token === tacticsRequest) showCommandError(e.message); }
+}
+function setCommandMode(mode) {
+  game.G.actionMode = mode; game.G.pending = null;
+  renderSelection(); updateCommandHint(); redraw();
+}
+function showCommandError(text) {
+  logLines = [{bad:true,text}, ...logLines].slice(0,30);
+  $('log').innerHTML = logHtml();
+}
+function updateCommandHint() {
+  const el = $('map-command'), mode = game.G.actionMode;
+  const actor = game.G.units.get(game.G.actor) ?? game.G.cities.get(game.G.actor);
+  const visible = !!actor || mode === 'road'; el.hidden = !visible;
+  if (!visible) return;
+  const name = actor?.type ? unitName(actor.type) : actor?.name ?? '道路规划';
+  const instructions = {inspect:'蓝色：移动范围 · 红色：可攻击目标',move:'点选蓝色格子预览路线',attack:'点选红色目标预览战斗',road: game.G.roadStart == null ? '点选本国陆地作为道路起点' : '点选终点，预览道路与工程费用'};
+  $('command-name').textContent = mode === 'road' ? '道路规划' : `${name}${actor?.formation!=null?' · 编队':''}`;
+  $('command-hint').textContent = commandBusy ? '正在执行…' : instructions[mode];
+  $('command-cancel').textContent = mode === 'inspect' ? '取消选择' : '取消';
+}
+function cancelCommand() {
+  ++roadRequest; game.G.roadPlan = null; game.G.roadStart = null;
+  if (game.G.actionMode === 'inspect') { game.G.actor = null; game.setTactics(null); }
+  setCommandMode('inspect');
+}
+async function executeCommand(raw) {
+  if (commandBusy || !gameId) return;
+  commandBusy = true; const id=gameId, before=game.G.snap;
+  renderGame(); updateCommandHint();
+  try {
+    const res = await api(`/api/games/${encodeURIComponent(id)}/actions`, {orders:Array.isArray(raw)?raw:[raw],expected_hash:before.state_hash});
+    if (id!==gameId) return;
+    game.setGame(res,null,world.width,world.height); game.playEvents(res.events,before); cityAlerts(res.events);
+    const actor=game.G.units.get(game.G.actor) ?? game.G.cities.get(game.G.actor);
+    if(actor) game.select(actor.tile); else { game.G.actor = null; game.setTactics(null); }
+    game.G.pending = null; game.G.roadPlan = null;
+    game.G.actionMode = 'inspect';
+    const lines=res.rejected.map(r=>({bad:true,text:r.message}));
+    for(const e of res.events){const f=EVENT_TEXT[e.type];if(f)lines.push({text:f(e)});}
+    if(!lines.length&&!res.rejected.length)lines.push({text:raw.type==='fortify'?'部队驻守，未受伤的回合可恢复生命':'指令已执行'});
+    logLines=[...lines,...logLines].slice(0,30);
+    await refreshTactics();
+  } catch(e){showCommandError('操作失败：'+e.message);}
+  finally { commandBusy=false;renderGame();updateCommandHint();redraw(); }
+}
+function actorOrder(type, extra = {}) {
+  const actor=game.G.units.get(game.G.actor) ?? game.G.cities.get(game.G.actor);
+  return {type,issuer:actor.nation,[actor.type?'unit':'city']:actor.id,...extra};
+}
+function militaryAtActor(u) {
+  return (u.layer==='air'?game.tileInfo(u.tile).air:game.tileInfo(u.tile).surface)
+    .filter(v=>v.nation===u.nation && game.unitDef(v).category==='military' && game.unitDef(v).domain===game.unitDef(u).domain);
+}
+function tacticalCard(actor) {
+  const box=document.createElement('div');box.className='card tactical-card';
+  const unit=!!actor.type, def=unit?game.unitDef(actor):null;
+  const name=unit?def.name:actor.name, nation=game.nationOf(actor.nation);
+  box.innerHTML=`<div class="tactical-heading"><div><small>${esc(nation.name)} · ${unit?'单位指挥':'城市防御'}</small><b>${esc(actor.rank?`${actor.title} · ${actor.name}`:name)}${actor.formation!=null?'编队':''}</b></div><span class="tactical-health">${actor.hp}<small> / ${unit?(actor.max_hp??100):200}</small></span></div>${xpHtml(actor,unit?'unit':'city')}`;
+  const stats=document.createElement('div');stats.className='tactical-stats';
+  const move=unit?(game.G.tactics?.movement_left??actor.moves_left+(actor.road_credit??0)/(game.G.rules.move_steps??3)):null;
+  const combat=game.G.tactics?.combat_strength??def?.strength;
+  const ranged=game.G.tactics?.ranged_strength??def?.ranged_strength;
+  stats.innerHTML=unit?`<span>移动 <b>${move}</b></span><span>战力 <b>${combat}${ranged?'/'+ranged:''}</b></span><span>射程 <b>${game.G.tactics?.attack_range??(def.ranged_strength||def.anti_air||def.domain==='air'?def.range:1)}</b></span>`:`<span>攻击范围 <b>2 格</b></span><span>城防 <b>${actor.defense}</b></span>`;
+  box.appendChild(stats);
+  const buttons=document.createElement('div');buttons.className='command-grid';
+  if(unit&&actor.layer==='cargo'){
+    // 船上的部队只能下船（从舰船卡片或部队列表选中）
+    const ship=game.G.units.get(actor.carried_by);
+    buttons.appendChild(commandButton('下船','move',()=>executeCommand(actorOrder('disembark')),commandBusy||move<=0,move>0?`从${ship?unitName(ship.type):'船'}下到旁边的陆地`:'刚登船，下一回合再下船'));
+    box.appendChild(buttons);
+    return box;
+  }
+  if(unit)buttons.appendChild(commandButton('移动','move',()=>setCommandMode('move'),commandBusy||move<=0));
+  const air=unit&&def.domain==='air';
+  if(!unit||def.category==='military')buttons.appendChild(commandButton(air?'出击':'攻击','attack',()=>setCommandMode('attack'),commandBusy||!!actor.attack_blocked,actor.attack_blocked??(air?'起飞 → 攻击作战半径内的目标 → 返航降落，用掉本回合':'')));
+  if(unit){
+    if(def.tags?.includes('found_city'))buttons.appendChild(commandButton('建立城市','group',()=>executeCommand(actorOrder('found_city')),commandBusy||!!game.G.tactics?.found_city_blocked,game.G.tactics?.found_city_blocked??''));
+    buttons.appendChild(commandButton(actor.managed?'接管单位':'交回单位 AI','group',()=>executeCommand(actorOrder('unit_management',{enabled:!actor.managed})),commandBusy));
+    buttons.appendChild(commandButton('驻守','fortify',()=>executeCommand(actorOrder('fortify')),commandBusy));
+    if(def.domain==='land'){const ship=game.G.tactics?.embark;buttons.appendChild(commandButton('登船','move',()=>executeCommand(actorOrder('embark')),commandBusy||!ship,ship?`登上旁边的${ship}（用掉本回合行动，当回合船就能起航）`:(game.G.tactics?.embark_blocked??'')));}
+    for(const r of game.G.tactics?.lay_road??[])buttons.appendChild(commandButton(`修路·${r.dir} ${r.cost}金`,'move',()=>executeCommand(actorOrder('lay_road',{to:r.to})),commandBusy,`工兵往${r.dir}修一段${r.kind==='bridge'?'桥':r.kind==='tunnel'?'隧道':'路'}（${r.cost} 金，用掉本回合行动）；道路上移动快 3 倍`));
+    if(def.domain==='land'&&game.G.tactics&&!game.G.tactics.demolish_blocked)buttons.appendChild(commandButton('拆路','pillage',()=>executeCommand(actorOrder('demolish_road')),commandBusy,'拆掉连到脚下这一格的本国道路，拖慢来犯之敌（用掉本回合行动）'));
+    if(def.category==='military'&&def.domain==='land'){const p=game.G.tactics?.pillage;buttons.appendChild(commandButton('破坏','pillage',()=>executeCommand(actorOrder('pillage')),commandBusy||!p,p?`破坏${p.name}，掠走 ${p.loot} 金，所属城市稳定度下降`:(game.G.tactics?.pillage_blocked??'')));}
+    if(actor.formation!=null)buttons.appendChild(commandButton('解散编队','group',()=>executeCommand(actorOrder('ungroup')),commandBusy));
+    else if(def.category==='military'){
+      const members=militaryAtActor(actor).filter(u=>u.formation==null);
+      buttons.appendChild(commandButton(`编队${members.length>1?' · '+members.length:''}`,'group',()=>executeCommand({type:'form_group',issuer:actor.nation,units:members.map(u=>u.id)}),commandBusy||members.length<2,'同格军事单位合成编队一起行军；编队不能攻击'));
+    }
+    const corps=game.G.tactics?.corps;
+    if(corps){
+      const n=corps.recruits.length;
+      buttons.appendChild(commandButton(`编入军团${n?' · '+n:''}`,'group',()=>executeCommand({type:'assign_corps',issuer:actor.nation,general:actor.id,units:corps.recruits}),commandBusy||!n,n?`把身边 ${corps.radius} 格内的 ${n} 支部队编入${actor.title}`:`身边 ${corps.radius} 格内没有可编入的部队，或已满员`));
+    }
+    if(actor.corps!=null)buttons.appendChild(commandButton('离开军团','group',()=>executeCommand(actorOrder('leave_corps')),commandBusy));
+  }
+  box.appendChild(buttons);
+  // 将领：军团成员、上限、加成；军团成员：所属军团和统帅
+  const corpsInfo=game.G.tactics?.corps, chief=game.G.tactics?.commander;
+  if(unit&&(corpsInfo||chief)){
+    const info=document.createElement('div');info.className='cargo-list';
+    if(corpsInfo){
+      info.innerHTML=`<b>${esc(actor.title)} · ${esc(actor.name)} ${'★'.repeat(actor.rank)}</b><span class="hint">统御 ${corpsInfo.members.length} / ${corpsInfo.capacity} 支 · 身边 ${corpsInfo.radius} 格内的成员战斗力 +${corpsInfo.bonus}%</span>`;
+      for(const id of corpsInfo.members){const m=game.G.units.get(id);if(m)info.insertAdjacentHTML('beforeend',`<div class="cargo-row"><span>${esc(unitName(m.type))} <small>生命 ${m.hp}/${m.max_hp??100}</small></span></div>`);}
+    }else{
+      info.innerHTML=`<b>${esc(chief.title)}</b><span class="hint">统帅 ${esc(chief.name)} ${'★'.repeat(chief.rank)} · ${chief.in_range?`在将领身边，战斗力 +${chief.bonus}%`:'离将领太远，暂时没有军团加成'}</span>`;
+    }
+    box.appendChild(info);
+  }
+  // 舰船：船上的陆军（各自下船）、航母上的舰载机
+  if(unit&&(def.carry||def.air_capacity)){
+    const hold=document.createElement('div');hold.className='cargo-list';
+    const riders=game.G.cargo?.get(actor.id)??[];
+    const planes=def.air_capacity?(game.G.stacks.get(actor.tile)?.air??[]).filter(p=>p.carried_by===actor.id):[];
+    let html=def.carry?`<b>载运 ${riders.length} / ${def.carry}</b>`:'';
+    if(def.air_capacity)html+=`<b>舰载机 ${planes.length} / ${def.air_capacity}</b>`;
+    hold.innerHTML=html+(riders.length||planes.length?'':'<span class="hint">空船：相邻的陆军可以登船；飞机可以转场到航母上</span>');
+    for(const r of riders){
+      const row=document.createElement('div');row.className='cargo-row';
+      row.innerHTML=`<span>${esc(unitName(r.type))} <small>生命 ${r.hp}</small></span>`;
+      const off=document.createElement('button');off.type='button';off.textContent='下船';off.disabled=commandBusy;
+      off.title='下到船旁边的陆地（用掉这支部队本回合的行动；刚登船的要下一回合）';
+      off.onclick=()=>executeCommand({type:'disembark',issuer:r.nation,unit:r.id});
+      row.appendChild(off);hold.appendChild(row);
+    }
+    for(const p of planes)hold.insertAdjacentHTML('beforeend',`<div class="cargo-row"><span>${esc(unitName(p.type))} <small>生命 ${p.hp}</small></span></div>`);
+    box.appendChild(hold);
+  }
+  if(unit){const hint=document.createElement('p');hint.className='hint';hint.textContent=actor.managed?`规则 AI：${actor.ai_goal||'等待国家开启 AI'}。`:'本单位由你指挥。';box.appendChild(hint);}
+  if(actor.attack_blocked){ const h=document.createElement('p');h.className='command-warning';h.textContent=actor.attack_blocked;box.appendChild(h); }
+  else if(actor.formation==null&&unit){const h=document.createElement('p');h.className='hint';h.textContent='攻击消耗本回合剩余移动力；驻守可恢复生命。';box.appendChild(h);}
+  const pending=game.G.pending;
+  if(pending){
+    const preview=document.createElement('div');preview.className='command-preview';
+    const [col,row]=[pending.tile%world.width,Math.floor(pending.tile/world.width)];
+    if(pending.kind==='move'){
+      const path=game.G.tactics?.move_paths?.[pending.tile];
+      preview.innerHTML=`<small>移动预览</small><b>前往 (${col}, ${row})</b><span>${Math.max(0,(path?.length??1)-1)} 格路线 · 本回合抵达</span>`;
+      const b=document.createElement('button');b.className='primary';b.textContent=actor.formation!=null?'编队移动至此':'移动至此';b.disabled=commandBusy;
+      b.onclick=()=>executeCommand(actorOrder('move',{to:[col,row]}));preview.appendChild(b);
+    }else{
+      const info=pending.info;
+      const target=game.G.units.get(info.target)??game.G.cities.get(info.target);
+      const own=(info.retaliation??0)+(info.flak??0);
+      preview.innerHTML=`<small>${KIND_TEXT[info.kind]??'远程攻击'}</small><b>${esc(target?.type?unitName(target.type):target?.name??'目标')}</b><div class="damage-preview"><span>敌方损失 <b>−${info.damage}</b></span><span>己方损失 <b>${own?'−'+own:'0'}</b></span></div>${modifierHtml(info)}<span>${info.flak?(info.damage?`进入敌方防空火力范围：先挨高射火力 −${info.flak}，带伤投弹`:`会被敌方高射炮击落（−${info.flak}）`):info.suppress&&target?.type?'炮击会压制守军：打中的部队失去驻守加成，近战随后冲锋更划算':target&&info.damage>=target.hp?(target.type?'预计消灭敌军':'城防将被摧毁'):'按当前生命、等级与地形结算'}</span>`;
+      const b=document.createElement('button');b.className='primary attack-confirm';b.textContent='执行攻击';b.disabled=commandBusy;
+      b.onclick=()=>executeCommand(actorOrder(unit?'attack':'city_attack',{to:[col,row]}));preview.appendChild(b);
+    }
+    box.appendChild(preview);
+  }
+  return box;
+}
+async function tacticalClick(tile) {
+  if(commandBusy||tile==null)return;
+  const mode=game.G.actionMode,t=game.G.tactics;
+  if(mode==='road'){await roadClick(tile);return;}
+  if(mode==='move'||mode==='attack'){
+    if(!t)return;
+    if(mode==='move'){
+      if(!t.move_paths?.[tile]){showCommandError('该格不在本回合移动范围内');return;}
+      game.G.pending={kind:'move',tile};
+    }else{
+      const info=t.targets.find(x=>x.tile===tile);
+      if(!info){showCommandError(t.obstructed.includes(tile)?'山脉或树林遮挡射线':'该格没有可攻击目标');return;}
+      game.G.pending={kind:'attack',tile,info};
+    }
+    renderSelection();redraw();return;
+  }
+  game.select(tile);
+  const info=game.tileInfo(tile);
+  const u=[...info.surface,...info.air].find(u=>game.unitDef(u).category==='military'||game.unitDef(u).tags?.includes('found_city')||u.rank);
+  await chooseActor(u?.id??null);
+  renderGame();redraw();
+}
+
+function beginRoad(nation, tile = null) {
+  if(commandBusy)return;
+  ++roadRequest; game.G.layers.roads=true;
+  document.querySelector('[data-game-layer="roads"]')?.classList.add("on");
+  game.G.roadNation=nation;game.G.roadStart=tile;game.G.roadPlan=null;
+  game.G.actionMode='road';game.G.actor=null;game.setTactics(null);
+  renderSelection();updateCommandHint();redraw();
+}
+async function roadClick(tile) {
+  const nation=game.G.roadNation;
+  if(!nation){showCommandError('先选择修路的国家');return;}
+  const terrain=terrainInfo(tile%world.width,Math.floor(tile/world.width));
+  if(terrain?.water){showCommandError('道路起点和终点要在陆地上，中间的浅水会自动架桥');return;}
+  if(game.G.roadStart==null){
+    const owner=game.tileInfo(tile).owner;
+    const ownRoad=(game.G.snap.roads??[]).some(r=>r.nation===nation&&(r.a===tile||r.b===tile));
+    if(owner?.id!==nation&&!ownRoad){showCommandError('请点选本国领土或已有道路的端点');return;}
+    game.G.roadStart=tile;game.select(tile);renderSelection();updateCommandHint();redraw();return;
+  }
+  const token=++roadRequest,id=gameId,from=game.G.roadStart;
+  game.G.roadPlan={loading:true};renderSelection();
+  try{
+    const data=await api(`/api/games/${encodeURIComponent(id)}/road-plan`,{issuer:nation,start:[from%world.width,Math.floor(from/world.width)],to:[tile%world.width,Math.floor(tile/world.width)]});
+    if(token!==roadRequest||id!==gameId||game.G.actionMode!=='road')return;
+    if(data.error){game.G.roadPlan=null;showCommandError(data.error);}
+    else game.G.roadPlan=data;
+  }catch(e){if(token===roadRequest){game.G.roadPlan=null;showCommandError(e.message);}}
+  renderSelection();redraw();
+}
+function roadCard(){
+  const box=document.createElement('div');box.className='road-panel';
+  const plan=game.G.roadPlan, n=game.nationOf(game.G.roadNation);
+  box.innerHTML=`<div class="card-head"><b>道路规划</b><span class="grow"></span><small>${esc(n?.name??'')}</small></div><p class="hint">连接大区与各类地形。过河架桥，穿山开隧道，沼泽铺设堤道；道路每格消耗 ½ 点移动力。</p>`;
+  const select=document.createElement('select');select.setAttribute('aria-label','道路建设国家');
+  select.innerHTML=game.G.snap.nations.map(n=>`<option value="${esc(n.id)}" ${n.id===game.G.roadNation?'selected':''}>${esc(n.name)} · ${n.gold} 金</option>`).join('');
+  select.disabled=commandBusy;select.onchange=()=>beginRoad(select.value);box.appendChild(select);
+  const hint=document.createElement('p');hint.className='hint';
+  hint.textContent=plan?.loading?'正在规划最省工程费用的路线…':game.G.roadStart==null?'在地图上选择起点。':'起点已选，点选陆地终点预览。';box.appendChild(hint);
+  if(plan?.segments){
+    const names={road:'道路',bridge:'桥梁',tunnel:'隧道',causeway:'堤道'};
+    const preview=document.createElement('div');preview.className='command-preview';
+    preview.innerHTML=`<small>工程预览 · ${plan.path.length-1} 格</small><b>${plan.cost} 金 <span class="num">/ 可用 ${plan.gold}</span></b><span>${Object.entries(plan.counts).map(([kind,count])=>`${names[kind]} ${count} 段`).join(' · ')||'已全部建成'}</span><span>跨越 ${plan.regions.length} 个大区 · 最多连续跨 3 格浅水</span>`;
+    const b=document.createElement('button');b.className='primary';b.textContent=plan.affordable?(plan.cost?'修建这条道路':'路线已建成'):'资金不足';b.disabled=commandBusy||!plan.affordable||plan.cost===0;
+    b.onclick=()=>{
+      const a=plan.start, end=plan.end;
+      executeCommand({type:'build_road',issuer:game.G.roadNation,start:[a%world.width,Math.floor(a/world.width)],to:[end%world.width,Math.floor(end/world.width)]});
+    };preview.appendChild(b);box.appendChild(preview);
+  }
+  const reset=document.createElement('button');reset.textContent='重选起点';reset.disabled=commandBusy;reset.onclick=()=>beginRoad(game.G.roadNation);box.appendChild(reset);
+  return box;
+}
+
+
+async function toggleStress() {
+  if(commandBusy||worldBusy)return;
+  const on=!stressEnabled;
+  if(on)normalGameId=gameId;
+  stressEnabled=on;
+  $('stress-toggle').setAttribute('aria-pressed',String(on));
+  await generate({restoreGame:on?null:normalGameId});
+  if(!on)normalGameId=null;
+  if(game.G.snap?.stress){openTab('game');renderStressReport();}
+}
+function renderStressReport(){
+  const el=$('stress-report'),stats=game.G.snap?.stress;el.hidden=!stats;
+  if(!stats)return;
+  const timing=game.G.snap._timing??{};
+  const coverage=(100*stats.territory_tiles/Math.max(1,stats.land_tiles)).toFixed(1);
+  const developed=(100*stats.developed_tiles/Math.max(1,stats.buildable_tiles)).toFixed(1);
+  el.innerHTML=`<h3>全陆地测试 <small>随机生成 · 军事单位</small></h3><div class="kv"><span>国土覆盖</span><b>${coverage}%</b><span>可建造陆地开发</span><b>${developed}%</b></div><div class="stress-counts">${[['nations','国家'],['cities','城市'],['units','军事单位'],['facilities','城外设施'],['roads','道路段'],['land_tiles','陆地格']].map(([key,label])=>`<span><b>${fmt(stats[key])}</b>${label}</span>`).join('')}</div><div class="kv"><span>生成内容</span><b>${fmt(stats.generation_ms)} ms</b><span>整理对局</span><b>${fmt(stats.snapshot_ms)} ms</b><span>获取与解析</span><b>${fmt((timing.request_ms??0)+(timing.parse_ms??0))} ms</b><span>对局数据</span><b>${(timing.response_mb??0).toFixed(1)} MB</b>${stats.last_turn_ms!=null?`<span>上次回合结算</span><b>${fmt(stats.last_turn_ms)} ms</b>`:''}</div><p class="hint">山地保留地形与隧道，火山保留矿区；生成遵守地形和驻扎规则。</p>`;
+  if(stressBenchmark){
+    el.insertAdjacentHTML('beforeend',`<div class="stress-bench-row"><div class="kv"><span>模拟回合</span><b>${fmt(stressBenchmark.turn_ms)} ms</b><span>CPU 耗时</span><b>${fmt(stressBenchmark.cpu_ms)} ms</b><span>服务进程峰值内存</span><b>${fmt(stressBenchmark.server_peak_rss_mb)} MB</b></div>${(stressBenchmark.views??[]).map(v=>`<div class="kv"><span>${esc(v.name)} · 绘制中位数 / P95</span><b>${v.median_ms} / ${v.p95_ms} ms</b></div>`).join('')}</div>`);
+  }
+  const row=document.createElement('div');row.className='btn-row';
+  const view=document.createElement('button');view.textContent='查看生成效果';view.disabled=commandBusy||worldBusy;view.onclick=()=>{const c=game.G.snap.cities[0];centerOn(c.col,c.row,48);game.select(c.tile);renderGame();redraw();};
+  const bench=document.createElement('button');bench.textContent=commandBusy?'测量中…':'测量运行负载';bench.disabled=commandBusy||worldBusy;bench.onclick=runStressBenchmark;
+  row.append(view,bench);el.append(row);
+}
+async function runStressBenchmark(){
+  if(commandBusy||!game.G.snap?.stress)return;
+  commandBusy=true;renderGame();
+  try {
+    const res=await api(`/api/games/${encodeURIComponent(gameId)}/benchmark`,{});
+    const c=game.G.snap.cities[0];
+    const views=await measureScenePerformance({col:c.col,row:c.row});
+    stressBenchmark={...res,views};
+  } catch(e){showCommandError('测量失败：'+e.message);}
+  finally{commandBusy=false;renderGame();redraw();}
+}
+
+// ================================================================ 地图交互
+
+const tip = $("tip");
+init($("map"), {
+  onHover(info, x, y) {
+    const hover=info&&world?info.row*world.width+info.col:null;
+    if(game.G.hoverTile!==hover){
+      const badge=t=>t!=null&&game.G.facilityAt?.has(t); // 设施等级角标跟着鼠标走
+      const changed=badge(game.G.hoverTile)||badge(hover);
+      game.G.hoverTile=hover;
+      if(game.G.actor||game.G.actionMode==='road'||changed)redraw();
+    }
+    if (!info) { tip.style.display = "none"; return; }
+    const kind = info.isSea ? "海域" : "大区";
+    const water = info.terrain.water;
+    const height = water ? `水深 ${Math.max(0, -info.height).toLocaleString("zh-CN")} m` : `海拔 ${info.height.toLocaleString("zh-CN")} m`;
+    const [wu, wv, ws] = info.wind;
+    const wind = ws < 0.05 ? "无风" : `${windName(wu, wv)} ${ws.toFixed(2)}`;
+    let sea = "";
+    if (water) {
+      const [cu, cv, cs, anom] = info.current;
+      const kind = anom > 1 ? "暖流" : anom < -1 ? "寒流" : "洋流";
+      const sign = anom >= 0 ? "+" : "";
+      // windName 按来向命名，洋流按去向说：取反方向
+      const toward = windName(-cu, -cv).replace("风", "");
+      if (cs >= 0.03) sea = ` · ${kind} 流向${toward} ${cs.toFixed(2)}（海温 ${sign}${anom.toFixed(1)}°C）`;
+    }
+    const climate = (water ? `海温 ${info.temp}°C` : `${info.temp}°C · 年降雨 ${info.rain.toLocaleString("zh-CN")} mm`) + ` · ${wind}${sea}`;
+    const BOUNDARY = ["", " · 汇聚边界", " · 张裂边界", " · 平移边界"];
+    const plateInfo = mode === "plates" ? ` · 板块 ${info.plate + 1}${BOUNDARY[info.boundary]}` : "";
+    let gameLine = "";
+    if (game.G.snap) {
+      const t = game.tileInfo(info.row * world.width + info.col);
+      const parts = [];
+      if (t.city) parts.push(`${t.city.capital ? "首都" : "城市"} ${t.city.name}（人口 ${t.city.population}）`);
+      else if (t.owner) parts.push(`${t.owner.name}领土`);
+      if (t.facility) parts.push(game.G.rules.buildings[t.facility].name);
+      const n = t.surface.length + t.air.length;
+      if (n) parts.push(`${n} 个单位`);
+      if (parts.length) gameLine = `<br><span>${esc(parts.join(" · "))}</span>`;
+    }
+    const target=game.G.tactics?.targets?.find(t=>t.tile===hover);
+    if(target&&game.G.actionMode==='attack'){const own=(target.retaliation??0)+(target.flak??0);const tactic=(target.modifiers??[]).filter(m=>m.side==='attacker'&&/侧击|跨河|出击/.test(m.label)).map(m=>`${m.label} ${m.value>0?'+':''}${m.value}%`).join(' · ');gameLine+=`<br><span style="color:#f2c199">敌方损失 −${target.damage} · 己方损失 ${own?'−'+own:'0'}${target.flak?'（含高射火力）':''}${tactic?' · '+tactic:''}</span>`;}
+    tip.innerHTML = `<b>${esc(info.terrain.name)}</b> <span>· ${kind} ${info.areaNo}</span>` +
+      (info.resource ? ` <span>· ${esc(info.resource.name)}</span>` : "") +
+      `<br><span>${height} · ${climate}${plateInfo} · (${info.col}, ${info.row})</span>` + gameLine;
+    tip.style.display = "block";
+    const stage = $("stage");
+    const w = tip.offsetWidth, h = tip.offsetHeight;
+    tip.style.left = Math.max(4, Math.min(stage.clientWidth - w - 8, x + 14)) + "px";
+    tip.style.top = (y + 18 + h > stage.clientHeight ? y - h - 12 : y + 18) + "px";
+  },
+  onClick(tile, button) {
+    if (!game.G.snap || button !== 0) return;
+    const idx = tile ? tile.row * world.width + tile.col : null;
+    if (app.classList.contains("collapsed")) setCollapsed(false);
+    openTab("game");
+    tacticalClick(idx);
+
+  },
+});
+
+// ================================================================ 绑定
+
+$("form").addEventListener("submit", (e) => { e.preventDefault(); setUrl(); generate(); });
+$("random").addEventListener("click", () => { $("seed").value = Math.floor(Math.random() * 1e9); setUrl(); generate(); });
+for (const k of ["land", "temp", "rain", "rough"]) $(k).addEventListener("input", syncLabels);
+for (const b of document.querySelectorAll("[data-mode]")) b.addEventListener("click", () => applyMode(b.dataset.mode));
+$("nations").addEventListener("input", () => { nationsTouched = true; });
+$("size").addEventListener("change", () => {
+  if (!nationsTouched) $("nations").value = $("size").selectedOptions[0].dataset.nations;
+});
+for (const chip of document.querySelectorAll("[data-layer]")) {
+  chip.addEventListener("click", () => {
+    chip.classList.toggle("on");
+    setLayer(chip.dataset.layer, chip.classList.contains("on"));
+  });
+}
+for (const chip of document.querySelectorAll("[data-game-layer]")) {
+  chip.addEventListener("click", () => {
+    chip.classList.toggle("on");
+    game.G.layers[chip.dataset.gameLayer] = chip.classList.contains("on");
+    redraw();
+  });
+}
+$("zoom-in").onclick = () => zoomBy(1.5);
+$("zoom-out").onclick = () => zoomBy(1 / 1.5);
+$("zoom-fit").onclick = () => fitView();
+$("next-turn").onclick = nextTurn;
+$('auto-sim').onclick=toggleSimulation;
+$('auto-sim-quick').onclick=toggleSimulation;
+// 折叠区：记住每块的展开 / 收起
+for (const d of document.querySelectorAll('details.fold')) {
+  const saved = store.get('fold.' + d.dataset.fold);
+  if (saved != null) d.open = saved === '1';
+  d.addEventListener('toggle', () => store.set('fold.' + d.dataset.fold, d.open ? '1' : '0'));
+}
+$('ai-all').onclick=()=>setAllAI(true);
+$('ai-stop').onclick=async()=>{stopSimulation();await setAllAI(false);renderGame();};
+$("command-cancel").onclick = cancelCommand;
+$("stress-toggle").onclick = toggleStress;
+$("plan-road").onclick = ()=>{
+  if(!game.G.snap)return;
+  const actor=game.G.units.get(game.G.actor)??game.G.cities.get(game.G.actor);
+  const owner=game.G.selected?game.tileInfo(game.G.selected.tile).owner:null;
+  beginRoad(actor?.nation??owner?.id??game.G.snap.nations[0].id);
+  openTab('game');
+};
+
+window.addEventListener("keydown", (e) => {
+  if (e.ctrlKey || e.metaKey || e.altKey || e.target.closest("input, select, textarea")) return;
+  if (e.key === "Escape") cancelCommand();
+  if (e.key === "h" || e.key === "H") setCollapsed(!app.classList.contains("collapsed"));
+});
+
+// 起始点图层默认关（开局后首都就在起始点上）
+setLayer("starts", false);
+if (store.get("collapsed") === "1") setCollapsed(true);
+openTab(store.get("tab") || "gen");
+const initial = fromUrl();
+applyMode(initial.mode);
+generate({ restoreGame: initial.game });
+</script>
+</body>
+</html>

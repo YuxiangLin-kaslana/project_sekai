@@ -1,0 +1,143 @@
+# 资源。frequency 决定相对分布；resource_density 将资源总格数严格限制到旧分布的 1/2。
+# 战略资源解锁和限制特定单位；奢侈资源提升稳定度；粮食资源提供额外粮食。
+# combat：国家有这种资源供应（有设施在开采且有人劳作）时，对应兵种（units 或整个军种 domains）的
+#         战斗力加成（strength，百分比）；丢了矿就没了加成。
+
+# ---- 战略资源 ----
+iron:
+  name: 铁
+  kind: strategic
+  terrains: [hills, plains, tundra]
+  frequency: 8
+  reference_frequency: 4
+  yields: { production: 1 }
+  color: "#5b5f66"
+
+coal:
+  name: 煤
+  kind: strategic
+  terrains: [hills, forest, plains]
+  frequency: 7
+  reference_frequency: 3
+  yields: { production: 1 }
+  color: "#222222"
+
+oil:
+  name: 石油
+  kind: strategic
+  terrains: [desert, tundra, marsh, coast]
+  frequency: 0.7
+  reference_frequency: 3
+  yields: { production: 1 }
+  combat:
+    - { label: 燃料充足, units: [motorized, armor], domains: [sea, air], strength: 10 }
+  color: "#1a1a2e"
+
+rubber:
+  name: 橡胶
+  kind: strategic
+  terrains: [rainforest, marsh]
+  frequency: 1.3
+  reference_frequency: 5
+  yields: { production: 1 }
+  color: "#8a6d3b"
+
+aluminum:
+  name: 铝
+  kind: strategic
+  terrains: [hills, plains, desert]
+  frequency: 2
+  yields: { production: 1 }
+  combat:
+    - { label: 铝制机体, domains: [air], strength: 15 }
+  color: "#c0c6cc"
+
+horses:
+  name: 马
+  kind: strategic
+  terrains: [plains, grassland]
+  frequency: 2
+  yields: { food: 1 }
+  color: "#a0522d"
+
+# ---- 奢侈资源 ----
+silk:
+  name: 丝绸
+  kind: luxury
+  terrains: [forest, grassland]
+  frequency: 1.5
+  yields: { gold: 2 }
+  color: "#e7a3c4"
+
+spices:
+  name: 香料
+  kind: luxury
+  terrains: [rainforest]
+  frequency: 3
+  yields: { gold: 2 }
+  color: "#d9822b"
+
+wine:
+  name: 酒
+  kind: luxury
+  terrains: [plains, grassland, hills]
+  frequency: 1.5
+  yields: { gold: 2 }
+  color: "#7b2d5b"
+
+gems:
+  name: 宝石
+  kind: luxury
+  terrains: [hills, rainforest, desert]
+  frequency: 0.3
+  reference_frequency: 1.5
+  yields: { gold: 3 }
+  color: "#2ec4b6"
+
+# ---- 粮食资源 ----
+wheat:
+  name: 小麦
+  kind: food
+  terrains: [plains, grassland]
+  frequency: 4
+  yields: { food: 2 }
+  color: "#f2c94c"
+
+cattle:
+  name: 牛
+  kind: food
+  terrains: [grassland, plains]
+  frequency: 3
+  yields: { food: 1, production: 1 }
+  color: "#f2f2f2"
+
+fish:
+  name: 鱼
+  kind: food
+  terrains: [coast, lake]
+  frequency: 5
+  yields: { food: 2 }
+  color: "#ff8c69"
+
+# 极稀有矿产；旧分布不包含这两种。
+tungsten:
+  name: 钨
+  kind: strategic
+  terrains: [hills, snow, tundra]
+  frequency: 0.18
+  reference_frequency: 0
+  yields: { production: 2 }
+  combat:
+    - { label: 钨芯穿甲弹, domains: [land], strength: 10 }
+  color: "#9bb9c1"
+
+rare_earths:
+  name: 稀土
+  kind: strategic
+  terrains: [hills, plains, desert]
+  frequency: 0.12
+  reference_frequency: 0
+  yields: { production: 2 }
+  combat:
+    - { label: 雷达与电子设备, units: [anti_air, fighter], strength: 10 }
+  color: "#bd91db"

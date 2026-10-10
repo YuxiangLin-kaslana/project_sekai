@@ -1,0 +1,14 @@
+
+# ---- sekai.yuxianglin.xyz -> Project Sekai (127.0.0.1:8095) ----
+# Behind Cloudflare proxy, same pattern as yuxianglin.xyz: self-signed origin cert on 443
+# (Cloudflare SSL mode "Full"), plain HTTP on 80 also served.
+http://sekai.yuxianglin.xyz {
+	encode gzip
+	reverse_proxy 127.0.0.1:8095
+}
+
+https://sekai.yuxianglin.xyz {
+	tls /etc/caddy/ssl/o2ai-selfsigned.crt /etc/caddy/ssl/o2ai-selfsigned.key
+	encode gzip
+	reverse_proxy 127.0.0.1:8095
+}

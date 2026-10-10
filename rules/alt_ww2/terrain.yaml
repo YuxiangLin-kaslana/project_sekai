@@ -1,0 +1,115 @@
+# 地形。yields 是"开发后产出"：格子上建了对应设施才产出，未开发的格子没有产出。
+# move_cost: null = 不可通行；水域的 move_cost 是舰船的移动消耗。
+# defense: 防御加成，百分比整数；attack: 从这格出击的进攻修正（居高临下 +、泥沼雨林 −）。数值为初始草案。
+
+plains:
+  name: 平原
+  move_cost: 1
+  yields: { food: 1, production: 1 }
+  color: "#b3ad6c"
+
+grassland:
+  name: 草原
+  move_cost: 1
+  yields: { food: 2 }
+  color: "#98a868"
+
+desert:
+  name: 沙漠
+  move_cost: 1
+  start_allowed: false
+  color: "#e4d2a2"
+
+tundra:
+  name: 苔原
+  move_cost: 1
+  yields: { food: 1 }
+  color: "#a9a790"
+
+snow:
+  name: 雪地
+  move_cost: 2
+  attack: -10
+  start_allowed: false
+  color: "#ecebe6"
+
+hills:
+  name: 丘陵
+  move_cost: 2
+  attack: 10
+  defense: 25
+  yields: { production: 2 }
+  color: "#ae9670"
+
+forest:
+  name: 森林
+  move_cost: 2
+  defense: 25
+  blocks_sight: true
+  yields: { food: 1, production: 1 }
+  color: "#62804a"
+
+rainforest:
+  name: 雨林
+  move_cost: 2
+  attack: -10
+  defense: -15
+  blocks_sight: true
+  yields: { food: 1 }
+  color: "#4b6d43"
+
+marsh:
+  name: 沼泽
+  move_cost: 2
+  attack: -20
+  defense: -15
+  yields: { food: 1 }
+  start_allowed: false
+  color: "#7f8f6e"
+
+mountains:
+  name: 山脉
+  move_cost: null
+  blocks_sight: true
+  start_allowed: false
+  color: "#a09382"
+
+coast:
+  name: 海岸
+  water: true
+  move_cost: 1
+  yields: { food: 1, gold: 1 }
+  start_allowed: false
+  color: "#6f9cb3"
+
+ocean:
+  name: 深海
+  water: true
+  move_cost: 1
+  yields: { food: 1 }
+  start_allowed: false
+  color: "#2e5770"
+
+lake:
+  name: 湖泊
+  water: true
+  move_cost: 1
+  yields: { food: 1, gold: 1 }
+  start_allowed: false
+  color: "#79a6bb"
+
+ice:
+  name: 冰原
+  water: true
+  move_cost: null
+  start_allowed: false
+  color: "#e3eaed"
+
+volcano:
+  name: 火山
+  move_cost: 3
+  defense: 25
+  blocks_sight: true
+  yields: { production: 1 }
+  start_allowed: false
+  color: "#6b5e57"

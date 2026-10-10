@@ -1,0 +1,118 @@
+name: alt_ww2
+version: 0.1.0
+title: 架空近现代（二战）
+description: 第一个内置规则集。二战式的近现代背景，陆海空军并存；国家与地名均为架空。
+
+worldgen:
+  resource_density: 0.5   # 相同地形/种子下，资源总格数至多旧分布的一半
+  land_ratio: 0.38        # 陆地占全图比例
+  mountain_ratio: 0.07    # 陆地中山脉占比
+  hill_ratio: 0.2         # 陆地中丘陵占比
+  volcanoes: 3            # 每 1000 个陆地格的火山数（俯冲带火山弧、岛弧、热点、裂谷）
+  river_flow: 10000        # 成河所需的流量（上游径流 mm 按角累加）；越小河越多
+  river_lowland: 3.0       # 平地成河阈值最多再提高几倍
+  min_river_length: 3
+  lake_max_size: 8
+  ice_temperature: -15    # 年均温低于它（°C）的海面结冰
+  area_size: 180          # 大区目标格数，缩小到原来的五分之一
+  sea_area_size: 2500     # 海域的目标格数
+  biomes:                 # 世界生成的地形角色 → 本规则集的地形
+    ocean: ocean
+    coast: coast
+    lake: lake
+    ice: ice
+    mountains: mountains
+    hills: hills
+    snow: snow
+    tundra: tundra
+    desert: desert
+    plains: plains
+    grassland: grassland
+    forest: forest
+    rainforest: rainforest
+    marsh: marsh
+    volcano: volcano
+
+cities:
+  radius: 2               # 建城时辖区半径（约 19 格）
+  max_radius: 5           # 仅用于压力测试初始填充
+  territory_cap: 4        # 人口增长时辖区半径最多 4 格（按地图尺度放大：128×80 约 6 格，800×460 约 38 格）
+  coastal_waters: 2       # 辖区只划离城 2 格以内的近岸海面（同样按地图尺度放大），外海不算领土
+  min_distance: 6         # 两座城市之间至少隔 6 格（按地图尺度放大）
+  dense_distance: 6       # 富饶地区也至少隔 6 格（原来 3 格，城市挤在一起）
+  sparse_distance: 7      # 贫瘠地区隔 7 格
+  center_yields: { food: 4, production: 2, gold: 2, science: 1 }   # 市中心本身的产出（含城郊）
+  population: 1           # 新城人口
+  capital_population: 2   # 开局首都人口
+  production_per_pop: 25  # 维持人口：每个人口每回合吃 2 粮、耗 0.25 生产力（这里按百分之一点写）
+  gold_per_production: 2  # 城市开启"金币补足建设"时，基础设施（城外设施、市中心建筑）缺的生产力按 2 金 1 点补
+
+stacking:                 # 企划书 5.2（初始草案）
+  limits: { military: 2, civilian: 2, air: 3 }      # 每格（每个国家）：地表军事 / 地表平民 / 空域
+  city_bonus: { military: 0, civilian: 1, air: 2 }  # 城市所在格的上限加成（军事单位同样最多 2 个）
+  crowding_from: 2        # 同格军事单位超过 2 个开始拥挤
+  crowding_penalty: 10    # 每多 1 个，该格所有单位战斗力 −10%
+
+encirclement:             # 包围 = 断补给：四周能站人的相邻格都被敌方军事单位占住（或是敌国城市）
+  penalty: 40             # 被包围的部队战斗力 −40%，驻守也不回血
+  attrition: 10           # 被包围的部队每回合减员 10 点生命，减到 0 溃散
+  city_penalty: 40        # 被包围的城市（四周陆地都被敌军占住）防御 −40%，城防不回复
+
+tactics:                  # 战术修正（近战进攻方）；地形本身的攻防修正在 terrain.yaml 的 attack / defense
+  flank: 15               # 侧击：目标格四周每多一面有本方陆军（不算进攻方出发的那一格），+15%
+  flank_max: 4            # 最多算 4 面（+60%）；城市也算，围城的包围圈本身就是侧击
+  river: 25               # 隔着河近战进攻 −25%
+  bridge: 10              # 河上有道路（桥）时只 −10%
+
+army:
+  upkeep_percent: 150     # 军事单位维护费是单位表数值的 1.5 倍
+
+domain_damage:            # 军种克制：攻方军种 → 目标军种的伤害倍率（%），乘在兵种自己的伤害倍率上
+  sea: { land: 150 }      # 舰炮打岸上部队 ×1.5
+  land: { sea: 50 }       # 陆军（和城市防御射击）打舰船 ×0.5
+  air: { sea: 160 }       # 飞机打舰船 ×1.6
+
+generals:                 # 将领：城市花大量生产力造出来，星级出生时抽签
+  weights: [40, 30, 18, 9, 3]   # ★1…★5 的抽中权重（%）
+  bonus_per_rank: 10      # 军团成员在将领身边作战：每颗星战斗力 +10%（★5 +50%）
+  base_capacity: 4        # 统御部队数 = 4 + 每星 2（★1 6 支 … ★5 14 支）
+  capacity_per_rank: 2
+  radius: 4               # 将领身边 4 格内的成员有加成；编入军团也要在这个范围里
+
+morale:                   # 兵力悬殊：交战双方各比本国 / 对方的城市数和军队数，取较低的那项比例
+  start: 50               # 不到对方一半开始掉士气
+  full: 25                # 只有对方四分之一时掉满
+  max_penalty: 30         # 战斗力最多 −30%（城市防御也算）
+
+stability:                # 城市稳定度 0–100：缺粮 / 缺钱 / 缺生产力时下降，降到 0 独立
+  food: 4                 # 本城粮食入不敷出：每回合 −4
+  gold: 3                 # 国库为负（付不起维护费）：全国城市每回合 −3
+  production: 3           # 人口维持把生产力吃光：每回合 −3
+  recover: 2              # 三样都不缺：每回合 +2，最多 100
+  unrest: 30              # 低于 30 算动荡：周围有城市独立时一起独立
+  captured: 70            # 刚被占领的城市从 70 开始
+  independent: 60         # 独立后新政权从 60 开始
+  radius: 6               # “周围”：离独立城市 6 格以内（按地图尺度放大），一起独立的城市再往外看
+  start_gold: 20          # 新国家每座城带 20 金起家
+  attacked: 3             # 战争：本回合城防挨打 −3
+  occupied: 1             # 战争：辖区内有外国军队 −1
+  encircled: 3            # 战争：城市被包围 −3
+  weariness: 1            # 战争：本国本回合有部队阵亡，全国城市 −1（厌战）
+  garrison: 67            # 有本国驻军（城里有陆军，或辖区内有驻守的陆军）：下降减少 67%，至少仍掉 1
+
+pillage:                  # 军队破坏外国领土上的设施 / 道路（站在那一格，用掉本回合行动）
+  loot: 25                # 掠走设施造价的 25%（金币）
+  road_loot: 5            # 没有设施时拆掉连到这一格的外国道路，每段掠走 5 金
+  stability: 5            # 所属城市稳定度 −5
+
+healing:                  # 回血：本回合挨过打（包括被炮击压制）、进攻过、被包围的不回血
+  city: 8                 # 在本国城市里每回合 +8（不用驻守）
+  field: 5                # 在郊外驻守每回合 +5
+
+start:                    # 开局：每个国家一座首都 + 这些单位
+  gold: 100
+  buildings: [palace]
+  facilities: 2           # 首都辖区内预先开发的设施数
+  units: [infantry, infantry, recon, engineer, settler]
+  coastal_units: [destroyer]   # 首都临水才给
+  air_units: [fighter]

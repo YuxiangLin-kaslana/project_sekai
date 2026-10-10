@@ -1,0 +1,175 @@
+# 建筑。placement: center = 市中心建筑（城市生产队列建造，一次付清 cost 生产力）；
+#       placement: tile = 城外设施（施工 build_turns 回合，cost 生产力分期从本城产出里付，付不起就停工）。
+# 格子只有建了设施、并且有人口在上面劳作才有产出 / 生效：设施格产出 = 地形 + 资源 + 设施 yields，
+# 每处设施需要 workers 人口；人口不够时按产出高低挑着运作，没人的设施（包括军事基地、机场）不生效。
+# gold_assist：城市开了“金币补足建设”时能否用金币补生产力（默认能；兵营、城防、军事基地、机场不能）。
+# stacking：该格堆叠上限加成；modifiers：修正器（见架构设计 5.3）。数值为初始草案。
+
+# ---- 市中心 ----
+palace:
+  name: 首都府
+  placement: center
+  buildable: false
+  yields: { production: 2, gold: 3, science: 2 }
+  modifiers:
+    - { target: city, stat: defense, op: add, value: 50 }
+  icon: palace
+
+granary:
+  name: 粮仓
+  placement: center
+  cost: 60
+  upkeep: 1
+  yields: { food: 2 }
+  modifiers:
+    - { target: city, stat: food_storage, op: mul, value: 125 }
+  icon: granary
+
+workshop:
+  name: 工场
+  placement: center
+  cost: 80
+  upkeep: 1
+  yields: { production: 2 }
+  icon: workshop
+
+market:
+  name: 市场
+  placement: center
+  cost: 90
+  yields: { gold: 2 }
+  modifiers:
+    - { target: city, stat: gold, op: mul, value: 125 }
+  icon: market
+
+school:
+  name: 学校
+  placement: center
+  cost: 90
+  upkeep: 1
+  yields: { science: 3 }
+  icon: school
+
+barracks:
+  name: 兵营
+  placement: center
+  cost: 120
+  upkeep: 1
+  modifiers:
+    - { target: city, stat: unit_experience, op: add, value: 15 }
+  gold_assist: false
+  icon: barracks
+
+walls:
+  name: 城防工事
+  placement: center
+  cost: 160
+  upkeep: 1
+  modifiers:
+    - { target: city, stat: defense, op: add, value: 100 }
+  gold_assist: false
+  icon: walls
+
+# ---- 城外设施 ----
+farm:
+  name: 农田
+  placement: tile
+  cost: 20
+  build_turns: 3
+  workers: 1
+  allowed_terrain: [plains, grassland, tundra, marsh]
+  allowed_resources: [wheat, cattle]
+  yields: { food: 1 }
+  icon: farm
+
+mine:
+  name: 矿山
+  placement: tile
+  cost: 30
+  build_turns: 4
+  workers: 1
+  allowed_terrain: [hills, volcano]
+  allowed_resources: [iron, coal, aluminum, gems, tungsten, rare_earths]
+  extracts: [iron, coal, aluminum, gems, tungsten, rare_earths]
+  yields: { production: 1 }
+  icon: mine
+
+lumber_mill:
+  name: 伐木场
+  placement: tile
+  cost: 20
+  build_turns: 3
+  workers: 1
+  allowed_terrain: [forest, rainforest]
+  yields: { production: 1 }
+  icon: lumber
+
+plantation:
+  name: 种植园
+  placement: tile
+  cost: 30
+  build_turns: 3
+  workers: 1
+  requires_resources: [silk, spices, wine, rubber]
+  extracts: [silk, spices, wine, rubber]
+  yields: { gold: 1 }
+  icon: plantation
+
+oil_well:
+  name: 油井
+  placement: tile
+  cost: 50
+  build_turns: 5
+  workers: 1
+  requires_resources: [oil]
+  extracts: [oil]
+  yields: { production: 3, gold: 1 }
+  icon: oil
+
+factory:
+  name: 工厂
+  placement: tile
+  cost: 80
+  build_turns: 6
+  workers: 2
+  allowed_terrain: [plains, grassland, desert, tundra]
+  upkeep: 2
+  yields: { production: 3 }
+  icon: factory
+
+military_base:
+  name: 军事基地
+  placement: tile
+  workers: 1
+  cost: 150
+  build_turns: 4
+  upkeep: 1
+  stacking: { military: 0 }
+  modifiers:
+    - { target: tile, stat: defense, op: add, value: 25 }
+  gold_assist: false
+  icon: base
+
+airfield:
+  name: 机场
+  placement: tile
+  workers: 1
+  cost: 150
+  build_turns: 4
+  upkeep: 1
+  allowed_terrain: [plains, grassland, desert, tundra]
+  air_base: true
+  stacking: { air: 3 }
+  gold_assist: false
+  icon: airfield
+
+port:
+  name: 港口
+  placement: tile
+  cost: 60
+  build_turns: 4
+  workers: 1
+  coastal: true
+  yields: { food: 1, gold: 2 }
+  stacking: { military: 0 }
+  icon: port

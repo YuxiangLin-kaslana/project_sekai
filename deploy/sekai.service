@@ -1,0 +1,16 @@
+[Unit]
+Description=Project Sekai web (sekai.yuxianglin.xyz -> 127.0.0.1:8095)
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+User=ec2-user
+Group=ec2-user
+WorkingDirectory=/home/ec2-user/project_sekai
+Environment=PYTHONUNBUFFERED=1
+ExecStart=/home/ec2-user/project_sekai/.venv/bin/python -m uvicorn server.app:app --host 127.0.0.1 --port 8095 --proxy-headers
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
