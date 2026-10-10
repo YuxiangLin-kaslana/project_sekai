@@ -1723,6 +1723,14 @@ def plan_fronts(ctx, nation, p, units, cities, components, replan):
         for u in units
         if "general" in rules.units[u.type].tags and rules.units[u.type].domain == "land"
     ]
+    # 军团只打陆路走得到的目标（跨海要舰队配合运兵，归国家战线）：将领所在的这块陆地上没有交战国的
+    # 城市时，军团成员这回合回到国家战线听调遣
+    enemy_land = {
+        int(components[c.tile])
+        for c in s.cities.values()
+        if at_war(s, c.nation, nation.id) and skip.get(str(c.id), -1) <= s.turn
+    }
+    gens = [g for g in gens if g.layer != "cargo" and int(components[g.tile]) in enemy_land]
     commanded = {gen.id for gen in gens}
     pool = [u for u in units if _front_pool(ctx, u) and u.corps not in commanded]
     troops = [u for u in pool if _troop(ctx, u)]
@@ -1817,13 +1825,13 @@ def _corps_fronts(ctx, nation, p, units, gens, old, cities, components, replan, 
             # 不和国家战线、别的军团撞同一个目标（各打各的方向）
             taken = [s.cities[o["target_city"]].tile for o in [*national, *out]]
             new, why = choose_target(
-                ctx, nation, cities, components, t, skip, taken, origin=gen.tile
+                ctx, nation, cities, components, t, skip, taken, overseas=False, origin=gen.tile
             )
             if new is None and national:
                 # 别的目标都没有：和国家战线一起打同一座城
                 taken = [s.cities[o["target_city"]].tile for o in out]
                 new, why = choose_target(
-                    ctx, nation, cities, components, t, skip, taken, origin=gen.tile
+                    ctx, nation, cities, components, t, skip, taken, overseas=False, origin=gen.tile
                 )
             if new is None:
                 if f is not None:
@@ -2195,7 +2203,8 @@ def plan_front(ctx, nation, p, f, cities, components):
     if len(melee_units) >= FRONT_MIN and ours >= OVERWHELM * max(1, theirs):
         ready = True
     if op is not None:
-        ready = ready and op["lift"] >= op["lift_need"]
+        # 运力够第一波的一半就出发：空船会回港接后面的部队（_fleet）
+        ready = ready and op["lift"] >= max(2, math.ceil(op["lift_need"] / 2))
 
     mode = f.get("mode")
     # 围城耐心从“接敌”算起：远程部队进了射程，或城防已经开始掉。大军还在路上不算久攻不下

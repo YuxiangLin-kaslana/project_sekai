@@ -32,14 +32,15 @@ DEFAULT = "war"
 STATUSES = ("war", "peace", "alliance")
 TRUCE = 15  # 和约签订后这么多回合内不能再宣战
 OFFER_TURNS = 5  # 给玩家的提议这么多回合内不回应就作废
-MIN_WAR = 20  # 打了这么多回合以上才考虑求和
-STALEMATE = 40  # 这么多回合两国之间没有城市易手：僵持
+MIN_WAR = 30  # 打了这么多回合以上才考虑求和
+STALEMATE = 80  # 这么多回合两国之间没有城市易手：僵持（战线从备战推到城下本身要几十回合）
 PEACE_RATIO = 0.6  # 兵力不到对方的这么多倍：打不过，求和
 DOMINATE = 1.6  # 兵力是对方这么多倍以上：占上风，不接受求和
 WAR_RATIO = 0.9  # 兵力至少是对方的这么多倍才主动宣战（对方正和别人打仗时放宽到 0.7）
 REACH = 30  # 宣战对象：最近的城市离本国城市这么多格以内（随地图放大）
 PLAN = 5  # 每国每这么多回合最多主动宣战一次（按国家编号错开）
 MAX_ALLIES = 2
+MAX_WARS = 2  # AI 同时主动打的仗最多这么多场
 
 
 def key(a: int, b: int) -> str:
@@ -270,6 +271,9 @@ def resolve(ctx) -> None:
     from engine.systems.settlement import map_scale
 
     reach = REACH * map_scale(s.grid)
+    from engine.systems.settlement import geography
+
+    land = geography(s, rules)["land_components"]
     for nid in ai:
         nation = s.nations[nid]
         # 求和
@@ -284,8 +288,8 @@ def resolve(ctx) -> None:
         # 宣战
         posture = (nation.strategy or {}).get("posture")
         wars = enemies(s, nid)
-        limit = 1 + len(s.nation_cities(nid)) // 6
-        if posture == "战争" and len(wars) < min(3, limit) and (s.turn + nid) % PLAN == 0:
+        limit = 1 + len(s.nation_cities(nid)) // 8
+        if posture == "战争" and len(wars) < min(MAX_WARS, limit) and (s.turn + nid) % PLAN == 0:
             best = None
             mine = [c.tile for c in s.nation_cities(nid)]
             for other in sorted(s.nations):
@@ -300,7 +304,15 @@ def resolve(ctx) -> None:
                 busy = bool(enemies(s, other))
                 if r < (0.7 if busy else WAR_RATIO):
                     continue
-                score = r - d / (20 * max(1.0, reach / REACH)) + (0.3 if busy else 0)
+                # 陆上接壤（有城市在同一块陆地上）的优先；跨海要造船运兵，打折扣
+                shore = {int(land[c.tile]) for c in s.nation_cities(nid)}
+                overland = any(int(land[c.tile]) in shore for c in s.nation_cities(other))
+                score = (
+                    r
+                    - d / (20 * max(1.0, reach / REACH))
+                    + (0.3 if busy else 0)
+                    + (0.6 if overland else -0.6)
+                )
                 if best is None or (score, -other) > (best[0], -best[1]):
                     best = (score, other)
             if best is not None:
