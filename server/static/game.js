@@ -2134,6 +2134,7 @@ const PLAN_ALPHA = { 备战: 0.38, 整编: 0.45, 装船: 0.5, 推进: 0.6, 航�
 
 function drawBattlePlans(ctx, v) {
   if (!G.layers.plans || G.political) return;
+  const placed = []; // 已画的战役名牌（屏幕矩形）：同一处有几场战役时往下错开，不叠在一起
   for (const n of G.nations.values()) {
     const st = n.strategy ?? {};
     // 战役图（苏式）：只画战线和实线的进攻箭头（主攻、跨海航渡），不画包围钳形、虚线和零碎的包抄小箭头
@@ -2142,7 +2143,7 @@ function drawBattlePlans(ctx, v) {
       if (plan.line?.length > 1) drawFrontLine(ctx, v, plan, n.rgb, alpha);
       for (const a of plan.arrows ?? []) if (a.kind === 'main' || a.kind === 'sail') drawPlanArrow(ctx, v, a, n.rgb, alpha, false);
       const main = plan.arrows?.find(a => a.kind === 'main');
-      if (main && v.z >= 5) drawPlanLabel(ctx, v, main, plan, n.rgb);
+      if (main && v.z >= 5) drawPlanLabel(ctx, v, main, plan, n.rgb, placed);
     }
   }
 }
@@ -2235,7 +2236,7 @@ function drawPlanArrow(ctx, v, a, rgb, alpha, dashed) {
   }
 }
 
-function drawPlanLabel(ctx, v, main, plan, rgb) {
+function drawPlanLabel(ctx, v, main, plan, rgb, placed = []) {
   const p = planGeometry(v, main);
   const text = `${plan.name} · ${plan.phase}`;
   const fs = Math.round(Math.max(11, Math.min(16, v.z * 0.42)));
@@ -2244,6 +2245,10 @@ function drawPlanLabel(ctx, v, main, plan, rgb) {
   eachCopy(v, p.ax - (p.bx - p.ax) * back, p.ay - (p.by - p.ay) * back, 200, (x, y) => {
     ctx.save();
     ctx.font = `700 ${fs}px "Songti SC", "Noto Serif CJK SC", "Source Han Serif SC", ${FONT}`;
+    const w = ctx.measureText(text).width + 8, h = fs + 6;
+    const hit = (yy) => placed.some(r => Math.abs(r.x - x) < (r.w + w) / 2 && Math.abs(r.y - yy) < (r.h + h) / 2);
+    for (let k = 0; k < 6 && hit(y); k++) y += h; // 和已画的名牌重叠：往下挪一行
+    placed.push({ x, y, w, h });
     ctx.textAlign = 'center'; ctx.textBaseline = 'middle'; ctx.lineJoin = 'round';
     ctx.lineWidth = Math.max(3, fs * 0.3); ctx.strokeStyle = 'rgba(251,246,232,0.92)';
     ctx.strokeText(text, x, y);

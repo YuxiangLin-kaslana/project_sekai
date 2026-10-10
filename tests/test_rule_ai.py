@@ -499,3 +499,16 @@ def test_a_nation_that_loses_its_last_city_disappears(board):
     assert not any(r["nation"] == 2 for r in out.state.roads.values())
     assert not (out.state.grid.owner == 2).any()
     assert any(e["type"] == "nation_eliminated" for e in out.events)
+
+
+def test_ring_troops_storm_the_walls_when_no_guns_are_firing(board):
+    from controllers import rule_ai
+    from engine.events import EventLog
+    from engine.systems.context import StepContext
+
+    enemy = board.nation_cities(2)[0]
+    enemy.hp = 60  # 城防已经不高
+    troop = add(board, "infantry", 1, board.grid.col_row(board.grid.neighbors_of(enemy.tile)[0]))
+    ctx = StepContext(board, RULES, [], EventLog(board.turn), RngTree(board.seed, "t", 1))
+    assert rule_ai._storm(ctx, troop, enemy)  # 没有炮兵在轰：近战直接强攻城墙
+    assert rule_ai._ai(ctx)["intents"][0][2] is troop

@@ -503,8 +503,34 @@ def preview(state, rules, actor, tile) -> tuple[dict | None, str | None]:
             "modifiers": [],
             "area": [],
         }, None
+    if (
+        isinstance(target, City)
+        and target.hp <= 0
+        and isinstance(actor, Unit)
+        and rules.units[actor.type].domain == "sea"
+        and not {"unarmed", "carrier"} & set(rules.units[actor.type].tags)
+    ):
+        # 舰队占领：城防打空、城里没有守军的沿海城市，贴在城边的战舰直接开进港口占领
+        if state.grid.distance(actor.tile, tile) > 1:
+            return None, "城防已摧毁：战舰要贴到城边（相邻）才能开进港口占领"
+        return {
+            "tile": tile,
+            "target": ref("city", target.id),
+            "kind": "capture",
+            "seize_city": True,
+            "capture": True,
+            "damage": 0,
+            "retaliation": 0,
+            "flak": 0,
+            "suppress": False,
+            "flak_from": None,
+            "attacker_strength": strength(state, rules, actor),
+            "defender_strength": 0,
+            "modifiers": [],
+            "area": [],
+        }, None
     if isinstance(target, City) and target.hp <= 0 and kind != "melee":
-        return None, "城防已摧毁，需要陆军近战占领"
+        return None, "城防已摧毁，需要陆军近战（或贴城的战舰）占领"
     if kind == "melee" and isinstance(target, City) and rules.units[actor.type].domain != "land":
         return None, "舰船不能登陆攻城"
     if kind == "melee" and isinstance(target, Unit):
@@ -656,8 +682,8 @@ def _capture(ctx, city, unit):
     # Aircraft on a captured base and noncombatants surrender with the city.
     for parked in list(s.units_at(city.tile)):
         if parked.nation == previous:
-            if rules.units[parked.type].category != "military" and not parked.rank:
-                seize(ctx, parked, unit.nation)  # 城里的平民被俘
+            if rules.units[parked.type].category != "military":
+                seize(ctx, parked, unit.nation)  # 城里的平民（含将领）被俘
                 continue
             ctx.log.add(
                 "unit_destroyed",
@@ -898,6 +924,20 @@ def _resolve(ctx: StepContext) -> None:
                 actor.attacked_turn = s.turn
                 gain(ctx, actor, 4, "unit")
                 continue
+        if info.get("seize_city"):
+            # 战舰开进港口占领城防已空的城市
+            city = s.city_at(tile)
+            _capture(ctx, city, actor)
+            s.move_unit(actor, tile)
+            actor.attacked_turn = s.turn
+            actor.moves_left, actor.road_credit, actor.destination, actor.fortified = (
+                0,
+                0,
+                None,
+                False,
+            )
+            ctx.log.add("unit_moved", unit=ref("unit", actor.id), path=[start, tile])
+            continue
         if info.get("seize"):
             # 俘虏平民：开进去，格子里的外国平民归本国（将领宁死不降）
             start = actor.tile

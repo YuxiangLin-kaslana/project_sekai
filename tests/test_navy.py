@@ -7,7 +7,7 @@ import pytest
 from engine.actions import parse_orders
 from engine.hexmap.grid import HexGrid
 from engine.rules.loader import load_ruleset
-from engine.state import GameState, Nation, Unit
+from engine.state import City, GameState, Nation, Unit
 from engine.step import step
 from engine.systems.combat import lock_reason, tactics
 
@@ -253,3 +253,15 @@ def test_lone_admiral_at_sea_is_captured_by_an_adjacent_warship(board):
     out = act(board, order(ship, "attack", to=[8, 3]))
     assert not out.rejected and out.state.units[boss.id].nation == 1
     assert out.state.units[ship.id].tile == boss.tile
+
+
+def test_warship_takes_an_undefended_port_with_its_walls_down(board):
+    c = City(board.new_id(), "港城", 2, board.grid.idx(COAST - 1, 3), 3, hp=0)
+    board.cities[c.id] = c
+    board.grid.owner[c.tile], board.grid.city_of[c.tile] = 2, c.id
+    far = add(board, "cruiser", 1, COAST + 2, 3)
+    assert act(board, order(far, "attack", to=[COAST - 1, 3])).rejected  # 要贴到城边
+    ship = add(board, "cruiser", 1, COAST, 3)
+    out = act(board, order(ship, "attack", to=[COAST - 1, 3]))
+    assert not out.rejected and out.state.cities[c.id].nation == 1
+    assert out.state.units[ship.id].tile == c.tile

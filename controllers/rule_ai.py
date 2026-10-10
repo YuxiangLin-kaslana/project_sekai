@@ -117,6 +117,8 @@ LINE_START = 6  # 战线从目标城外这么多步开始往前推（随地图�
 BORDER_WATCH = 8  # 城市这么近（格，随地图放大）有外国军队，就往边境派哨兵
 HUNT_RADIUS = 8  # 战舰追击这么近（格，随地图放大）的敌舰
 FLEET_MIN = 3  # 舰队不到这么多艘先集结
+STORM_HP = 80  # 城防低于这个数，近战不等炮火直接强攻城墙
+DROP_PER_TILE = 2  # 跨海登陆：每个登陆格每回合最多认领这么多支下船部队
 AIRFIELD_MARGIN = 2  # 机场离目标至少留这么多格（别修在敌城射程里）
 CARRIER_STANDOFF = 5  # 航母停在目标城外这么远（舰载机够得着，岸上火力打不着）
 # 跨海登陆
@@ -336,7 +338,7 @@ def attack_choice(ctx, actor, *, only_static=False):
             if info["flak"] >= actor.hp:
                 continue
             airfield = rules.buildings[info["facility"]].air_base
-            score = (90 if airfield else 20) - info["flak"]
+            score = (150 if airfield else 20) - info["flak"]  # 机场最优先，其次城防（+50）
             if score > 0:
                 best.append((-score, tile, info, None))
             continue
@@ -359,6 +361,13 @@ def attack_choice(ctx, actor, *, only_static=False):
         if info.get("capture") or (isinstance(target, City) and target.hp == 0):
             score += 200
         kind = rules.units[actor.type] if isinstance(actor, Unit) else None
+        if (
+            kind is not None
+            and kind.domain == "air"
+            and "air_superiority" not in kind.tags
+            and isinstance(target, City)
+        ):
+            score += 50  # 轰炸机：机场炸完了就炸城防（机场 150 分最优先），给地面部队开路
         if isinstance(target, Unit) and kind is not None:
             if target.layer == "air" and "air_superiority" in kind.tags:
                 score += 25  # 战斗机：空战、夺取制空权优先
@@ -1264,18 +1273,63 @@ def _convoy(ctx, unit, plan, target):
         if len(riders) >= carry:
             return _roadstead(ctx, unit, op, f"已装满，在{name}港外等船队出发")
         return _to_port(ctx, unit, op, f"在{name}等部队登船（{len(riders)} / {carry}）")
-    if g.distance(unit.tile, op["beach"]) <= 1:
-        return False  # 到了登陆场：部队下船，舰船照常作战
-    if march(
-        ctx,
-        unit,
-        op["beach"],
-        f"运送 {len(riders)} 支部队渡海，到 {target.name} 城外登陆",
-        stop_within=1,
-    ):
+    # 登陆点分散：每艘船各认领一个空着的登陆格（每格最多 DROP_PER_TILE 支），不全挤到同一个滩头
+    claims = _ai(ctx).setdefault("drop_claims", {})
+    points = _drop_points(ctx, unit.nation, op, target)
+    lands = {land for _, land, _ in points}
+    here = [n for n in g.neighbors_of(unit.tile) if n in lands and claims.get(n, 0) < DROP_PER_TILE]
+    if here or g.distance(unit.tile, op["beach"]) <= 1:
+        for n in here:
+            claims[n] = claims.get(n, 0) + DROP_PER_TILE
+        return False  # 到了登陆点：部队下船（_landings），舰船照常作战
+    why = f"运送 {len(riders)} 支部队渡海，到 {target.name} 城外登陆"
+    for _, land, seas in points[:12]:
+        if claims.get(land, 0) >= DROP_PER_TILE:
+            continue
+        spots = [
+            w
+            for w in seas
+            if movement.has_room(s, ctx.rules, unit, w)
+            and not any(v.nation != unit.nation for v in s.units_at(w))
+        ]
+        for spot in sorted(spots, key=lambda w: (g.distance(unit.tile, w), w))[:2]:
+            if march(ctx, unit, spot, why):
+                claims[land] = claims.get(land, 0) + len(riders)
+                return True
+    if march(ctx, unit, op["beach"], why, stop_within=1):
         return True
     _hold(ctx, unit, "航路被挡住，载着部队原地等待")
     return True
+
+
+def _drop_points(ctx, nation, op, target):
+    """跨海登陆可以下船的格子：目标城附近（BEACH_RANGE 步内，同一块陆地）、不是城市、没有外国部队、
+    旁边有这次作战海域里舰船开得到的海面。按离滩头远近排；每回合每个作战算一次。
+    返回 [(离滩头距离, 登陆格, [旁边能停船的海面])]。"""
+    s, rules, g = ctx.state, ctx.rules, ctx.state.grid
+    cache = _ai(ctx).setdefault("drop_points", {})
+    key = (nation, target.id, op["beach"])
+    if key not in cache:
+        geo = geography(s, rules)
+        comps, wc = geo["land_components"], geo["water_components"]
+        land_cost, sea_cost = ctx.costs("land"), ctx.costs("sea")
+        seas = set(op["seas"])
+        reach = round(BEACH_RANGE * map_scale(g)) + 1
+        points = []
+        for t in g.within(target.tile, reach):
+            if (
+                g.is_water[t]
+                or comps[t] != comps[target.tile]
+                or land_cost[t] <= 0
+                or s.city_at(t) is not None
+                or any(v.nation != nation for v in s.units_at(t, "surface"))
+            ):
+                continue
+            water = [w for w in g.neighbors_of(t) if sea_cost[w] > 0 and int(wc[w]) in seas]
+            if water:
+                points.append((g.distance(t, op["beach"]), int(t), water))
+        cache[key] = sorted(points)
+    return cache[key]
 
 
 def _fleet(ctx, unit, plan, target):
@@ -1698,14 +1752,16 @@ def plan_fronts(ctx, nation, p, units, cities, components, replan):
                 break
             fronts.append(_new_front(p, new, why))
     _assign_fronts(ctx, nation, fronts, pool, [], components, cities)
-    corps = _corps_fronts(ctx, nation, p, units, gens, corps_old, cities, components, replan)
+    corps = _corps_fronts(
+        ctx, nation, p, units, gens, corps_old, cities, components, replan, fronts
+    )
     _assign_engineers(ctx, nation, p, fronts + corps, units, components)
     for f in fronts + corps:
         plan_front(ctx, nation, p, f, cities, components)
     return [f for f in fronts + corps if not f.get("ended")]
 
 
-def _corps_fronts(ctx, nation, p, units, gens, old, cities, components, replan):
+def _corps_fronts(ctx, nation, p, units, gens, old, cities, components, replan, national=()):
     """军团的独立战线：将领按自己所在的位置挑最划算的敌城（离将领近的优先，不和别的军团撞同一个
     目标），带着自己军团的部队打；拿下或打不下去了自己换目标。国家不往军团里塞部队、也不调走。"""
     s = ctx.state
@@ -1724,10 +1780,17 @@ def _corps_fronts(ctx, nation, p, units, gens, old, cities, components, replan):
             _end_front(ctx, nation, f, t)
             f = t = None
         if f is None or (replan and f.get("mode") not in LOCKED):
-            taken = [s.cities[o["target_city"]].tile for o in out]
+            # 不和国家战线、别的军团撞同一个目标（各打各的方向）
+            taken = [s.cities[o["target_city"]].tile for o in [*national, *out]]
             new, why = choose_target(
                 ctx, nation, cities, components, t, skip, taken, origin=gen.tile
             )
+            if new is None and national:
+                # 别的目标都没有：和国家战线一起打同一座城
+                taken = [s.cities[o["target_city"]].tile for o in out]
+                new, why = choose_target(
+                    ctx, nation, cities, components, t, skip, taken, origin=gen.tile
+                )
             if new is None:
                 if f is not None:
                     _end_front(ctx, nation, f, t)
@@ -2881,7 +2944,7 @@ def _siege(ctx, unit, plan, target):
     # 近战部队各认领城市四周的一格把城围死（被围的城城防不回复、防御下降），城防打空时就近占领
     around = ring(ctx, target.tile)
     if unit.tile in around:
-        return False  # 已在包围圈上，原地坚守
+        return _storm(ctx, unit, target)  # 已在包围圈上：没有炮火可等就强攻城墙，否则原地坚守
     if g.distance(unit.tile, target.tile) > 3:
         # 远处先沿共享的目标城距离场靠近，到了城外再认领包围圈缺口
         return march(ctx, unit, target.tile, f"向 {target.name} 推进，准备包围", stop_within=2)
@@ -2906,6 +2969,31 @@ def _siege(ctx, unit, plan, target):
         f"在 {target.name} 城外待命，补上包围圈的缺口",
         stop_within=CITY_RANGE,
     )
+
+
+def _storm(ctx, unit, target):
+    """强攻城墙：贴在城边的近战部队，射程里没有本方远程火力在轰城（炮兵伤亡、撤下去了）、或者
+    城防已经不高（STORM_HP 以下）时，自己冲城墙——一起冲的部队伤害累加，打空了就由占领接手。
+    预计反击会把自己打死、或打掉一半以上生命的不冲。"""
+    s, rules, g = ctx.state, ctx.rules, ctx.state.grid
+    if target.hp <= 0 or combat.lock_reason(s, rules, unit) or health(rules, unit) < 50:
+        return False
+    guns = any(
+        v.nation == unit.nation
+        and is_siege(rules, v)
+        and v.layer == "surface"
+        and g.distance(v.tile, target.tile) <= combat.attack_range(rules, v, g)
+        for t in g.within(target.tile, 4)
+        for v in s.units_at(t, "surface")
+    )
+    planned = _ai(ctx)["damage"].get(_target_key(target), 0)
+    if guns and target.hp - planned > STORM_HP:
+        return False
+    info, problem = combat.preview(s, rules, unit, target.tile)
+    if problem or not info["damage"] or info["retaliation"] >= unit.hp // 2:
+        return False
+    intend_attack(ctx, unit, target.tile, info, target, f"强攻 {target.name} 城墙", priority=1)
+    return True
 
 
 def _air_cover(ctx, unit, plan):
