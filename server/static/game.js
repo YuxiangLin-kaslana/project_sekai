@@ -366,7 +366,10 @@ function drawTerritory(ctx, v) {
   const nations = G.snap.nations.length;
   const fills = Array.from({ length: nations }, () => new Path2D());
   const borders = Array.from({ length: nations }, () => new Path2D());
-  const districts = new Path2D(); // 同一国家内不同城市辖区的分界（只在"国家"模式画）
+  const districts = new Path2D(); // 同一国家内不同城市辖区的分界（拉近后两种模式都画）
+  const chosen = new Path2D(); // 选中的城市：整个辖区描金边
+  const selCity = G.cityAt.get(G.selected?.tile);
+  const sel = selCity ? Number(String(selCity.id).split(":")[1]) : null;
   const political = G.political;
   // 地形模式下领海单独铺得更淡，海面不被国家色染脏
   const seas = political ? null : Array.from({ length: nations }, () => new Path2D());
@@ -378,10 +381,19 @@ function drawTerritory(ctx, v) {
     const fill = seas && isWaterTile(v, t) ? seas[idx] : fills[idx];
     eachCopy(v, wx, wy, pad, (x, y) => {
       hexPath(fill, x, y, z + 0.4);
+      if (sel != null && G.cityOf[t] === sel) {
+        for (let d = 0; d < 6; d++) {
+          const n = neighbor(t, d);
+          if (n >= 0 && G.cityOf[n] === sel) continue;
+          const [a, b] = EDGE_CORNERS[d];
+          chosen.moveTo(x + CORNERS[a][0] * z, y + CORNERS[a][1] * z);
+          chosen.lineTo(x + CORNERS[b][0] * z, y + CORNERS[b][1] * z);
+        }
+      }
       for (let d = 0; d < 6; d++) {
         const n = neighbor(t, d);
         if (n >= 0 && G.ownerOf[n] === idx) {
-          if (political && z >= 4 && d < 3 && G.cityOf[n] !== G.cityOf[t]) {
+          if (z >= 4 && d < 3 && G.cityOf[n] !== G.cityOf[t]) {
             const [a, b] = EDGE_CORNERS[d];
             districts.moveTo(x + CORNERS[a][0] * z, y + CORNERS[a][1] * z);
             districts.lineTo(x + CORNERS[b][0] * z, y + CORNERS[b][1] * z);
@@ -436,12 +448,19 @@ function drawTerritory(ctx, v) {
       ctx.lineWidth = width;
       ctx.stroke(borders[idx]);
     });
-    if (political) {
-      ctx.setLineDash([Math.max(2, z * 0.2), Math.max(2, z * 0.16)]);
-      ctx.strokeStyle = "rgba(40,30,20,0.35)";
-      ctx.lineWidth = Math.max(0.8, z * 0.04);
-      ctx.stroke(districts);
-      ctx.setLineDash([]);
+    // 城市辖区分界：国家模式深色虚线，地形模式浅色虚线
+    ctx.setLineDash([Math.max(2, z * 0.2), Math.max(2, z * 0.16)]);
+    ctx.strokeStyle = political ? "rgba(40,30,20,0.35)" : "rgba(255,248,230,0.55)";
+    ctx.lineWidth = Math.max(0.8, z * 0.04);
+    ctx.stroke(districts);
+    ctx.setLineDash([]);
+    if (sel != null) {
+      ctx.strokeStyle = "rgba(20,16,10,0.55)";
+      ctx.lineWidth = Math.max(2, z * 0.07) + 2;
+      ctx.stroke(chosen);
+      ctx.strokeStyle = "#ffd479";
+      ctx.lineWidth = Math.max(2, z * 0.07);
+      ctx.stroke(chosen);
     }
     ctx.restore();
   };

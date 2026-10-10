@@ -792,7 +792,14 @@ def _capture(ctx, city, unit):
     s.invalidate_paths()
     s._worked_cache.clear()
     s._yield_cache.clear()
-    s.grid.owner[s.grid.city_of == city.id] = unit.nation
+    g = s.grid
+    g.owner[g.city_of == city.id] = unit.nation
+    # 原来属于这座城、被占领划走的土地：在攻占方手里的还给这座城
+    for t, home in list(s.land_home.items()):
+        if home == city.id and int(g.owner[t]) == unit.nation and s.city_at(t) is None:
+            g.city_of[t] = city.id
+            del s.land_home[t]
+    s._territory_cache = None
     # Aircraft on a captured base and noncombatants surrender with the city.
     for parked in list(s.units_at(city.tile)):
         if parked.nation == previous:

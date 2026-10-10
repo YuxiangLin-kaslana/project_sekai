@@ -218,6 +218,9 @@ def facility_problem(
     terrain = rules.terrain_at(int(g.terrain[tile]))
     res = rules.resource_at(int(g.resource[tile]))
     res_id = res.id if res else None
+    if res_id in _unit_resources(rules) and res_id not in b.extracts:
+        # 造兵要用的战略资源（石油、铝……）只能建开采它的设施，别的建设不能把它压住
+        return f"这里有{res.name}，只能建开采它的设施"
     if b.requires_resources and res_id not in b.requires_resources:
         names = "、".join(rules.resources[r].name for r in b.requires_resources)
         return f"{b.name}需要格子上有{names}"
@@ -327,6 +330,11 @@ def _site_values(state, rules, city, sites):
     return out
 
 
+def _unit_resources(rules) -> frozenset:
+    """造兵要用到的资源（石油、铝、铁、橡胶……）。"""
+    return frozenset(r for u in rules.units.values() for r in u.requires_resources)
+
+
 def assign_jobs(
     state: GameState, rules: Ruleset, city: City, planned: tuple[int, BuildingType] | None = None
 ) -> dict[int, int]:
@@ -389,6 +397,17 @@ def assign_jobs(
                 break
             take(i)
             food += slots[i][1].food
+        # 战略资源（石油、铝……能解锁兵种的）的采集区优先有人劳作：没人劳作就不算本国供应
+        g = state.grid
+        for i in range(len(slots)):
+            t = slots[i][0]
+            if left <= 0 or taken[i] or worked.get(t):
+                continue
+            res = rules.resource_at(int(g.resource[t]))
+            b = rules.facility_at(int(g.facility[t]))
+            if res is not None and res.id in _unit_resources(rules) and b is not None:
+                if res.id in b.extracts:
+                    take(i)
         # 再保证生产力够付维持人口的消耗（多留 2 点）
         prod = base.production + sum(slots[i][1].production for i in range(len(slots)) if taken[i])
         need = population_upkeep(rules, city) + 2

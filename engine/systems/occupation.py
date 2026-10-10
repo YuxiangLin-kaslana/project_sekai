@@ -70,6 +70,9 @@ def _transfer(ctx, tile, b, owner, nation) -> None:
     for t in tiles:
         g.owner[t] = nation
         g.city_of[t] = home.id
+        # 记下原来属于哪座城（已经记过的保留最早的那座）；回到原来的城就不用记了
+        if s.land_home.setdefault(t, old_city) == home.id:
+            del s.land_home[t]
     s.damaged.pop(tile, None)
     s._territory_cache = None
     s._settlement_usage = None

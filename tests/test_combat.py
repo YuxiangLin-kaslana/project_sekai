@@ -855,3 +855,14 @@ def test_occupying_a_residential_district_takes_its_land(board):
     assert all(int(s.grid.owner[t]) == 1 for t in claimed)  # 扩出来的土地一起划走
     assert int(s.grid.owner[theirs.tile]) == 2  # 敌方市中心不划走
     assert soldier.id in s.units
+    # 后来攻下那座城：划走的土地还给它（城市辖区恢复）
+    from engine.events import EventLog
+    from engine.rng import RngTree
+    from engine.systems.combat import _capture
+    from engine.systems.context import StepContext
+
+    assert s.land_home[res] == theirs.id
+    ctx = StepContext(s, RULES, [], EventLog(s.turn), RngTree(s.seed, "t", 1))
+    _capture(ctx, s.cities[theirs.id], s.units[soldier.id])
+    assert int(s.grid.city_of[res]) == theirs.id and int(s.grid.owner[res]) == 1
+    assert all(int(s.grid.city_of[t]) == theirs.id for t in claimed) and not s.land_home

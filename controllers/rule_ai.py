@@ -161,6 +161,13 @@ def _ai(ctx):
     return ctx.ai
 
 
+def _hp(ctx, target) -> int:
+    """目标还剩多少血：城市按城防值（城市本体 + 守城近战部队生命的一半，共用一个血条），部队按生命。"""
+    if isinstance(target, City):
+        return combat.city_defense(ctx.state, ctx.rules, target)
+    return target.hp
+
+
 def health(rules, u):
     """生命百分比（步兵、坦克的生命上限比 100 高）。"""
     return u.hp * 100 // rules.units[u.type].hp
@@ -325,7 +332,7 @@ def attack_choice(ctx, actor, *, only_static=False):
             continue
         if only_static and not stays(ctx, tile, actor):
             continue
-        left = target.hp - planned.get(_target_key(target), 0)
+        left = _hp(ctx, target) - planned.get(_target_key(target), 0)
         if left <= 0 and not isinstance(target, City):
             continue
         candidates.append((left, s.grid.distance(actor.tile, tile), tile, target))
@@ -337,9 +344,9 @@ def attack_choice(ctx, actor, *, only_static=False):
                 and combat.bombable(s, rules, actor, tile)
                 and not planned.get(("facility", tile))
             ):
-                candidates.append(
-                    (-1 if airfield else 999, s.grid.distance(actor.tile, tile), tile, None)
-                )
+                # 机场最优先，其次是开采石油、铝等战略资源的设施（断掉对方的坦克、飞机）
+                rank = -1 if airfield else 0 if _key_resource(ctx, tile) else 999
+                candidates.append((rank, s.grid.distance(actor.tile, tile), tile, None))
     best = []
     # 只细算最脆弱的八个目标；同样的状态选出同样的目标。
     for left, _, tile, target in sorted(candidates, key=lambda c: c[:3])[:8]:
@@ -370,7 +377,7 @@ def attack_choice(ctx, actor, *, only_static=False):
             score += 60
         elif planned.get(_target_key(target)):
             score += 15  # 集火：别人已经在打的目标优先
-        if info.get("capture") or (isinstance(target, City) and target.hp == 0):
+        if info.get("capture") or (isinstance(target, City) and _hp(ctx, target) == 0):
             score += 200
         kind = rules.units[actor.type] if isinstance(actor, Unit) else None
         if (
@@ -420,6 +427,16 @@ def _enemy_facilities(ctx, nation):
         ]
         ai["facilities_turn"] = s.turn
     return [(t, a) for t, n, a in ai["facilities"] if at_war(ctx.state, n, nation)]
+
+
+def _key_resource(ctx, tile) -> bool:
+    """这一格的设施在开采造兵要用的战略资源（石油、铝、铁、橡胶……）。"""
+    rules, g = ctx.rules, ctx.state.grid
+    res = rules.resource_at(int(g.resource[tile]))
+    b = rules.facility_at(int(g.facility[tile]))
+    if res is None or b is None or res.id not in b.extracts:
+        return False
+    return any(res.id in u.requires_resources for u in rules.units.values())
 
 
 def _occupied(ctx):
@@ -968,7 +985,7 @@ def choose_target(
             )
         value = 30 + 6 * c.population + (40 if c.capital else 0)
         value += 25 * airfields.get(c.id, 0)  # 夺取机场：辖区里有机场的城更值得打
-        cost = 4 * d / map_scale(g) + 1.5 * defense + 0.8 * garrison + c.hp / 10
+        cost = 4 * d / map_scale(g) + 1.5 * defense + 0.8 * garrison + _hp(ctx, c) / 10
         if any(g.distance(c.tile, t) < FRONT_SPREAD * map_scale(g) for t in taken):
             cost += 40  # 离别的战线目标太近：战线挤在一个方向
         score = value - cost
@@ -2109,7 +2126,8 @@ def plan_front(ctx, nation, p, f, cities, components):
     ]
     defense = combat.strength(s, rules, target, defending=True)
     per_shot = _nominal_damage(rules, siege_type, defense) if siege_type else 8
-    need_siege = min(8, max(2, math.ceil(max(target.hp, 40) / SIEGE_TURNS / per_shot)))
+    # 城防值 = 城市本体 + 守城部队（新规则下共用一个血条），按它估算要几门炮
+    need_siege = min(8, max(2, math.ceil(max(_hp(ctx, target), 40) / SIEGE_TURNS / per_shot)))
     garrison = (f.get("target_info") or {}).get("garrison", 0)
     # 近战：城防（含守军）主要靠远程削，近战负责用控制区围城（包围的城攻击减半、受伤加倍）
     # 和城防打空后开进去占领——够占住城四周一半的格子（控制区能补上中间的空格），守军多再加
@@ -2225,18 +2243,18 @@ def plan_front(ctx, nation, p, f, cities, components):
     mode = f.get("mode")
     # 围城耐心从“接敌”算起：远程部队进了射程，或城防已经开始掉。大军还在路上不算久攻不下
     if mode == "围城" and f.get("contact_turn") is None:
-        contact = target.hp < (f.get("siege_hp") or target.hp) or any(
+        contact = _hp(ctx, target) < (f.get("siege_hp") or _hp(ctx, target)) or any(
             is_siege(rules, u)
             and g.distance(u.tile, target.tile) <= combat.attack_range(rules, u, g)
             for u in military
         )
         if contact:
-            f["contact_turn"], f["siege_hp"] = s.turn, target.hp
+            f["contact_turn"], f["siege_hp"] = s.turn, _hp(ctx, target)
     stalled = (
         mode == "围城"
         and f.get("contact_turn") is not None
         and s.turn - f["contact_turn"] >= SIEGE_PATIENCE
-        and target.hp > (f.get("siege_hp") or 200) - 40
+        and _hp(ctx, target) > (f.get("siege_hp") or 200) - 40
     ) or (
         mode == "围城"
         and f.get("contact_turn") is None
@@ -2315,7 +2333,7 @@ def plan_front(ctx, nation, p, f, cities, components):
     ):
         mode, reason = "围城", f"战线推到 {target.name} 城下，开始围城"
         f["siege_start"] = len(military)
-        f["siege_turn"], f["siege_hp"], f["contact_turn"] = s.turn, target.hp, None
+        f["siege_turn"], f["siege_hp"], f["contact_turn"] = s.turn, _hp(ctx, target), None
     elif held and line["d"] > STAGE_RING[0]:
         line["d"] -= 1
         line["turn"] = s.turn
@@ -3042,7 +3060,7 @@ def _storm(ctx, unit, target):
     城防已经不高（STORM_HP 以下）时，自己冲城墙——一起冲的部队伤害累加，打空了就由占领接手。
     预计反击会把自己打死、或打掉一半以上生命的不冲。"""
     s, rules, g = ctx.state, ctx.rules, ctx.state.grid
-    if target.hp <= 0 or combat.lock_reason(s, rules, unit) or health(rules, unit) < 50:
+    if _hp(ctx, target) <= 0 or combat.lock_reason(s, rules, unit) or health(rules, unit) < 50:
         return False
     guns = any(
         v.nation == unit.nation
@@ -3053,7 +3071,7 @@ def _storm(ctx, unit, target):
         for v in s.units_at(t, "surface")
     )
     planned = _ai(ctx)["damage"].get(_target_key(target), 0)
-    if guns and target.hp - planned > STORM_HP:
+    if guns and _hp(ctx, target) - planned > STORM_HP:
         return False
     info, problem = combat.preview(s, rules, unit, target.tile)
     if problem or not info["damage"] or info["retaliation"] >= unit.hp // 2:
@@ -3175,10 +3193,11 @@ def _grab_city(ctx, unit):
 
 
 def _raid_airfield(ctx, unit):
-    """奔袭敌方区域：附近（两回合路程内）有敌方可以占领的区域（住宅区、军事基地、机场、港口）或机场，
-    守得又不重（周围 2 格敌军不超过 1 支）时，派一支近战部队冲过去。能占领的就站上去占领
-    （engine/systems/occupation.py：住宅区连同它扩出来的土地一起归本国，军事基地 / 机场 / 港口归本国使用）；
-    占不了的机场就拆掉（_pillage）。价值：军事基地、机场 > 港口 > 住宅区（按扩张能划走的格子算）。
+    """奔袭敌方区域：附近（两回合路程内）有敌方可以占领的区域（住宅区、军事基地、机场、港口）、机场，
+    或开采战略资源（石油、铝……）的设施，守得又不重（周围 2 格敌军不超过 1 支）时，派一支近战部队冲过去。
+    能占领的就站上去占领（engine/systems/occupation.py：住宅区连同它扩出来的土地一起归本国，
+    军事基地 / 机场 / 港口归本国使用）；占不了的（油田、铝矿）就拆掉（_pillage），断掉对方的坦克和飞机。
+    价值：军事基地、机场、战略资源设施 > 港口 > 住宅区（按扩张能划走的格子算）。
     每个目标每回合只派一支。"""
     s, rules, g = ctx.state, ctx.rules, ctx.state.grid
     reach = 2 * movement.unit_moves(g, rules.units[unit.type]) + 1
@@ -3188,7 +3207,8 @@ def _raid_airfield(ctx, unit):
         if g.distance(unit.tile, tile) > reach:
             continue
         b = rules.facility_at(int(g.facility[tile]))
-        if b is None or not (airfield or b.capturable):
+        key = _key_resource(ctx, tile)
+        if b is None or not (airfield or b.capturable or key):
             continue
         if raids.get(tile, unit.id) != unit.id:
             continue
@@ -3202,7 +3222,13 @@ def _raid_airfield(ctx, unit):
         )
         if guards > 1 or (guards and b.bombard):
             continue
-        value = 40 if (b.air_base or b.bombard) else 25 if b.shelter else 10 + 2 * (b.expand or 0)
+        value = (
+            40
+            if (b.air_base or b.bombard or key)
+            else 25
+            if b.shelter
+            else 10 + 2 * (b.expand or 0)
+        )
         key = (g.distance(unit.tile, tile) * 10 - value, tile)
         if best is None or key < best:
             best = key + (b,)
@@ -3219,7 +3245,7 @@ def _raid_airfield(ctx, unit):
                 f"守住占领的{b.name}（回合结算时归本国）",
             )
         return _pillage(ctx, unit)
-    verb = "占领" if b.capturable else "拆掉"
+    verb = "占领" if b.capturable else "拆掉（断掉对方的战略资源）" if not b.air_base else "拆掉"
     return march(ctx, unit, tile, f"奔袭敌方{b.name}，{verb}它")
 
 
@@ -3502,9 +3528,9 @@ def resolve_attacks(ctx):
             _submit(ctx, actor, tile, reason)
             continue
         key = _target_key(target)
-        if isinstance(target, City) and target.hp > 0 and priority == 2:
+        if isinstance(target, City) and _hp(ctx, target) > 0 and priority == 2:
             # 近战占领：远程轰击后城防预计归零才上
-            if ai["damage"].get(key, 0) < target.hp:
+            if ai["damage"].get(key, 0) < _hp(ctx, target):
                 continue
         ai["damage"][key] = ai["damage"].get(key, 0) + info["damage"]
         if info.get("suppress") and not isinstance(target, City):
@@ -3595,7 +3621,7 @@ def _capture_sweep(ctx):
     attackers = {o.unit for o in ctx.attacks if isinstance(o, Attack)}
     for (kind, cid), dealt in sorted(damage.items()):
         city = s.cities.get(cid) if kind == "city" else None
-        if city is None or dealt < city.hp or (kind, cid) in getattr(ctx, "captures", set()):
+        if city is None or dealt < _hp(ctx, city) or (kind, cid) in getattr(ctx, "captures", set()):
             continue
         options = []
         for t in g.neighbors_of(city.tile):

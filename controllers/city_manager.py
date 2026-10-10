@@ -73,6 +73,7 @@ WAR_MODES = (
 )  # 与 controllers/rule_ai.py 的战争阶段一致
 
 
+KEY_RESOURCES = ("oil", "aluminum")  # 坦克、飞机要的稀缺资源：有了就多造这两类兵
 KEEP_POP = 4  # 打仗时每座城至少留这么多人劳作，多出来的人口可以征召成部队
 
 
@@ -600,6 +601,12 @@ def decide_city(state, rules, city, budget):
             # 新陆军优先填补近城防务；海空兵种按现有编成补充，避免全造同一兵种。
             power = max(u.strength, u.ranged_strength or 0)
             score = power * 80 / max(1, u.cost) + (45 if nation.policy == "military" else 10)
+            # 每支部队都永久占一个人口：人口才是兵源的瓶颈，单兵越强越值（坦克 24 → +48，步兵 10 → +20）
+            score += 2 * power
+            scarce = [r for r in u.requires_resources if r in KEY_RESOURCES]
+            if scarce and all(r in budget.have for r in scarce):
+                # 有石油 / 铝：坦克、飞机很强，资源在手就多造（资源随时可能被炸掉、被占）
+                score += 35
             score += min(4, max(0, threatened - defenders)) * 25
             # 同一兵种职能里换着造（步兵 / 摩托化 / 装甲……），不同职能之间的比例交给下面的需求项
             score -= 20 * budget.types[u.id] / max(1, roles[role(u)])
@@ -995,9 +1002,16 @@ def _urgent_development(state, rules, city, budget):
 
         def room(t):
             # 能往无主土地扩多少格 + 挨着本城路网（好连路）− 离市中心远
-            free = sum(1 for n in g.within(t, b.expand) if int(g.owner[n]) < 0)
+            free = [n for n in g.within(t, b.expand) if int(g.owner[n]) < 0]
             near_road = any(n in linked for n in g.neighbors_of(t))
-            return 3 * free + (4 if near_road else 0) - g.distance(t, city.tile)
+            # 无主土地上的石油、铝：扩进来才能开采
+            key = sum(
+                1
+                for n in free
+                if (r := rules.resource_at(int(g.resource[n]))) is not None
+                and r.id in KEY_RESOURCES
+            )
+            return 3 * len(free) + 25 * key + (4 if near_road else 0) - g.distance(t, city.tile)
 
         tile = _site(state, rules, city, b, room)
         if tile is not None:

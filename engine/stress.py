@@ -133,6 +133,7 @@ def populate(
     g.owner[land] = nation_by_city[closest_city[land]]
     city_tiles = {c.tile for c in s.cities.values()}
     options = {}
+    unit_resources = {r for u in rules.units.values() for r in u.requires_resources}
     for tile in land.tolist():
         if tile in city_tiles or not eligible[tile]:
             continue
@@ -151,6 +152,7 @@ def populate(
                 and not b.on_water
                 and (not b.coastal or coast)
                 and (not b.requires_resources or res in b.requires_resources)
+                and (res not in unit_resources or res in b.extracts)
                 and (
                     not b.allowed_terrain
                     or terrain in b.allowed_terrain

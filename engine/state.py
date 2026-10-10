@@ -174,6 +174,8 @@ class GameState:
     # 被炸坏的城外设施：格子 → 炸坏的回合。炸坏的设施不产出、机场不能起降，要城市修复
     damaged: dict[int, int] = field(default_factory=dict)
     region_xp: dict[int, int] = field(default_factory=dict)
+    # 被占领划走的土地原来属于哪座城：格子 → 城市。那座城被攻下时，攻占方手里的这些土地还给它
+    land_home: dict[int, int] = field(default_factory=dict)
     # 外交（engine/systems/diplomacy.py）：{"a:b": {status, since, truce, progress}}；没有记录的按交战处理
     relations: dict[str, dict] = field(default_factory=dict)
     offers: list[dict] = field(default_factory=list)  # 给玩家国家的待处理提议
@@ -326,6 +328,7 @@ class GameState:
             next_id=self.next_id,
             facility_xp=dict(self.facility_xp),
             damaged=dict(self.damaged),
+            land_home=dict(self.land_home),
             region_xp=dict(self.region_xp),
             relations={k: dict(v) for k, v in self.relations.items()},
             offers=[dict(o) for o in self.offers],
@@ -360,6 +363,7 @@ class GameState:
             "relations": sorted(self.relations.items()),
             "offers": self.offers,
             "damaged": sorted(self.damaged.items()),
+            "land_home": sorted(self.land_home.items()),
             "region_xp": sorted(self.region_xp.items()),
             "roads": [[a, b, v] for (a, b), v in sorted(self.roads.items())],
             "grid": self.grid.content_hash(),
