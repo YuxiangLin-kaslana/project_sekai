@@ -53,6 +53,10 @@ class Nation:
     hostile: dict = field(default_factory=dict)
     had_city: bool = False  # 有过城市（之后城全丢了才算灭亡）
     eliminated: bool = False  # 灭亡（一座城都没有了，所有部队、道路、领土已清掉）
+    # 研究完的科技（按完成顺序）；None = 不受科技限制（老存档、测试棋盘）。新开的对局从开局科技开始
+    techs: list[str] | None = None
+    research: str | None = None  # 正在研究的科技
+    research_progress: int = 0  # 当前研究已投入的科研值
     culture: str = "west"  # 名字系列（东方 east / 西方 west）：城市名、将领名从这个系列的名字库取
 
 

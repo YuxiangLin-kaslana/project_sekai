@@ -72,6 +72,12 @@ def test_extends_overrides_and_deletes(rules_root: Path):
         "armor: null\nbattleship: null\ncarrier: null\n", encoding="utf-8"
     )
     (child / "buildings.yaml").write_text("oil_well: null\n", encoding="utf-8")
+    # 解锁这些单位、设施的科技也删掉
+    (child / "techs.yaml").write_text(
+        "petrochemistry: null\narmored_warfare: null\nheavy_armor: null\n"
+        "battleships: null\ncarriers: null\nproximity_fuze: null\n",
+        encoding="utf-8",
+    )
     rules = load_ruleset("fantasy", root=rules_root)
     assert rules.worldgen.land_ratio == 0.5
     assert (

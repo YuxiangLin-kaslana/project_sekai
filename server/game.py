@@ -55,6 +55,8 @@ from engine.systems.settlement import (
     usage,
 )
 from engine.systems.stability import REASON_NAMES, garrisoned
+from engine.systems.techs import available as tech_available
+from engine.systems.techs import era as tech_era
 
 MAX_GAMES = 32
 CITY_DEFENSE = 100  # 城防基础值（战斗系统接入前只用于展示）
@@ -207,6 +209,18 @@ def rules_json(rules: Ruleset) -> dict:
             for b in rules.buildings.values()
         },
         "facilities": rules.facility_ids,  # grid.facility 的序号 − 1
+        "eras": [e.model_dump() for e in rules.eras],
+        "techs": {
+            t.id: {
+                "name": t.name,
+                "era": t.era,
+                "cost": t.cost,
+                "requires": t.requires,
+                "unlocks": t.unlocks,
+                "description": t.description,
+            }
+            for t in rules.techs.values()
+        },
         "city_policies": {
             key: {"name": p["name"], "description": p["description"]} for key, p in POLICIES.items()
         },
@@ -325,6 +339,12 @@ def _snapshot(game: Game, rules: Ruleset) -> dict:
                 "capital": ref("city", n.capital) if n.capital is not None else None,
                 "gold": n.gold,
                 "science": n.science,
+                # 科技：研究完的（None = 不受科技限制）、正在研究的和进度、时代、能研究的
+                "techs": n.techs,
+                "research": n.research,
+                "research_progress": n.research_progress,
+                "era": tech_era(s, rules, nid),
+                "can_research": tech_available(s, rules, nid) if n.techs is not None else [],
                 "upkeep": upkeep(s, rules, nid),
                 "cities": sum(1 for c in s.cities.values() if c.nation == nid),
                 "units": sum(1 for u in s.units.values() if u.nation == nid),

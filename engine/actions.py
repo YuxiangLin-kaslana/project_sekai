@@ -178,6 +178,13 @@ class RespondOffer(_Order):
     accept: bool
 
 
+class SetResearch(_Order):
+    """设定正在研究的科技（前置都完成了的）；已投入的科研值换项目时清零。"""
+
+    type: Literal["set_research"] = "set_research"
+    tech: str
+
+
 class BuildRoad(_Order):
     """城市修路：从市中心修到 to（本城还没连路的住宅区 / 工厂、本国别的城市、本国工兵所在位置），
     加进这座城的生产队列，用生产力付造价。"""
@@ -211,7 +218,8 @@ Order = Annotated[
     | SetAI
     | UnitManagement
     | Diplomacy
-    | RespondOffer,
+    | RespondOffer
+    | SetResearch,
     Field(discriminator="type"),
 ]
 ORDERS = TypeAdapter(list[Order])
@@ -223,6 +231,7 @@ ORDER_PRIORITY = {
     "propose_alliance": -4,
     "break_alliance": -4,
     "respond_offer": -4,
+    "set_research": -3,
     "set_ai": -3,
     "unit_management": -1,
     "set_policy": -2,

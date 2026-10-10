@@ -220,6 +220,29 @@ class BuildingType(_Strict):
     icon: str  # 地图上的设施图标（前端内置）
 
 
+class Era(_Strict):
+    id: str
+    name: str
+    year: int = 0
+
+
+class TechType(_Strict):
+    """科技（剧本的 techs.yaml）：研究完解锁兵种、建筑、区域，部分带效果。
+    没被任何科技解锁的东西开局就能造；start = 开局就有的科技。"""
+
+    id: str
+    name: str
+    era: str
+    cost: int = Field(ge=1)  # 科研值
+    requires: list[str] = []  # 前置科技
+    unlocks: list[str] = []  # 兵种 / 建筑 / 区域 ID
+    start: bool = False
+    strength: list[CombatBonus] = []  # 兵种战斗力加成（units 或整个军种 domains）
+    unit_cost: int = Field(100, ge=10, le=200)  # 全国造兵花费（百分比）
+    science: int = Field(0, ge=0, le=200)  # 全国科研 +%
+    description: str = ""
+
+
 class NationTemplate(_Strict):
     """国家模板：名字、颜色、城市名（第一个是首都）、名字系列（东方 / 西方）。开局按顺序取用；
     模板用完了从名字库取国名，城市名用完了从同系列的名字库取。"""
@@ -415,6 +438,8 @@ class Ruleset(_Strict):
     nations: dict[str, NationTemplate] = {}
     names: dict[str, NamePool] = {}  # 名字库：系列 → 国名、城市名、人名
     industry: IndustryConfig = IndustryConfig()
+    eras: list[Era] = []  # 时代（科技的 era 指向这里）
+    techs: dict[str, TechType] = {}
     worldgen: WorldGenConfig
     cities: CityConfig = CityConfig()
     stacking: StackingConfig = StackingConfig()
@@ -462,6 +487,16 @@ class Ruleset(_Strict):
         for r in self.resources.values():
             for bonus in r.combat:
                 known("单位", f"资源 {r.id!r} 的作战加成", bonus.units, self.units)
+        era_ids = {e.id for e in self.eras}
+        for t in self.techs.values():
+            if t.era not in era_ids:
+                raise ValueError(f"科技 {t.id!r}：没有这个时代 {t.era!r}")
+            known("科技", f"科技 {t.id!r} 的前置", t.requires, self.techs)
+            bad = [x for x in t.unlocks if x not in self.units and x not in self.buildings]
+            if bad:
+                raise ValueError(f"科技 {t.id!r} 解锁了不存在的兵种 / 建筑：{bad}")
+            for bonus in t.strength:
+                known("单位", f"科技 {t.id!r} 的加成", bonus.units, self.units)
         for u in self.units.values():
             known("资源", f"单位 {u.id!r}", u.requires_resources, self.resources)
             for m in u.modifiers:

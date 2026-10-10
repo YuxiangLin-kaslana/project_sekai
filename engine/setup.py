@@ -96,6 +96,7 @@ def new_game(world: World, rules: Ruleset, tuning: dict | None = None) -> GameSt
     state = GameState(turn=1, seed=world.params.seed, ruleset_id=rules.id, grid=grid)
 
     from engine.systems.names import CULTURES, nation_name
+    from engine.systems.techs import start_techs
 
     templates = list(rules.nations.values())
     for k in range(len(world.starts)):
@@ -110,6 +111,7 @@ def new_game(world: World, rules: Ruleset, tuning: dict | None = None) -> GameSt
             template=tpl.id if tpl else None,
             gold=rules.start.gold * grid.tuning.get("start_gold", 100) // 100,
             culture=culture,
+            techs=start_techs(rules) if rules.techs else None,  # 开局科技
         )
 
     # 外交：开局所有国家互相和平（AI 扩张期结束后自己宣战，见 engine/systems/diplomacy.py）

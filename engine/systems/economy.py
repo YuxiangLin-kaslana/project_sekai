@@ -293,3 +293,6 @@ def resolve(ctx: StepContext) -> None:
             science += y.science
         nation.gold += gold - upkeep(state, rules, nid)
         nation.science += science
+        from engine.systems.techs import research
+
+        research(ctx, nid, science)

@@ -199,6 +199,11 @@ def facility_problem(
         return f"{b.name}是市中心建筑，不能建在格子上"
     if not b.buildable:
         return f"{b.name}不能建造"
+    from engine.systems.techs import locked
+
+    why = locked(state, rules, nation, b.id)
+    if why:
+        return why
     if g.is_water[tile] and not b.on_water:
         return f"{b.name}只能建在陆地上"
     if int(g.owner[tile]) != nation:
@@ -588,6 +593,11 @@ def production_problem(
         u = rules.units.get(key)
         if u is None:
             return f"没有这种单位：{key}"
+        from engine.systems.techs import locked
+
+        why = locked(state, rules, city.nation, key)
+        if why:
+            return why
         if u.domain == "sea" and "ships" not in city_enables(state, rules, city):
             return f"{city.name}没有港口，不能造舰船"
         if u.domain == "air" and "aircraft" not in city_enables(state, rules, city):
@@ -606,6 +616,11 @@ def production_problem(
             return f"{b.name}要建在辖区的格子上（城市组织施工）"
         if not b.buildable:
             return f"{b.name}不能建造"
+        from engine.systems.techs import locked
+
+        why = locked(state, rules, city.nation, key)
+        if why:
+            return why
         if key in city.buildings:
             return f"{city.name}已经有{b.name}了"
         return None
@@ -637,5 +652,10 @@ def item_cost(rules: Ruleset, item: str, state: GameState | None = None, city=No
         return rules.buildings[key].cost
     cost = rules.units[key].cost
     if state is not None and city is not None:
-        cost = max(1, cost * unit_cost_percent(state, rules, city) // 100)
+        from engine.systems import techs
+
+        pct = unit_cost_percent(state, rules, city) * techs.unit_cost_percent(
+            state, rules, city.nation
+        )
+        cost = max(1, cost * pct // 10000)
     return cost

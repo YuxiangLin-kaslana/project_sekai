@@ -265,6 +265,12 @@ def strength(
             # 坦克、飞机靠燃料：本国没有石油供应，战斗力 −FUEL_SHORTAGE%
             _note(notes, "缺石油燃料", -FUEL_SHORTAGE)
             value = value * (100 - FUEL_SHORTAGE) // 100
+        # 科技加成（techs.yaml 的 strength）
+        from engine.systems.techs import strength_bonuses
+
+        for label, pct in strength_bonuses(state, rules, actor, ut):
+            _note(notes, label, pct)
+            value = value * (100 + pct) // 100
         # 战略资源加成：钨芯弹、雷达……（规则在 resources.yaml 的 combat）
         for rid in sorted(supply):
             res = rules.resources[rid]

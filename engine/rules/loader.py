@@ -28,7 +28,7 @@ from pydantic import ValidationError
 from engine.rules.schema import Ruleset
 
 RULES_ROOT = Path(__file__).resolve().parents[2] / "rules"
-_ENTRY_FILES = ("terrain", "resources", "units", "buildings", "nations")
+_ENTRY_FILES = ("terrain", "resources", "units", "buildings", "nations", "techs")
 _CONFIG_SECTIONS = (
     "worldgen",
     "cities",

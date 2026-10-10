@@ -19,6 +19,11 @@ cities:
   production_per_pop: 50  # 维持人口：每个人口每回合吃 1 粮食、耗 0.5 生产力（这里按百分之一点写）
   gold_per_production: 2  # 城市开启"金币补足建设"时，基础设施（城外设施、市中心建筑）缺的生产力按 2 金 1 点补
 
+eras:                     # 时代（科技树 techs.yaml 按时代分）
+  - { id: prewar, name: 战前, year: 1936 }
+  - { id: midwar, name: 战争中期, year: 1940 }
+  - { id: latewar, name: 战争后期, year: 1943 }
+
 industry:                 # 有煤又有铁（都在开采）：全国工厂产值 +15%
   requires: [coal, iron]
   buildings: [factory]

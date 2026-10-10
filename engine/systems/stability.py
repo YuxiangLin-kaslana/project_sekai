@@ -187,6 +187,7 @@ def _independence(ctx: StepContext, city) -> None:
         city_management=True,
         ai_enabled=True,
         culture=culture,
+        techs=None if s.nations[old].techs is None else list(s.nations[old].techs),  # 继承科技
     )
     s.nations[nid] = nation
     # 外交：新政权和原国家交战，和其他国家照原国家的关系（交战的继续交战，其余和平）

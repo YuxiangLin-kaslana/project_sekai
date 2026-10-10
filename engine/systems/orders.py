@@ -33,6 +33,7 @@ from engine.actions import (
     RespondOffer,
     SetAI,
     SetPolicy,
+    SetResearch,
     Ungroup,
     UnitManagement,
 )
@@ -107,6 +108,21 @@ def _apply(ctx: StepContext, order: Order) -> None:
         problem = apply_order(ctx, order, nation)
         if problem:
             raise Rejected("diplomacy", problem)
+        return
+
+    if isinstance(order, SetResearch):
+        from engine.systems.techs import available
+
+        n = state.nations[nation]
+        if order.tech not in rules.techs:
+            raise Rejected("bad_tech", f"没有这项科技：{order.tech}")
+        if n.techs is not None and order.tech not in available(state, rules, nation):
+            raise Rejected(
+                "bad_tech", f"{rules.techs[order.tech].name}已经研究过或前置科技还没完成"
+            )
+        if n.research != order.tech:
+            n.research, n.research_progress = order.tech, 0
+        log.add("research_set", nation=order.issuer, tech=order.tech)
         return
 
     if isinstance(order, SetAI):
