@@ -120,6 +120,7 @@ FRONT_MIN = 3  # 还没打起来的战线分到的野战陆军少于这么多就
 OVERWHELM = 1.3  # 兵力是对方这么多倍就不等编制凑满
 GRAB_HP = 25  # 敌城城防值低于它、又没有守军：附近的近战陆军直接冲过去占领
 GRAB_UNITS = 2  # 每座城每回合最多派这么多支去抢
+FERRY_LOCAL = 6  # 战线有这么多陆军困在别的陆地上（而且是目标陆地上的 2 倍多）：按跨海作战组织运兵
 MELEE_MIN = 2  # 远程火力够了时，战线至少要这么多支近战才出发
 STAND_IN = 2  # 缺 1 支远程火力可以用多出来的这么多支近战顶上（近战能强攻城墙）
 MAX_FRONTS = 3  # 同时最多几条战线
@@ -937,7 +938,11 @@ def choose_target(
     只有新目标明显更好（高出 SWITCH_MARGIN）才换。taken：其他战线的目标城格子——不重复挑，
     离它们太近的打折（战线尽量分散到不同方向）；overseas=False 时不考虑跨海目标。"""
     s, rules, g = ctx.state, ctx.rules, ctx.state.grid
-    ours = {components[c.tile] for c in cities}
+    ours = (
+        _land_bases(ctx, nation, cities, components)
+        if overseas
+        else {components[c.tile] for c in cities}
+    )
     enemies, far = [], []
     skip = skip or {}
     for c in s.cities.values():
@@ -1937,6 +1942,29 @@ def _assign_engineers(ctx, nation, p, fronts, units, components):
     p["engineer_want"] = max(0, min(2, missing - idle, room))
 
 
+def _land_bases(ctx, nation, cities, components) -> set:
+    """能走陆路打过去的陆地：有本国城市，并且本国野战陆军在那里站得住（至少 FERRY_LOCAL 支，或者是
+    野战陆军最多的那块）。只在岛上占了一座小城、主力都在别的陆地上时，那座岛上的敌城按跨海目标打
+    （本土的部队编进战线、坐船运过去）。"""
+    s, rules = ctx.state, ctx.rules
+    count = Counter(
+        int(components[u.tile])
+        for u in s.units.values()
+        if u.nation == nation.id
+        and u.layer != "cargo"
+        and rules.units[u.type].domain == "land"
+        and _troop(ctx, u)
+    )
+    main = max(count, key=lambda k: (count[k], -k)) if count else None
+    return {
+        int(components[c.tile])
+        for c in cities
+        if count[int(components[c.tile])] >= FERRY_LOCAL
+        or int(components[c.tile]) == main
+        or not count
+    }
+
+
 def _fits(ctx, u, f, components, home):
     """部队 u 能不能编进战线 f：陆军要和目标城在同一块陆地（跨海战线收本土的部队）；
     舰船要开得到（跨海战线的运兵船、能炮击目标的战舰、航母）；飞机都行。"""
@@ -2132,7 +2160,14 @@ def plan_front(ctx, nation, p, f, cities, components):
     military = [s.units[uid] for uid in f["units"] if uid in s.units]
     home = {components[c.tile] for c in cities}
     op = None
-    if components[target.tile] not in home:
+    # 跨海：目标城所在的陆地上没有本国城市；或者有（比如岛上占了一座小城），但这条战线的陆军
+    # 大部分还在别的陆地上、走不过去——同样要靠船源源不断地运过去
+    field = [u for u in military if rules.units[u.type].domain == "land" and _troop(ctx, u)]
+    here = sum(
+        1 for u in field if u.layer != "cargo" and components[u.tile] == components[target.tile]
+    )
+    stranded = len(field) - here
+    if components[target.tile] not in home or (stranded >= FERRY_LOCAL and stranded > 2 * here):
         op = _sea_op(ctx, nation, f, target)
         if op is None:
             # 海外目标找不到登陆场（海岸被敌军站满、出发港丢了）：暂时不打
@@ -2307,8 +2342,14 @@ def plan_front(ctx, nation, p, f, cities, components):
         f["siege_start"] = None
     elif mode == "围城":
         reason = f"围攻 {target.name}：远程部队轰击城防，近战部队围住城市，城防打空后占领"
-    elif op is not None and f.get("sea_landed") and op["landed"] == 0 and op["aboard"] == 0:
-        # 登上岸的部队被打光了：别再一船一船往里填，暂时放弃这个目标
+    elif (
+        op is not None
+        and f.get("sea_landed")
+        and op["landed"] == 0
+        and op["aboard"] == 0
+        and op["waiting"] < op["need"]
+    ):
+        # 登上岸的部队被打光了、本土也凑不出下一波：别再一船一船往里填，暂时放弃这个目标
         mode, reason = give_up(f"登陆 {target.name} 的部队被打光，暂时放弃，另选目标")
         f["sea_turn"] = f["sea_landed"] = None
     elif not ready:
