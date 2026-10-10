@@ -123,6 +123,7 @@ function buildLut(meta) {
 export const MODES = {
   terrain: { name: "地形" },
   nations: { name: "国家", plain: true }, // 只显示国家：底图平涂，不画地形
+  diplomacy: { name: "外交", plain: true }, // 外交：按视角国家的外交关系上色，画交战 / 同盟连线
   temperature: {
     name: "气温",
     stops: [[0, "#2b3f7a"], [0.18, "#4f7fc4"], [0.36, "#a9cde3"], [0.5, "#eef0dc"], [0.62, "#f3d58e"], [0.76, "#ec9a55"], [0.9, "#c4473a"], [1, "#7a1e2c"]],
@@ -217,7 +218,7 @@ function fillColor(t) {
   const ti = ch.terrain[li];
   const mode = S.mode;
   if (mode === "terrain") return S.lut[ti][ch.tone[li] >> 2];
-  if (mode === "nations") return isWater(ti) ? PLAIN_SEA : PLAIN_LAND;
+  if (MODES[mode]?.plain) return isWater(ti) ? PLAIN_SEA : PLAIN_LAND;
   if (mode === "areas") return areaColor(ch.area[li]);
   if (mode === "plates") return BOUNDARY_COLORS[ch.boundary[li]] ?? plateColor(ch.plate[li]);
   const water = isWater(ti);
@@ -664,7 +665,7 @@ function drawDetails(ctx, tiles, s, layers) {
   }
 
   // "国家"模式不画大区边界（虚线留给城市辖区分界）
-  if (areaMode || (layers.areas && s >= DETAIL.borders && S.mode !== "nations")) {
+  if (areaMode || (layers.areas && s >= DETAIL.borders && !MODES[S.mode]?.plain)) {
     ctx.strokeStyle = areaMode ? "rgba(40,32,24,0.45)" : "rgba(64,50,32,0.3)";
     ctx.lineWidth = Math.max(areaMode ? 0.6 : 0.7, s * 0.05);
     ctx.setLineDash(areaMode ? [] : [Math.max(2, s * 0.22), Math.max(1.5, s * 0.14)]);
@@ -1210,7 +1211,7 @@ function computeAreaEdges(area) {
 }
 
 function drawHover(ctx, vis) {
-  if (!S.hover || !S.areaEdges || S.cam.z < 2 || S.mode === "nations") return;
+  if (!S.hover || !S.areaEdges || S.cam.z < 2 || MODES[S.mode]?.plain) return;
   if (S.edgesStale) {
     S.edgesStale = false;
     computeAreaEdges(S.hover.area);

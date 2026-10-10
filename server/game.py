@@ -210,6 +210,7 @@ def rules_json(rules: Ruleset) -> dict:
                 "unique": b.unique,
                 "exclusive": b.exclusive,
                 "expand": b.expand,
+                "population_tiers": b.population_tiers,  # 阶梯上限：[[人口, 最多几个], ...]
                 "enables": b.enables,
                 "terrain_yields": {k: v.model_dump() for k, v in b.terrain_yields.items()},
                 "icon": b.icon,

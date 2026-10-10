@@ -492,6 +492,7 @@
         <div class="seg" id="modes">
           <button type="button" data-mode="terrain" class="on">地形</button>
           <button type="button" data-mode="nations" title="只显示国家领土，不画地形">国家</button>
+          <button type="button" data-mode="diplomacy" title="外交形势：点一个国家看它和各国的关系（金 = 本国，蓝 = 同盟，绿 → 黄 = 和平、关系变差，红 = 交战）；红线 = 交战，蓝虚线 = 同盟">外交</button>
           <button type="button" data-mode="temperature">气温</button>
           <button type="button" data-mode="rainfall">降雨</button>
           <button type="button" data-mode="elevation">海拔</button>
@@ -863,7 +864,8 @@ function applyMode(m) {
   mode = MODES[m] ? m : "terrain";
   for (const b of document.querySelectorAll("[data-mode]")) b.classList.toggle("on", b.dataset.mode === mode);
   setMode(mode);
-  game.G.political = mode === "nations";
+  game.G.political = mode === "nations" || mode === "diplomacy";
+  game.G.diplomacy = mode === "diplomacy";
   updateLegend();
   setUrl();
 }
@@ -872,7 +874,14 @@ function updateLegend() {
   const spec = MODES[mode];
   const lg = $("legend");
   const swatch = (c, n) => `<span><i style="display:inline-block;width:10px;height:10px;border-radius:2px;background:${c};margin-right:4px;vertical-align:-1px"></i>${esc(n)}</span>`;
-  if (mode === "nations") {
+  if (mode === "diplomacy") {
+    const me = game.G.snap ? game.nationOf(game.diplomacyPerspective()) : null;
+    const C = game.DIPLO_COLORS;
+    lg.innerHTML = `<div class="title">外交形势 · 视角：${esc(me?.name ?? "—")}（点地图上的国家切换视角）</div><div class="ticks" style="flex-wrap:wrap;gap:6px 12px;justify-content:flex-start">` +
+      swatch(C.self, "本国") + swatch(C.alliance, "同盟") + swatch(C.peaceHigh, "和平 · 关系好") + swatch(C.peaceLow, "和平 · 快要开战") + swatch(C.war, "交战") +
+      `<span>━ 红线 = 交战 · ┅ 蓝虚线 = 同盟</span></div>`;
+    lg.classList.add("show");
+  } else if (mode === "nations") {
     const nations = game.G.snap?.nations ?? [];
     lg.innerHTML = `<div class="title">国家（不显示地形；虚线 = 城市辖区分界）</div><div class="ticks" style="flex-wrap:wrap;gap:6px 12px;justify-content:flex-start">` +
       nations.map((n) => swatch(n.color, n.name)).join("") + swatch("#d8d1bf", "无主地") + "</div>";
@@ -1203,7 +1212,14 @@ function districtList(city) {
     const road = d.def.placement === "district" && (d.def.road_housing || d.def.road_yields) ? (d.linked ? " · 已连路" : " · 未连路") : "";
     return `<span class="${d.damaged ? "danger" : ""}" title="(${d.tile % game.G.W}, ${Math.floor(d.tile / game.G.W)})${d.damaged ? " 已损坏，不产出" : ""}">${esc(d.def.name)}${jobs}${road}${d.damaged ? " · 损坏" : ""}</span>`;
   };
-  let html = `<h3>区域 <small>${districts.length}</small></h3><div class="settlement-buildings">${districts.map(tag).join("") || '<span class="empty">还没有区域</span>'}</div>`;
+  // 阶梯上限：人口到哪一档最多建几个（住宅区、工厂）
+  const tiered = Object.entries(game.G.rules.buildings).filter(([, b]) => b.population_tiers?.length).map(([id, b]) => {
+    let most = 0, next = null;
+    for (const [need, n] of [...b.population_tiers].sort((a, c) => a[0] - c[0])) { if (city.population >= need) most = n; else if (!next) next = [need, n]; }
+    const have = rows.filter((d) => d.def === b).length + (city.construction?.facility === id && !city.construction.repair ? 1 : 0);
+    return `<span title="${next ? `人口到 ${next[0]} 可以建 ${next[1]} 个` : "已经是最高一档"}">${esc(b.name)} ${have}/${most}</span>`;
+  });
+  let html = `<h3>区域 <small>${districts.length}${tiered.length ? " · " + tiered.join(" · ") : ""}</small></h3><div class="settlement-buildings">${districts.map(tag).join("") || '<span class="empty">还没有区域</span>'}</div>`;
   if (improvements.length) html += `<h3>改良设施 <small>${improvements.length}</small></h3><div class="settlement-buildings">${improvements.map(tag).join("")}</div>`;
   return html;
 }
@@ -1629,6 +1645,7 @@ function renderDiplomacy() {
   if (!alive.some((n) => n.id === diploNation)) diploNation = managementNation && alive.some((n) => n.id === managementNation) ? managementNation : alive[0]?.id;
   sel.innerHTML = alive.map((n) => `<option value="${esc(n.id)}">${esc(n.name)}${n.ai_enabled ? "（AI）" : ""}</option>`).join("");
   sel.value = diploNation ?? "";
+  game.G.diploNation = diploNation;
   const me = game.nationOf(diploNation);
   if (!me) return;
   const rels = alive.filter((n) => n.id !== me.id).map((n) => ({ n, r: relationOf(me.id, n.id) }));
@@ -2003,6 +2020,7 @@ async function tacticalClick(tile) {
     renderSelection();redraw();return;
   }
   game.select(tile);
+  if(mode==='diplomacy')updateLegend(); // 外交地图：点到的国家就是新的视角
   const info=game.tileInfo(tile);
   const u=[...info.surface,...info.air].find(u=>game.unitDef(u).category==='military'||game.unitDef(u).tags?.includes('found_city')||u.rank);
   await chooseActor(u?.id??null);
@@ -2223,7 +2241,7 @@ segment("log-filter", "kind", (v) => { logKind = v; $("log").innerHTML = logHtml
 $("city-sort").onchange = () => { citySort = $("city-sort").value; renderCityList(); };
 $("city-nation").onchange = () => { listLimits.city = LIST_LIMIT; renderCityList(); };
 $("army-nation").onchange = renderArmyList;
-$("diplo-nation").onchange = () => { diploNation = $("diplo-nation").value; renderDiplomacy(); };
+$("diplo-nation").onchange = () => { diploNation = $("diplo-nation").value; game.G.diploNation = diploNation; renderDiplomacy(); if (mode === "diplomacy") { updateLegend(); redraw(); } };
 for (const chip of document.querySelectorAll("#city-flags [data-flag]")) chip.addEventListener("click", () => {
   chip.classList.toggle("on");
   if (chip.classList.contains("on")) cityFlags.add(chip.dataset.flag); else cityFlags.delete(chip.dataset.flag);

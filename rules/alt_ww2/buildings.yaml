@@ -83,6 +83,7 @@ residential:
   housing: 2
   road_housing: 2            # 有道路连到市中心再 +2 住房
   expand: 2                  # 以自身为中心把城市辖区往外扩 2 格
+  population_tiers: [[0, 2], [5, 4], [10, 6], [15, 8], [20, 10], [30, 14]]   # 人口到这一档最多几个
   allowed_terrain: [plains, grassland, desert, tundra, hills, forest, rainforest, marsh, snow]
   capturable: true          # 被敌国陆军占领：连同扩出来的土地一起归敌国
   icon: residential
@@ -97,6 +98,7 @@ factory:
   job_yields: { production: 2 }
   yields: { production: 2 }
   road_yields: { production: 2 }   # 有道路连到市中心再 +2 生产力
+  population_tiers: [[0, 1], [5, 2], [10, 3], [15, 4], [20, 5], [30, 7]]     # 人口到这一档最多几个
   allowed_terrain: [plains, grassland, desert, tundra, hills, snow]
   icon: factory
 

@@ -205,6 +205,8 @@ class BuildingType(_Strict):
     unique: bool = False  # 每城最多一个
     exclusive: str | None = None  # 同组（如商业中心 / 港口）每城只能有一个
     expand: int = Field(0, ge=0, le=6)  # 建成后以自身为中心把城市辖区往外扩这么多格
+    # 阶梯上限：[[人口, 最多几个], ...]，城市人口到了某一档才能建更多（住宅区、工厂）；空 = 不限
+    population_tiers: list[tuple[int, int]] = []
     terrain_yields: dict[str, Yields] = {}  # 按改良前的地形给的产出（没写的地形用 yields）
     on_water: bool = False  # 能建在水面上（渔场、海上油田）
     enables: list[str] = []  # 城市有了它才能造的兵种类别：ships / aircraft

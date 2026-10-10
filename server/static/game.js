@@ -33,6 +33,8 @@ export const G = {
   selected: null, // { tile }：选中查看的格子
   layers: { territory: true, cities: true, units: true, facilities: true, plans: true, areacap: true },
   political: false, // "国家"模式：底图不画地形，领土实心铺色，远景标国名
+  diplomacy: false, // "外交"模式：在国家模式基础上，按视角国家的外交关系给各国上色，画出各国的交战 / 同盟连线
+  diploNation: null, // 外交模式的视角国家（"nation:1"）
   cityOf: null, // Int32Array：每格属于第几座城（-1 无），画同一国家内城市辖区的分界
   labels: [], // 每个国家的国名位置：{ name, rgb, x, y, size }（世界坐标）
 };
@@ -347,7 +349,8 @@ function isWaterTile(v, t) {
 function drawTerritory(ctx, v) {
   // The world overview uses a cached atlas; close views visit only visible hexes.
   if (G.snap.stress && v.z < 3 && !v.atlas) {
-    let cv = G.territoryOverview.get(G.political);
+    const key = `${G.political}:${G.diplomacy && diplomacyPerspective()}`;
+    let cv = G.territoryOverview.get(key);
     if (!cv) {
       cv = document.createElement('canvas');
       cv.width = Math.ceil(v.PW * 2 + 4); cv.height = G.H * 3 + 4;
@@ -355,7 +358,7 @@ function drawTerritory(ctx, v) {
         k0: -1, k1: 1, vw: cv.width, vh: cv.height, sx: (x,k=0)=>(x+k*v.PW)*2+2, sy: y=>y*2+2 };
       const cc = cv.getContext('2d',{willReadFrequently:true});
       const borders = drawTerritory(cc, view); borders();
-      G.territoryOverview.set(G.political, cv);
+      G.territoryOverview.set(key, cv);
     }
     for (let k=v.k0;k<=v.k1;k++) {
       ctx.drawImage(cv, v.sx(-1,k), v.sy(-1), cv.width*v.z/2, cv.height*v.z/2);
@@ -407,9 +410,10 @@ function drawTerritory(ctx, v) {
       }
     });
   }
+  const tone = G.diplomacy ? diplomacyTones() : null;
   G.snap.nations.forEach((n, idx) => {
     const c = G.nations.get(n.id).rgb;
-    ctx.fillStyle = political ? shade(c, 0.18) : rgba(c, z < 6 ? 0.24 : 0.14);
+    ctx.fillStyle = tone ? tone.get(n.id) : political ? shade(c, 0.18) : rgba(c, z < 6 ? 0.24 : 0.14);
     ctx.fill(fills[idx]);
     if (seas) {
       ctx.fillStyle = rgba(c, z < 6 ? 0.1 : 0.06);
@@ -2298,6 +2302,7 @@ export function drawOver(ctx, v) {
   // 地形模式在城市名牌出现之前（最远景）也标国名，观战时一眼看出谁在哪；画在城市和部队下面
   if (!G.political && G.layers.territory && v.z < LOD.cityPlate) drawNationLabels(ctx, v, true);
   drawBattlePlans(ctx, v);
+  drawDiplomacyLinks(ctx, v);
   if (G.layers.cities) drawCityMarkers(ctx, v);
   drawTactics(ctx, v);
   drawSelection(ctx, v);
@@ -2325,6 +2330,79 @@ const PLAN_STYLE = {
   encircle: { w: 0.15, min: 2, head: 3.4 },
 };
 const PLAN_ALPHA = { 备战: 0.38, 整编: 0.45, 装船: 0.5, 推进: 0.6, 航渡: 0.6, 围城: 0.72 };
+
+// ---------------------------------------------------------------- 外交地图
+// 视角国家：选中格子所属的国家，没选就用外交面板的视角国家
+export function diplomacyPerspective() {
+  const t = G.selected?.tile;
+  const idx = t != null ? G.ownerOf[t] : -1;
+  if (idx >= 0) return G.snap.nations[idx].id;
+  return G.diploNation ?? G.snap.nations.find((n) => n.cities)?.id ?? null;
+}
+export function relation(a, b) {
+  const d = G.snap?.diplomacy;
+  if (!d || a === b) return null;
+  return d.relations.find((x) => (x.a === a && x.b === b) || (x.a === b && x.b === a)) ?? { status: d.default ?? "war", value: 50 };
+}
+export const DIPLO_COLORS = { self: "#e2b84f", alliance: "#5c8fd6", war: "#c94a3a", peaceHigh: "#7fb37a", peaceLow: "#d3c98f", none: "#d8d1bf" };
+function diplomacyTones() {
+  const me = diplomacyPerspective(), out = new Map();
+  for (const n of G.snap.nations) {
+    if (n.id === me) { out.set(n.id, DIPLO_COLORS.self); continue; }
+    const r = relation(me, n.id);
+    if (!r) { out.set(n.id, DIPLO_COLORS.none); continue; }
+    if (r.status === "war") out.set(n.id, DIPLO_COLORS.war);
+    else if (r.status === "alliance") out.set(n.id, DIPLO_COLORS.alliance);
+    else {
+      // 和平：关系越好越绿，越接近开战越黄
+      const k = Math.max(0, Math.min(1, (r.value ?? 50) / 100));
+      const a = hexRgb(DIPLO_COLORS.peaceLow), b = hexRgb(DIPLO_COLORS.peaceHigh);
+      out.set(n.id, `rgb(${a.map((x, i) => Math.round(x + (b[i] - x) * k)).join(",")})`);
+    }
+  }
+  return out;
+}
+// 各国之间的交战（红实线）、同盟（蓝虚线）：首都之间连线
+function drawDiplomacyLinks(ctx, v) {
+  if (!G.diplomacy || !G.snap.diplomacy) return;
+  const capital = new Map();
+  for (const n of G.snap.nations) {
+    const c = n.capital && G.cities.get(n.capital);
+    if (c && n.cities) capital.set(n.id, c.tile);
+  }
+  const me = diplomacyPerspective();
+  const pairs = [];
+  const ids = [...capital.keys()];
+  for (let i = 0; i < ids.length; i++) for (let j = i + 1; j < ids.length; j++) {
+    const r = relation(ids[i], ids[j]);
+    if (r && (r.status === "war" || r.status === "alliance")) pairs.push([ids[i], ids[j], r.status]);
+  }
+  ctx.save();
+  ctx.lineCap = "round";
+  for (const [a, b, st] of pairs) {
+    const [x0, y0] = center(capital.get(a)), [x1, y1] = center(capital.get(b));
+    const dx = wrapDelta(x1 - x0, v.PW);
+    const mine = a === me || b === me;
+    for (let k = v.k0; k <= v.k1; k++) {
+      const ax = v.sx(x0, k), ay = v.sy(y0), bx = v.sx(x0 + dx, k), by = v.sy(y1);
+      if (Math.max(ax, bx) < -50 || Math.min(ax, bx) > v.vw + 50) continue;
+      ctx.setLineDash(st === "alliance" ? [8, 6] : []);
+      ctx.strokeStyle = "rgba(20,16,10,0.45)";
+      ctx.lineWidth = (mine ? 4.5 : 2.5) + 2;
+      ctx.beginPath(); ctx.moveTo(ax, ay); ctx.lineTo(bx, by); ctx.stroke();
+      ctx.strokeStyle = st === "war" ? (mine ? "#ff6a50" : "rgba(214,90,70,0.8)") : (mine ? "#8cb8ff" : "rgba(110,160,230,0.8)");
+      ctx.lineWidth = mine ? 4.5 : 2.5;
+      ctx.stroke();
+      if (st === "war") {
+        // 中点画一对交叉的剑形记号
+        const mx = (ax + bx) / 2, my = (ay + by) / 2, r = mine ? 7 : 5;
+        ctx.setLineDash([]); ctx.lineWidth = 2; ctx.strokeStyle = "#fff3e0";
+        ctx.beginPath(); ctx.moveTo(mx - r, my - r); ctx.lineTo(mx + r, my + r); ctx.moveTo(mx + r, my - r); ctx.lineTo(mx - r, my + r); ctx.stroke();
+      }
+    }
+  }
+  ctx.restore();
+}
 
 function drawBattlePlans(ctx, v) {
   if (!G.layers.plans || G.political) return;

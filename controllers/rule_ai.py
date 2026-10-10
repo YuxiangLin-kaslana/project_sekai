@@ -3757,12 +3757,16 @@ def resolve(ctx):
     armies = _armies(ctx)
     actors = [u for u in units if u.layer != "cargo"]
     awake = [u for u in actors if not _idle(ctx, u, armies)]
-    # 决策名额按国家分：每国每回合最多 budget 支（开局设置），部队多的国家国内轮流
+    # 决策名额按国家分：每国每回合最多 budget 支（开局设置），部队多的国家国内轮流。
+    # 军团（舰队）有自己的 AI：将领和军团成员每回合都决策，不占国家的名额（每个军团最多 25 支）
     budget = actor_budget(s)
     by_nation = {}
-    for u in awake:
-        by_nation.setdefault(u.nation, []).append(u)
     active = set()
+    for u in awake:
+        if u.rank or (u.corps is not None and u.corps in s.units):
+            active.add(u.id)
+        else:
+            by_nation.setdefault(u.nation, []).append(u)
     for mine in by_nation.values():
         first = (s.turn - 1) * budget % len(mine)
         active.update(mine[(first + i) % len(mine)].id for i in range(min(budget, len(mine))))

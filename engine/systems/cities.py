@@ -191,6 +191,31 @@ def _has(state, rules, city, pred, skip: int | None = None) -> bool:
     return p is not None and not p.repair and p.tile != skip and pred(rules.buildings[p.facility])
 
 
+def tier_limit(b, population: int) -> tuple[int, tuple[int, int] | None]:
+    """阶梯上限：这个人口最多能建几个 b，以及下一档（人口, 个数）。"""
+    allowed, nxt = 0, None
+    for need, most in sorted(b.population_tiers):
+        if population >= need:
+            allowed = most
+        elif nxt is None:
+            nxt = (need, most)
+    return allowed, nxt
+
+
+def district_count(state, rules, city, fid: str, skip: int | None = None) -> int:
+    """城里有几个 fid（建好的 + 正在施工的；skip 格上正在施工的那项不算）。"""
+    g = state.grid
+    n = sum(
+        1
+        for t in city_tiles(state, city)
+        if (b := rules.facility_at(int(g.facility[t]))) is not None and b.id == fid
+    )
+    p = city.construction
+    if p is not None and not p.repair and p.facility == fid and p.tile != skip:
+        n += 1
+    return n
+
+
 def facility_problem(
     state: GameState, rules: Ruleset, nation: int, tile: int, b: BuildingType
 ) -> str | None:
@@ -236,6 +261,12 @@ def facility_problem(
         return f"{b.name}必须临水"
     city = city_of_tile(state, tile)
     if b.placement == "district" and city is not None:
+        if b.population_tiers:
+            allowed, nxt = tier_limit(b, city.population)
+            have = district_count(state, rules, city, b.id, skip=tile)
+            if have >= allowed:
+                more = f"，人口到 {nxt[0]} 可以建 {nxt[1]} 个" if nxt else ""
+                return f"{city.name}人口 {city.population}，最多建 {allowed} 个{b.name}{more}"
         if b.unique and _has(state, rules, city, lambda x: x.id == b.id, tile):
             return f"{city.name}已经有{b.name}了（每城一个）"
         if b.exclusive and _has(

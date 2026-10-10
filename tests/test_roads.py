@@ -214,3 +214,21 @@ def test_unique_district_under_construction_is_not_its_own_duplicate(board):
             p.paid = p.cost(RULES)  # 工程款付清，只看工期
         s = step(s, [], RULES).state
     assert RULES.facility_at(int(s.grid.facility[g.idx(3, 4)])).id == "military_base"
+
+
+def test_residential_and_factory_counts_are_capped_by_population_tiers(board):
+    from engine.systems.cities import facility_problem, tier_limit
+
+    c = home(board)
+    g = board.grid
+    res = RULES.buildings["residential"]
+    assert tier_limit(res, 1) == (2, (5, 4)) and tier_limit(res, 12)[0] == 6
+    c.population = 1
+    spots = [g.idx(2, 1), g.idx(3, 5), g.idx(1, 1)]
+    for t in spots[:2]:
+        g.facility[t] = RULES.facility_index("residential")
+    board._territory_cache = None
+    why = facility_problem(board, RULES, 1, spots[2], res)
+    assert why and "最多建 2 个住宅区" in why and "人口到 5" in why
+    c.population = 5  # 到了下一档：可以再建
+    assert facility_problem(board, RULES, 1, spots[2], res) is None
