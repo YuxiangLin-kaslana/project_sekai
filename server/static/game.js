@@ -1899,7 +1899,7 @@ function drawToken(ctx, x, y, z, units) {
   ctx.save();
   if (!military.length) {
     ctx.beginPath();
-    ctx.arc(x, y, 3, 0, Math.PI * 2);
+    ctx.arc(x, y, 5, 0, Math.PI * 2);
     ctx.fillStyle = shade(c, -0.1);
     ctx.fill();
     ctx.lineWidth = 1.2;
@@ -1908,8 +1908,10 @@ function drawToken(ctx, x, y, z, units) {
     ctx.restore();
     return;
   }
-  const w = z < 3 ? 14 : Math.min(22, 12 + z * 1.4);
-  const h = Math.round(w * 0.74);
+  // 远景小牌和城市名牌一样高（名牌：字号 10–14 + 上下边距 12），缩小地图时也看得清
+  const fs = Math.round(Math.max(10, Math.min(14, 9 + z * 0.12)));
+  const h = fs + 12;
+  const w = Math.round(h * 1.4);
   ctx.shadowColor = "rgba(0,0,0,0.45)";
   ctx.shadowBlur = 3;
   ctx.shadowOffsetY = 1;

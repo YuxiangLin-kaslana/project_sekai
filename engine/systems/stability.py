@@ -24,7 +24,7 @@ from engine.state import Nation
 from engine.systems import encirclement
 from engine.systems.cities import FOOD_PER_POP, city_yields, population_upkeep
 from engine.systems.context import StepContext
-from engine.systems.settlement import map_scale
+from engine.systems.settlement import city_scale
 
 SHORTAGE_NAMES = {"food": "缺粮", "gold": "缺钱", "production": "缺生产力"}
 WAR_NAMES = {
@@ -98,9 +98,35 @@ def war_pressures(ctx: StepContext) -> dict[int, list[str]]:
     return out
 
 
+def eliminate(ctx: StepContext) -> None:
+    """国家灭亡：一座城都没有了，就抹掉所有痕迹——剩下的部队（含开拓者）、本国修的道路、
+    没有城市的残余领土都清掉，国库清零、AI 关掉。"""
+    s = ctx.state
+    owned = {c.nation for c in s.cities.values()}
+    for nid, n in sorted(s.nations.items()):
+        if nid in owned:
+            n.had_city = True
+            continue
+        if n.eliminated or not n.had_city:
+            continue  # 还没建过城的（开局只有开拓者）不算灭亡
+        for uid in sorted(u.id for u in s.units.values() if u.nation == nid):
+            if uid in s.units:
+                s.remove_unit(uid)
+        for edge in [e for e, road in s.roads.items() if road.get("nation") == nid]:
+            del s.roads[edge]
+        s.grid.owner[s.grid.owner == nid] = -1
+        n.eliminated, n.gold, n.capital, n.ai_enabled = True, 0, None, False
+        n.city_management, n.strategy = False, {}
+        s._flow_cache.clear()
+        s._edge_cache.clear()
+        s._network_cache = None
+        ctx.log.add("nation_eliminated", nation=ref("nation", nid), name=n.name)
+
+
 def resolve(ctx: StepContext) -> None:
     s, rules = ctx.state, ctx.rules
     cfg = rules.stability
+    eliminate(ctx)
     war = war_pressures(ctx)
     for city in sorted(s.cities.values(), key=lambda c: c.id):
         lack = shortages(s, rules, city) + war[city.id]
@@ -132,7 +158,7 @@ def _independence(ctx: StepContext, city) -> None:
     s, rules = ctx.state, ctx.rules
     cfg, g = rules.stability, s.grid
     old = city.nation
-    radius = max(1, round(cfg.radius * map_scale(g)))
+    radius = max(1, round(cfg.radius * city_scale(g)))
     group, queue = [city], deque([city])
     while queue:
         c = queue.popleft()

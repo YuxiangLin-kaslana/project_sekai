@@ -166,9 +166,9 @@ def _grow(ctx: StepContext, city: City, food: int) -> None:
         city.population += 1
         city.food = (city.food - need) * (storage - 100) // 100  # 粮仓留下一部分存粮
         ctx.log.add("city_grew", city=ref("city", city.id), population=city.population)
-        from engine.systems.settlement import map_scale
+        from engine.systems.settlement import city_scale
 
-        cfg, scale = ctx.rules.cities, map_scale(ctx.state.grid)
+        cfg, scale = ctx.rules.cities, city_scale(ctx.state.grid)
         radius = min(
             round((cfg.radius + (city.population - 1) // GROWTH_PER_RADIUS) * scale),
             round(cfg.territory_cap * scale),  # 辖区半径有上限（按地图大小缩放）

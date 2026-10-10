@@ -56,13 +56,25 @@ def _data_version() -> str:
 DATA_VERSION = _data_version()
 
 
+def _warmup() -> None:
+    """后台预热：生成一张小图、让 AI 跑两回合，把地图生成、AI 距离场、A* 寻路的 Numba 内核都编译好
+    （Windows 版第一次启动要编译一两分钟；不预热的话第一回合会卡住）。"""
+    try:
+        state = new_game(generate_world(WorldGenParams(width=40, height=25, seed=0), RULES), RULES)
+        orders = parse_orders(
+            [{"type": "set_ai", "issuer": f"nation:{n}", "enabled": True} for n in state.nations]
+        )
+        state = step(state, orders, RULES, immediate=True).state
+        for _ in range(2):
+            state = step(state, [], RULES).state
+    except Exception:  # noqa: BLE001 —— 预热失败不影响正常使用
+        pass
+
+
 @asynccontextmanager
 async def _lifespan(_: FastAPI):
     # 地图生成的热点用 Numba 编译；启动后在后台先生成一张小图，把编译做掉，第一个真实请求就不用等
-    threading.Thread(
-        target=lambda: generate_world(WorldGenParams(width=40, height=25, seed=0), RULES),
-        daemon=True,
-    ).start()
+    threading.Thread(target=_warmup, daemon=True).start()
     yield
 
 

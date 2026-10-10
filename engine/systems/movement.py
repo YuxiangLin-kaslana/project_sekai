@@ -78,6 +78,16 @@ def has_room(state: GameState, rules: Ruleset, unit: Unit, tile: int) -> bool:
     )
 
 
+def unit_moves(grid, ut) -> int:
+    """一回合的移动力：陆军、舰船随地图放大（地图尺度的平方根：80×50 不变，128×80 约 1.26 倍，
+    800×460 约 3.1 倍），大地图上走得过来；飞机不变（作战半径另算）。"""
+    if ut.domain == "air":
+        return ut.moves
+    from engine.systems.settlement import map_scale
+
+    return max(1, round(ut.moves * map_scale(grid) ** 0.5))
+
+
 def edge_table(state, rules, domain: str, nation: int) -> np.ndarray:
     """六向通行费用表 int16[N, 6]：table[a, d] = 从 a 往方向 d 走一步的代价（0 = 不能走），
     与 edge_cost 相同（道路、过河、本国港口）；不含单位占位。按（通行方式, 国家）缓存在状态上，
@@ -193,7 +203,7 @@ def movement_map(state, rules, unit, cost=None) -> tuple[dict[int, int], dict[in
     ut, blocked, enter = _planner(state, rules, unit, cost)
     members = group_members(state, unit)
     budget = min(u.moves_left * MOVE_STEPS + u.road_credit for u in members)
-    full = min(rules.units[u.type].moves * MOVE_STEPS for u in members)
+    full = min(unit_moves(state.grid, rules.units[u.type]) * MOVE_STEPS for u in members)
     best, parents = {unit.tile: budget}, {}
     if budget <= 0:
         return best, parents
@@ -318,7 +328,7 @@ def resolve(ctx: StepContext) -> None:
         ut = rules.units[unit.type]
         costs, overrides = ctx.costs(ut.domain), port_overrides(state, ut, unit.nation)
         budget = min(u.moves_left * MOVE_STEPS + u.road_credit for u in members)
-        full = min(rules.units[u.type].moves * MOVE_STEPS for u in members)
+        full = min(unit_moves(state.grid, rules.units[u.type]) * MOVE_STEPS for u in members)
         # 先按移动力走出本回合的一段（可以穿过本方已满的格子），再退回到最后一个能停下的格子
         walked, left = [unit.tile], [budget]
         for tile in path[1:]:

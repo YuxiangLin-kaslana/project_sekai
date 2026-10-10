@@ -757,7 +757,7 @@ const EVENT_KIND = {
 function logHtml() {
   return logLines.map((l) => `<div class="${l.bad ? 'bad' : l.head ? 'head' : l.kind ?? ''}">${esc(l.text)}</div>`).join('');
 }
-const KIND_TEXT = { melee: "近战交锋", air: "航空打击", ranged: "远程攻击", anti_air: "防空射击", torpedo: "鱼雷攻击" };
+const KIND_TEXT = { melee: "近战交锋", air: "航空打击", ranged: "远程攻击", anti_air: "防空射击", torpedo: "鱼雷攻击", capture: "俘虏平民" };
 const EVENT_TEXT = {
   policy_changed: e => `${game.nationOf(e.nation)?.name ?? e.nation} ${e.enabled ? '开启城市托管 · ' + (game.G.rules.city_policies[e.policy]?.name ?? e.policy) : '暂停城市托管'}`,
   city_management_changed: e => `${cityName(e.city)} ${e.enabled ? '恢复国家管理' : '改为手动管理'}`,
@@ -788,6 +788,8 @@ const EVENT_TEXT = {
   production_blocked: (e) => `${cityName(e.city)} 生产受阻：${e.reason}`,
   embarked: (e) => `${unitName(e.unit_type)} 登上${unitName(e.ship_type)}`,
   disembarked: (e) => `${unitName(e.unit_type)} 下船登陆`,
+  unit_captured: (e) => `${game.nationOf(e.nation)?.name ?? ''} 俘虏了${game.nationOf(e.previous)?.name ?? ''}的${unitName(e.unit_type)}`,
+  nation_eliminated: (e) => `${e.name} 灭亡`,
   air_sortie: (e) => `${unitName(e.unit_type)} 起飞出击，飞往目标上空（下回合攻击，再下回合返航）`,
   air_returned: (e) => `${unitName(e.unit_type)} 返航降落`,
   road_demolished: (e) => `${game.nationOf(e.nation)?.name ?? ''} 拆掉了 ${e.edges.length} 段道路`,
@@ -957,7 +959,7 @@ function unitStatus(u) {
   if (u.destination) return `行军中 → (${u.destination[0]}, ${u.destination[1]})`;
   if (u.fortified) return "驻守";
   const corps = u.corps != null ? game.G.units.get(u.corps) : null;
-  return `移动力 ${u.moves_left+(u.road_credit??0)/(game.G.rules.move_steps??3)}/${game.unitDef(u).moves}${u.formation!=null?" · 编队":""}${corps?.title?` · ${corps.title}`:""}`;
+  return `移动力 ${u.moves_left+(u.road_credit??0)/(game.G.rules.move_steps??3)}/${u.max_moves ?? game.unitDef(u).moves}${u.formation!=null?" · 编队":""}${corps?.title?` · ${corps.title}`:""}`;
 }
 
 function settlementPreview(box, draw) {

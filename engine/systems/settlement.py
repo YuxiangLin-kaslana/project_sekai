@@ -24,6 +24,15 @@ def map_scale(grid):
     return max(1.0, math.sqrt(grid.size / 4000))
 
 
+CITY_SCALE_EXP = 0.6  # 城市范围随地图放大得慢一些：大地图上单座城小、能放更多城
+
+
+def city_scale(g) -> float:
+    """城市辖区、城市间距、每区名额用的尺度：地图尺度的 0.6 次方（80×50 是 1，128×80 约 1.3，
+    800×460 约 3.9，而地图尺度是 9.6）。"""
+    return map_scale(g) ** CITY_SCALE_EXP
+
+
 def geography(state, rules):
     if state._settlement_cache is not None and "water_components" in state._settlement_cache:
         return state._settlement_cache
@@ -40,13 +49,13 @@ def geography(state, rules):
         neighbors = np.pad(smooth, (0, 1), constant_values=0)[g.neighbors]
         smooth = (smooth * 3 + neighbors.sum(axis=1)) // (3 + valid.sum(axis=1))
     # 承载区比显示用大区更大，并随地图扩大；不让显示大区边界决定城市布局。
-    width = max(12, round(12 * map_scale(g)))
+    width = max(12, round(12 * city_scale(g)))
     cols = (g.width + width - 1) // width
     tiles = np.arange(g.size)
     zones = (tiles // g.width // width) * cols + (tiles % g.width // width)
     potential = np.bincount(zones, weights=quality / 100)
     area = np.bincount(zones, weights=(~g.is_water).astype(int))
-    scale = map_scale(g)
+    scale = city_scale(g)
     capacity = [
         min(12, max(int(v / (18 * scale * scale)), int(a >= 20 * scale * scale)))
         for v, a in zip(potential, area, strict=True)
@@ -89,7 +98,7 @@ def spacing(state, rules, tile):
         else rules.cities.min_distance
     )
     return (
-        max(2, round(d * map_scale(state.grid)))
+        max(2, round(d * city_scale(state.grid)))
         if rules.cities.adaptive_spacing
         else rules.cities.min_distance
     )

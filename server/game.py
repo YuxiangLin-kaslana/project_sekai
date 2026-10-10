@@ -27,11 +27,12 @@ from controllers.random_walk import random_walk_orders
 from engine.actions import Order
 from engine.ids import parse_ref, ref
 from engine.rules.schema import Ruleset
-from engine.state import MOVE_STEPS, GameState
+from engine.state import MOVE_STEPS
 from engine.step import step
 from engine.systems.cities import city_stat, city_yields, food_to_grow, nation_resources
 from engine.systems.combat import lock_reason, strength
 from engine.systems.economy import unit_upkeep, upkeep
+from engine.systems.movement import GameState, unit_moves
 from engine.systems.networks import city_network
 from engine.systems.progression import LEVEL_BASE, THRESHOLDS, progress
 from engine.systems.settlement import city_environment, geography, usage
@@ -363,6 +364,7 @@ def _snapshot(game: Game, rules: Ruleset) -> dict:
                 "carried_by": ref("unit", u.carried_by) if u.carried_by is not None else None,
                 "corps": ref("unit", u.corps) if u.corps is not None else None,
                 "sortie": u.sortie["stage"] if u.sortie else None,
+                "max_moves": unit_moves(s.grid, rules.units[u.type]),
                 **({"name": u.name, "rank": u.rank, "title": u.title} if u.rank else {}),
                 "destination": _cr(s, u.destination) if u.destination is not None else None,
                 "task": (

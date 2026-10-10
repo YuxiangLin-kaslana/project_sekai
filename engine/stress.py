@@ -17,7 +17,7 @@ from engine.rules.schema import Ruleset
 from engine.state import City, GameState, Nation, Unit
 from engine.systems.cities import city_name
 from engine.systems.roads import edge_key, engineering
-from engine.systems.settlement import geography, map_scale, spacing
+from engine.systems.settlement import city_scale, geography, spacing
 
 
 def _nearest(g, seeds):
@@ -75,7 +75,7 @@ def populate(world: World, rules: Ruleset, unit_density: float = 0.08) -> tuple[
         excluded[
             g.within(
                 tile,
-                max(round(rules.cities.min_distance * map_scale(g)), spacing(s, rules, tile)) - 1,
+                max(round(rules.cities.min_distance * city_scale(g)), spacing(s, rules, tile)) - 1,
             )
         ] = True
         nearest_center = np.minimum(nearest_center, g.distance_from(tile))
@@ -94,7 +94,7 @@ def populate(world: World, rules: Ruleset, unit_density: float = 0.08) -> tuple[
         excluded[
             g.within(
                 tile,
-                max(round(rules.cities.min_distance * map_scale(g)), spacing(s, rules, tile)) - 1,
+                max(round(rules.cities.min_distance * city_scale(g)), spacing(s, rules, tile)) - 1,
             )
         ] = True
     central = [b.id for b in rules.buildings.values() if b.placement == "center" and b.buildable]
@@ -111,7 +111,7 @@ def populate(world: World, rules: Ruleset, unit_density: float = 0.08) -> tuple[
             tile,
             int(rng.integers(12, 29)),
             capital=capital,
-            radius=round(rules.cities.max_radius * map_scale(g)),
+            radius=round(rules.cities.max_radius * city_scale(g)),
             buildings=buildings,
             xp=int(rng.integers(0, 501)),
         )

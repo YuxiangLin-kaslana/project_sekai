@@ -255,8 +255,23 @@ def test_capture_with_aircraft_and_noncombatants_on_base(board):
     noncombatant = add(board, "engineer", 2, 4, 3)
     result = action(board, order(a, "attack", to=[4, 3]))
     assert not result.rejected and result.state.cities[c.id].nation == 1
-    assert plane.id not in result.state.units and noncombatant.id not in result.state.units
+    assert plane.id not in result.state.units  # 停在城里的敌机投降（消灭）
+    assert result.state.units[noncombatant.id].nation == 1  # 平民被俘，归占领方
+    assert any(e["type"] == "unit_captured" for e in result.events)
     assert result.state.units[a.id].tile == c.tile
+
+
+def test_lone_civilians_can_be_captured_but_generals_never_surrender(board):
+    a = add(board, "infantry", 1, 3, 3)
+    settler = add(board, "settler", 2, 4, 3)
+    out = action(board, order(a, "attack", to=[4, 3]))
+    assert not out.rejected and out.state.units[settler.id].nation == 1
+    assert out.state.units[a.id].tile == settler.tile
+    b = add(board, "infantry", 1, 3, 5)
+    boss = add(board, "general", 2, 4, 5)
+    boss.rank = 3
+    out = action(board, order(b, "attack", to=[4, 5]))
+    assert boss.id not in out.state.units  # 将领宁死不降
 
 
 def test_group_does_not_overfill_destination(board):

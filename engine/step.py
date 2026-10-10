@@ -43,7 +43,7 @@ class StepResult:
 
 def _refresh(ctx: StepContext) -> None:
     for _, u in sorted(ctx.state.units.items()):
-        u.moves_left = ctx.rules.units[u.type].moves
+        u.moves_left = movement.unit_moves(ctx.state.grid, ctx.rules.units[u.type])
         u.road_credit = 0
     ctx.state.turn += 1
 

@@ -45,6 +45,8 @@ class Nation:
     hurt_by: dict = field(default_factory=dict)
     # {对方国家 ID（字符串）: 最近一次交战 / 对它开战役的回合}
     hostile: dict = field(default_factory=dict)
+    had_city: bool = False  # 有过城市（之后城全丢了才算灭亡）
+    eliminated: bool = False  # 灭亡（一座城都没有了，所有部队、道路、领土已清掉）
 
 
 @dataclass(slots=True)

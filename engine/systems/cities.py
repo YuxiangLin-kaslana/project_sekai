@@ -63,12 +63,12 @@ def found_city_problem(state: GameState, rules: Ruleset, nation: int, tile: int)
     problem = founding_problem(state, rules, tile)
     if problem:
         return problem
-    from engine.systems.settlement import map_scale, spacing
+    from engine.systems.settlement import city_scale, spacing
 
     min_d = spacing(state, rules, tile)
     # 通过地图中心格索引检查邻域，不扫描所有城市；包含环绕地图。
     search = (
-        round(rules.cities.sparse_distance * map_scale(g))
+        round(rules.cities.sparse_distance * city_scale(g))
         if rules.cities.adaptive_spacing
         else min_d
     )
@@ -113,7 +113,7 @@ def found_city(
 ) -> City:
     """在 tile 建城（调用前先用 found_city_problem 检查）。市中心格一定归这座城。"""
     cfg = rules.cities
-    from engine.systems.settlement import map_scale
+    from engine.systems.settlement import city_scale
 
     city = City(
         id=state.new_id(),
@@ -123,14 +123,14 @@ def found_city(
         population=cfg.capital_population if capital else cfg.population,
         capital=capital,
         founded_turn=state.turn,
-        radius=max(1, round(cfg.radius * map_scale(state.grid))),
+        radius=max(1, round(cfg.radius * city_scale(state.grid))),
     )
     state.cities[city.id] = city
     g = state.grid
     g.owner[tile] = nation
     g.city_of[tile] = city.id
     g.facility[tile] = 0  # 市中心格不放城外设施
-    claim_territory(g, city, round(cfg.coastal_waters * map_scale(g)))
+    claim_territory(g, city, round(cfg.coastal_waters * city_scale(g)))
     state._territory_cache = None
     state._network_cache = None
     state._settlement_usage = None

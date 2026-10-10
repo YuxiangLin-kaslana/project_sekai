@@ -165,11 +165,16 @@ def test_large_maps_scale_cities_and_keep_city_quotas_comparable():
         c = found_city(s, RULES, 1, g.idx(w // 2, h // 2), capital=True)
         return s, c
 
+    from engine.systems.settlement import city_scale, map_scale
+
     small, a = make(80, 50)
     large, b = make(400, 250)
-    assert b.radius == a.radius * 5
-    assert spacing(large, RULES, b.tile) == spacing(small, RULES, a.tile) * 5
-    assert sum(geography(large, RULES)["capacity"]) < sum(geography(small, RULES)["capacity"]) * 2
+    cs = city_scale(large.grid)
+    assert map_scale(large.grid) == 5 and cs < map_scale(large.grid)  # 城市范围放大得比地图慢
+    assert b.radius == round(a.radius * cs)
+    assert spacing(large, RULES, b.tile) == round(spacing(small, RULES, a.tile) * cs)
+    # 地图面积大 25 倍，城市范围只大约 2.6 倍：能放的城市比小图多得多
+    assert sum(geography(large, RULES)["capacity"]) > sum(geography(small, RULES)["capacity"]) * 2
 
 
 def test_environment_changes_city_density_and_development_yields():
@@ -470,3 +475,22 @@ def test_front_line_moves_forward_toward_the_target(board):
             break
     depths = [d for mode, d in seen if mode in ("推进", "围城")]
     assert depths and min(depths) < max(depths)  # 战线一步步往前推
+
+
+def test_a_nation_that_loses_its_last_city_disappears(board):
+    s = step(board, [], RULES).state  # 两国都有过城市
+    enemy = s.nation_cities(2)[0]
+    straggler = add(s, "infantry", 2, (30, 12))
+    s.roads[(enemy.tile, enemy.tile + 1)] = {
+        "nation": 2,
+        "kind": "road",
+        "built_turn": 0,
+        "water": False,
+    }
+    s.cities[enemy.id].nation = 1  # 最后一座城丢了
+    out = step(s, [], RULES)
+    gone = out.state.nations[2]
+    assert gone.eliminated and straggler.id not in out.state.units
+    assert not any(r["nation"] == 2 for r in out.state.roads.values())
+    assert not (out.state.grid.owner == 2).any()
+    assert any(e["type"] == "nation_eliminated" for e in out.events)

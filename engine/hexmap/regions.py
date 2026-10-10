@@ -57,7 +57,7 @@ def choose_starts(grid: HexGrid, rules: Ruleset, n: int) -> tuple[list[int], lis
     score = score + 3 * coastal + 3 * (grid.river_edges > 0)
     order = centers[np.lexsort((centers, -score[centers]))]
     from engine.state import GameState
-    from engine.systems.settlement import geography, map_scale
+    from engine.systems.settlement import city_scale, geography
 
     geo = geography(GameState(1, 0, rules.id, grid), rules)
     required = np.full(grid.size, rules.cities.min_distance, dtype=np.int32)
@@ -70,7 +70,7 @@ def choose_starts(grid: HexGrid, rules: Ruleset, n: int) -> tuple[list[int], lis
                     geo["potential"] < 28, rules.cities.sparse_distance, rules.cities.min_distance
                 ),
             )
-            * map_scale(grid)
+            * city_scale(grid)
         ).astype(np.int32)
     order = order[np.array([geo["capacity"][int(geo["zones"][t])] > 0 for t in order])]
     if not len(order):

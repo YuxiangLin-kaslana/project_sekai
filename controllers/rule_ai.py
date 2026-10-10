@@ -73,7 +73,7 @@ from engine.systems.cities import (
     production_problem,
 )
 from engine.systems.orders import automatic
-from engine.systems.settlement import geography, map_scale, site_score
+from engine.systems.settlement import city_scale, geography, map_scale, site_score
 
 ACTOR_BUDGET = 256
 CITY_ATTACK_BUDGET = 128
@@ -557,7 +557,8 @@ def march(ctx, unit, goal, reason, *, disperse=False, stop_within=0, avoid=None)
     else:
         distance = flow(ctx, unit, goal)
         path, seen = [unit.tile], {unit.tile}
-        left, full = unit.moves_left * MOVE_STEPS + unit.road_credit, ut.moves * MOVE_STEPS
+        left = unit.moves_left * MOVE_STEPS + unit.road_credit
+        full = movement.unit_moves(g, ut) * MOVE_STEPS
         cost_table = ctx.costs(ut.domain)
         ports = movement.port_overrides(s, ut, unit.nation)
         if not distance and not disperse:
@@ -1396,7 +1397,7 @@ def _settlement_sites(ctx, nation, cities, components, count):
             if neg_score >= -70 or found_city_problem(s, rules, nation.id, t) is not None:
                 continue
             # 两处选址至少隔开最小建城距离，避免两支开拓团抢同一块地
-            if any(g.distance(t, o) < rules.cities.min_distance * map_scale(g) for o in sites):
+            if any(g.distance(t, o) < rules.cities.min_distance * city_scale(g) for o in sites):
                 continue
             sites.append(t)
             break
