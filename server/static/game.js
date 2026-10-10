@@ -31,7 +31,7 @@ export const G = {
   facilityAt: new Map(), // 格子 → 设施规则 ID
   owned: [], // [格子, 国家序号]
   selected: null, // { tile }：选中查看的格子
-  layers: { territory: true, cities: true, units: true, facilities: true, plans: true },
+  layers: { territory: true, cities: true, units: true, facilities: true, plans: true, areacap: true },
   political: false, // "国家"模式：底图不画地形，领土实心铺色，远景标国名
   cityOf: null, // Int32Array：每格属于第几座城（-1 无），画同一国家内城市辖区的分界
   labels: [], // 每个国家的国名位置：{ name, rgb, x, y, size }（世界坐标）
@@ -2074,6 +2074,7 @@ function drawNationLabels(ctx, v, subtle = false) {
 export function drawOver(ctx, v) {
   if (!G.snap) return;
   if(G.layers.capacity)drawCapacity(ctx,v);
+  if(G.layers.areacap)drawAreaCaps(ctx,v);
   drawRoads(ctx, v);
   if(G.layers.facilities && v.z>=12){
     for(const [tile,p] of visibleEntries(G.constructionAt,v)){
@@ -2235,6 +2236,24 @@ function drawPlanLabel(ctx, v, main, plan, rgb) {
     ctx.fillStyle = shade(rgb, -0.5); ctx.fillText(text, x, y);
     ctx.restore();
   });
+}
+
+// 每个陆地大区：现有城市 / 最多城市，标在大区中心（满了标红）
+function drawAreaCaps(ctx,v){
+  const data=G.snap.area_cities;if(!data)return;
+  const fs=Math.max(10,Math.min(13,9+v.z*.12));
+  ctx.save();ctx.font=`600 ${fs}px ${FONT}`;ctx.textAlign='center';ctx.textBaseline='middle';
+  for(const [,[count,max,tile]] of Object.entries(data)){
+    if(!max)continue;
+    const [wx,wy]=center(tile);
+    eachCopy(v,wx,wy,60,(x,y)=>{
+      const text=`城 ${count}/${max}`,w=ctx.measureText(text).width+10,h=fs+6;
+      ctx.fillStyle=count>=max?'#4a1f18d9':'#1b2a24cc';ctx.fillRect(x-w/2,y-h/2,w,h);
+      ctx.strokeStyle=count>=max?'#d0735a':'#8fb49a';ctx.lineWidth=1;ctx.strokeRect(x-w/2+.5,y-h/2+.5,w-1,h-1);
+      ctx.fillStyle=count>=max?'#f1c3b3':'#dfe9d6';ctx.fillText(text,x,y+.5);
+    });
+  }
+  ctx.restore();
 }
 
 function drawCapacity(ctx,v){

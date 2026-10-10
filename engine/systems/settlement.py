@@ -162,3 +162,43 @@ def founding_problem(state, rules, tile):
     if ledger.get(z, 0) >= capacity:
         return f"区域城市名额已满（{ledger.get(z, 0)}/{capacity}），请选择其他区域"
     return None
+
+
+def area_limits(state, rules) -> dict[int, dict]:
+    """每个陆地大区最多能建几座城（显示用）：建城名额按承载区算，一个承载区的名额按它落在各大区的
+    陆地格数分给这些大区，四舍五入（有陆地承载的大区至少 1）。另给一个标签格（离大区中心最近的陆地）。
+    返回 {大区: {"max": 上限, "tile": 标签格}}；只和地图有关，跟 geography 一起缓存。"""
+    geo = geography(state, rules)
+    if "area_limits" in geo:
+        return geo["area_limits"]
+    g = state.grid
+    land = np.flatnonzero(~g.is_water & (g.area >= 0))
+    out: dict[int, dict] = {}
+    if len(land):
+        zones, areas = geo["zones"][land], g.area[land].astype(np.int64)
+        cap = np.asarray(geo["capacity"], dtype=float)
+        zone_land = np.bincount(zones, minlength=len(cap)).astype(float)
+        share = cap[zones] / np.maximum(1, zone_land[zones])  # 每格分到的名额
+        total = np.bincount(areas, weights=share)
+        cx = np.bincount(areas, weights=g.axial_q[land] + g.axial_r[land] / 2)
+        cy = np.bincount(areas, weights=g.axial_r[land].astype(float))
+        n = np.bincount(areas)
+        x = g.axial_q[land] + g.axial_r[land] / 2
+        d = (x - cx[areas] / n[areas]) ** 2 + (g.axial_r[land] - cy[areas] / n[areas]) ** 2
+        order = np.lexsort((d, areas))
+        first = np.r_[True, areas[order][1:] != areas[order][:-1]]
+        for i in order[first]:
+            a = int(areas[i])
+            out[a] = {"max": max(int(total[a] > 0), round(total[a])), "tile": int(land[i])}
+    geo["area_limits"] = out
+    return out
+
+
+def area_usage(state, rules) -> dict[int, int]:
+    """每个大区现有几座城。"""
+    g = state.grid
+    counts: dict[int, int] = {}
+    for c in state.cities.values():
+        a = int(g.area[c.tile])
+        counts[a] = counts.get(a, 0) + 1
+    return counts

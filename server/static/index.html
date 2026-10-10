@@ -465,6 +465,7 @@
           <button type="button" class="chip on" data-game-layer="facilities">设施</button>
           <button type="button" class="chip" data-game-layer="capacity">城市承载</button>
           <button type="button" class="chip on" data-game-layer="plans">作战计划</button>
+          <button type="button" class="chip on" data-game-layer="areacap" title="每个大区现有城市 / 最多能建几座城">大区城市上限</button>
         </div>
 
         <h3>地理图层</h3>
@@ -1271,7 +1272,7 @@ function renderSelection() {
   const terrain=terrainInfo(info.col,info.row);
   if(terrain&&terrain.area!==65535){
     const region=game.G.snap.regions?.[terrain.area]??{xp:0,level:1,xp_floor:0,xp_next:60};
-    head.insertAdjacentHTML('beforeend',`<div class="region-line"><small class="hint">${terrain.water?'海域':'大区'} ${terrain.area+1}</small>${xpHtml(region,'region')}</div>`);
+    head.insertAdjacentHTML('beforeend',`<div class="region-line"><small class="hint">${terrain.water?'海域':'大区'} ${terrain.area+1}${!terrain.water&&game.G.snap.area_cities?.[terrain.area]?` · 城市 ${game.G.snap.area_cities[terrain.area][0]} / 最多 ${game.G.snap.area_cities[terrain.area][1]}`:''}</small>${xpHtml(region,'region')}</div>`);
   }
   el.appendChild(head);
 }
@@ -1872,6 +1873,8 @@ init($("map"), {
     if (game.G.snap) {
       const t = game.tileInfo(info.row * world.width + info.col);
       const parts = [];
+      const cap = !info.isSea && game.G.snap.area_cities?.[info.area];
+      if (cap) parts.push(`本大区城市 ${cap[0]} / 最多 ${cap[1]}`);
       if (t.city) parts.push(`${t.city.capital ? "首都" : "城市"} ${t.city.name}（人口 ${t.city.population}）`);
       else if (t.owner) parts.push(`${t.owner.name}领土`);
       if (t.facility) parts.push(game.G.rules.buildings[t.facility].name);

@@ -35,7 +35,13 @@ from engine.systems.economy import unit_upkeep, upkeep
 from engine.systems.movement import GameState, unit_moves
 from engine.systems.networks import city_network
 from engine.systems.progression import LEVEL_BASE, THRESHOLDS, progress
-from engine.systems.settlement import city_environment, geography, usage
+from engine.systems.settlement import (
+    area_limits,
+    area_usage,
+    city_environment,
+    geography,
+    usage,
+)
 from engine.systems.stability import REASON_NAMES, garrisoned
 
 MAX_GAMES = 32
@@ -380,11 +386,16 @@ def _snapshot(game: Game, rules: Ruleset) -> dict:
         )
     fac = np.flatnonzero(g.facility > 0)
     facility_xp = s.facility_xp
+    area_count = area_usage(s, rules)
     result = {
         "settlement_regions": {
             "width": geography(s, rules)["zone_width"],
             "capacities": geography(s, rules)["capacity"],
             "cities": usage(s, rules),
+        },
+        # 各大区：现有城市 / 最多城市 / 标签格
+        "area_cities": {
+            a: [area_count.get(a, 0), v["max"], v["tile"]] for a, v in area_limits(s, rules).items()
         },
         "id": game.id,
         "world": game.world,
