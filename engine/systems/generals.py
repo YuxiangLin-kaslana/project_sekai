@@ -49,7 +49,8 @@ def appoint(state, rules, general) -> dict:
     )
     nation = state.nations[general.nation]
     nation.corps_count += 1
-    general.rank, general.name, general.title = rank, name, f"第{nation.corps_count}军团"
+    unit = "舰队" if rules.units[general.type].domain == "sea" else "军团"
+    general.rank, general.name, general.title = rank, name, f"第{nation.corps_count}{unit}"
     return {
         "general": ref("unit", general.id),
         "name": name,
@@ -85,6 +86,12 @@ def assign_problem(state, rules, general, units) -> str | None:
     for u in new:
         if u.nation != general.nation or rules.units[u.type].category != "military":
             return "只能编入本国的军事单位"
+        if (rules.units[u.type].domain == "sea") != (rules.units[general.type].domain == "sea"):
+            return (
+                "舰队只能编入舰船"
+                if rules.units[general.type].domain == "sea"
+                else "陆军军团不能编入舰船，舰船编入海军将领的舰队"
+            )
         if state.grid.distance(general.tile, u.tile) > rules.generals.radius:
             return f"部队要在将领身边 {rules.generals.radius} 格内才能编入军团"
     return None

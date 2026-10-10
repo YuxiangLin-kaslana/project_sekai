@@ -34,15 +34,27 @@ from engine.systems.context import StepContext
 from engine.systems.progression import gain, level, unit_strength
 
 FLAK_FACTOR = 30  # 一门高射炮对来袭飞机的火力：FLAK_FACTOR × 防空火力 ÷ 飞机战斗力（6–40）
-FLAK_GUNS = 3  # 最多几门一起开火
-FLAK_CAP = 70  # 一次空袭最多被高射火力打掉这么多生命
+FLAK_CAP = 70  # 飞一段航线最多被防空火力打掉这么多生命
 
 
-def attack_range(rules, actor: Unit | City) -> int:
+def attack_range(rules, actor: Unit | City, grid=None) -> int:
+    """射程。飞机是作战半径（传 grid 时按开局设置 air_range 缩放；从起飞机场量）。"""
     if isinstance(actor, City):
         return 2
     ut = rules.units[actor.type]
-    return ut.range if ut.ranged_strength or ut.domain == "air" or ut.anti_air or ut.torpedo else 1
+    if ut.domain == "air" and grid is not None:
+        from engine.systems.movement import air_radius
+
+        return air_radius(grid, ut)
+    if not (ut.ranged_strength or ut.domain == "air" or ut.anti_air or ut.torpedo):
+        return 1
+    if grid is not None and not ut.anti_air:
+        # 开局设置：海军射程（舰炮、鱼雷）、炮兵射程（陆上远程）各自的百分比
+        key = "naval_range" if ut.domain == "sea" else "artillery_range"
+        pct = grid.tuning.get(key, 100)
+        if pct != 100:
+            return max(1, round(ut.range * pct / 100))
+    return ut.range
 
 
 def attack_kind(rules, actor) -> str:
@@ -81,7 +93,13 @@ def lock_reason(state, rules, actor) -> str | None:
         sortie = actor.sortie
         if sortie is not None:
             if sortie["stage"] == "outbound" and sortie["turn"] < state.turn:
-                return None  # 在目标上空：这回合攻击
+                return None  # 轰炸机在目标上空：这回合轰炸
+            if sortie["stage"] == "patrol":
+                from engine.systems.air import PATROL_TURNS
+
+                if sortie.get("recall") or state.turn - sortie["turn"] >= PATROL_TURNS:
+                    return "正在返航降落"
+                return None  # 战斗机在空中：每回合还能攻击一次
             return "出击任务中（飞往目标 / 返航），完成前不能下别的命令"
         if actor.moves_left < ut.moves:
             return "本回合已经转场，下一回合再出击"
@@ -128,8 +146,11 @@ def _note(notes, label, pct):
 
 
 def line_blocked(state, rules, actor, source, tile) -> bool:
-    """从 source 打 tile 的射线有没有被山脉 / 树林挡住。间接射击（indirect 标签，炮兵）不需要视线。"""
-    if isinstance(actor, Unit) and "indirect" in rules.units[actor.type].tags:
+    """从 source 打 tile 的射线有没有被山脉 / 树林挡住。间接射击（indirect 标签，炮兵）不需要视线；
+    舰炮从海上打岸上（弹道高、有观测），也不受岸边的山林遮挡。"""
+    if isinstance(actor, Unit) and (
+        "indirect" in rules.units[actor.type].tags or rules.units[actor.type].domain == "sea"
+    ):
         return False
     return any(
         rules.terrain_at(int(state.grid.terrain[t])).blocks_sight
@@ -173,7 +194,17 @@ def _morale(state, rules, actor, against, value, notes):
 
 
 def strength(
-    state, rules, actor, *, defending=False, ranged=False, hp=None, notes=None, against=None
+    state,
+    rules,
+    actor,
+    *,
+    defending=False,
+    ranged=False,
+    hp=None,
+    notes=None,
+    against=None,
+    flak=False,
+    deck_gun=False,
 ) -> int:
     """战斗力。ranged：远程 / 防空火力；hp：按这个生命值算（预估带伤后的战斗力）；
     notes：传入列表时把各项修正（说明, 百分比）记进去，给攻击预览显示；
@@ -192,7 +223,11 @@ def strength(
         return max(1, _morale(state, rules, actor, against, value, notes))
     ut = rules.units[actor.type]
     value = ut.strength
-    if ranged:
+    if flak:
+        value = ut.anti_air or ut.flak or 1  # 防空火力（高射炮、舰艇自带防空）
+    elif deck_gun:
+        value = ut.deck_gun or ut.strength  # 驱逐舰的甲板炮（打岸上目标）
+    elif ranged:
         value = ut.ranged_strength or ut.anti_air or ut.torpedo or ut.strength
     terrain = rules.terrain_at(int(state.grid.terrain[actor.tile]))
     mods = [(ut.name, m) for m in ut.modifiers]
@@ -300,6 +335,41 @@ def _apply(value, mods) -> int:
     return max(1, value * (100 + sum(v for _, v in mods)) // 100) if mods else value
 
 
+def bombable(state, rules, actor, tile) -> bool:
+    """轰炸机能不能炸这一格的设施：外国领土上、还没被炸坏的城外设施。"""
+    if not isinstance(actor, Unit):
+        return False
+    ut = rules.units[actor.type]
+    if ut.domain != "air" or "air_superiority" in ut.tags or not ut.ranged_strength:
+        return False
+    g = state.grid
+    owner = int(g.owner[tile])
+    return (
+        bool(g.facility[tile])
+        and owner >= 0
+        and owner != actor.nation
+        and tile not in state.damaged
+        and state.city_at(tile) is None
+    )
+
+
+def bomb_facility(ctx, actor, tile) -> None:
+    """炸坏 tile 上的设施（轰炸机投弹命中设施格）。"""
+    s, rules = ctx.state, ctx.rules
+    b = rules.facility_at(int(s.grid.facility[tile]))
+    s.damaged[tile] = s.turn
+    s._worked_cache.clear()
+    s._yield_cache.clear()
+    ctx.log.add(
+        "facility_bombed",
+        unit=ref("unit", actor.id),
+        nation=ref("nation", actor.nation),
+        victim=ref("nation", int(s.grid.owner[tile])),
+        facility=b.id,
+        tile=tile,
+    )
+
+
 def target_at(state, rules, actor, tile):
     city = state.city_at(tile)
     if (
@@ -318,9 +388,13 @@ def target_at(state, rules, actor, tile):
     if isinstance(actor, Unit) and rules.units[actor.type].torpedo:
         # 鱼雷只打舰船
         ships = [u for u in enemies if u.layer == "surface" and rules.units[u.type].domain == "sea"]
-        return max(
-            ships, key=lambda u: (strength(state, rules, u, defending=True), -u.id), default=None
-        )
+        if ships or not rules.units[actor.type].deck_gun:
+            return max(
+                ships,
+                key=lambda u: (strength(state, rules, u, defending=True), -u.id),
+                default=None,
+            )
+        # 没有敌舰：用甲板炮打岸上的部队 / 城市（下面按远程的规则挑）
     if isinstance(actor, Unit) and rules.units[actor.type].anti_air:
         # 高射炮只打飞机
         air = [u for u in enemies if u.layer == "air"]
@@ -348,6 +422,20 @@ def target_at(state, rules, actor, tile):
         ]
         if civilians and ut.domain == "land":
             return min(civilians, key=lambda u: u.id)
+    if (
+        isinstance(actor, Unit)
+        and rules.units[actor.type].domain == "sea"
+        and "unarmed" not in rules.units[actor.type].tags
+        and "carrier" not in rules.units[actor.type].tags
+    ):
+        # 海上只剩敌方海军将领（旗舰没有护航）：战舰贴上去俘虏
+        civilians = [
+            u
+            for u in state.units_at(tile, "surface")
+            if u.nation != actor.nation and rules.units[u.type].domain == "sea"
+        ]
+        if civilians:
+            return min(civilians, key=lambda u: u.id)
     return None
 
 
@@ -356,14 +444,41 @@ def preview(state, rules, actor, tile) -> tuple[dict | None, str | None]:
     if problem:
         return None, problem
     overhead = isinstance(actor, Unit) and actor.sortie is not None  # 出击的飞机在目标正上空攻击
-    if (tile == actor.tile and not overhead) or state.grid.distance(
-        actor.tile, tile
-    ) > attack_range(rules, actor):
-        return None, "超出攻击范围"
+    # 飞机的作战半径从起飞的机场量（战斗机在空中也不能飞出机场的作战半径）
+    origin = actor.sortie["base"] if overhead else actor.tile
+    if overhead and actor.sortie["stage"] == "outbound" and tile != actor.tile:
+        return None, "轰炸机只能轰炸飞到的这一格"
+    if (tile == actor.tile and not overhead) or state.grid.distance(origin, tile) > attack_range(
+        rules, actor, state.grid
+    ):
+        return None, "超出攻击范围" if not overhead else "超出机场的作战半径"
     kind = attack_kind(rules, actor)
     if kind == "ranged" and line_blocked(state, rules, actor, actor.tile, tile):
         return None, "山脉或树林遮挡射线"
     target = target_at(state, rules, actor, tile)
+    if target is None and kind == "air" and bombable(state, rules, actor, tile):
+        # 轰炸机炸设施：炸坏后不产出、机场不能起降，要对方城市花工期修
+        from engine.systems.air import flight_flak
+
+        shots = flight_flak(state, rules, actor, actor.tile, tile) if tile != actor.tile else []
+        flak = sum(d for _, d, _ in shots)
+        b = rules.facility_at(int(state.grid.facility[tile]))
+        return {
+            "tile": tile,
+            "target": None,
+            "kind": "air",
+            "facility_strike": True,
+            "facility": b.id,
+            "damage": 0,
+            "retaliation": 0,
+            "flak": flak,
+            "suppress": False,
+            "flak_from": ref("unit", shots[0][0].id) if shots else None,
+            "attacker_strength": strength(state, rules, actor, ranged=True),
+            "defender_strength": 0,
+            "modifiers": [],
+            "area": [],
+        }, None
     if target is None:
         return None, "这里没有可攻击的敌方军事单位或城市"
     if isinstance(target, Unit) and rules.units[target.type].category != "military":
@@ -371,6 +486,8 @@ def preview(state, rules, actor, tile) -> tuple[dict | None, str | None]:
 
         if not has_room(state, rules, tile, "military", actor.nation):
             return None, "那一格本方已满，开不进去俘虏"
+        if state.grid.distance(actor.tile, tile) > 1:
+            return None, "要贴上去（相邻）才能俘虏"
         return {
             "tile": tile,
             "target": ref("unit", target.id),
@@ -397,23 +514,31 @@ def preview(state, rules, actor, tile) -> tuple[dict | None, str | None]:
         ut = rules.units[actor.type]
         if not has_room(state, rules, tile, ut.stack_class, actor.nation):
             return None, "目标格本方部队已满，不能再开进去交战"
+    gun = kind == "torpedo" and not (
+        isinstance(target, Unit) and rules.units[target.type].domain == "sea"
+    )
+    if gun:
+        kind = "ranged"  # 驱逐舰没有敌舰可打：甲板炮打岸上目标
     notes_a, notes_d = [], []
-    a = strength(state, rules, actor, ranged=kind != "melee", notes=notes_a, against=target.nation)
+    a = strength(
+        state,
+        rules,
+        actor,
+        ranged=kind != "melee",
+        deck_gun=gun,
+        notes=notes_a,
+        against=target.nation,
+    )
     d = strength(state, rules, target, defending=True, notes=notes_d, against=actor.nation)
     flak, flak_from = 0, None
-    if kind == "air":
-        # 空袭进了敌方高射炮的覆盖范围：先挨高射火力，带伤投弹
-        guns = air_defense(state, rules, actor, tile)
-        if guns:
-            # 覆盖这一格的高射炮都开火（最强的那门记功），总共最多打掉 FLAK_CAP 点
-            gun = guns[0]
-            own = strength(state, rules, actor, against=gun.nation)
-            total = 0
-            for g in guns[:FLAK_GUNS]:
-                power = strength(state, rules, g, ranged=True, against=actor.nation)
-                total += max(6, min(40, FLAK_FACTOR * power // own))
-            flak = min(actor.hp, total, FLAK_CAP)
-            flak_from = ref("unit", gun.id)
+    if kind == "air" and tile != actor.tile:
+        # 飞过去的航线进 / 出敌方防空圈：先挨防空火力，带伤攻击（engine/systems/air.py）
+        from engine.systems.air import flight_flak
+
+        shots = flight_flak(state, rules, actor, actor.tile, tile)
+        if shots:
+            flak = sum(d for _, d, _ in shots)
+            flak_from = ref("unit", shots[0][0].id)
             a = strength(
                 state, rules, actor, ranged=True, hp=actor.hp - flak, against=target.nation
             )
@@ -490,27 +615,12 @@ def preview(state, rules, actor, tile) -> tuple[dict | None, str | None]:
     }, None
 
 
-def air_defense(state, rules, actor, tile) -> list[Unit]:
-    """覆盖 tile 的敌方高射炮（相对 actor），火力最强的在前。"""
-    guns = [
-        u
-        for t in state.grid.within(tile, max_anti_air_range(rules))
-        for u in state.units_at(int(t), "surface")
-        if u.nation != actor.nation
-        and rules.units[u.type].anti_air
-        and state.grid.distance(u.tile, tile) <= rules.units[u.type].range
-    ]
-    return sorted(guns, key=lambda u: (-strength(state, rules, u, ranged=True), u.id))
-
-
-def max_anti_air_range(rules) -> int:
-    return max((u.range for u in rules.units.values() if u.anti_air), default=0)
-
-
 def tactics(state, rules, actor) -> dict:
-    reach = attack_range(rules, actor)
-    tiles = state.grid.within(actor.tile, reach)
-    tiles = sorted(t for t in tiles if t != actor.tile)
+    reach = attack_range(rules, actor, state.grid)
+    sortie = getattr(actor, "sortie", None)
+    origin = sortie["base"] if sortie is not None else actor.tile
+    tiles = state.grid.within(origin, reach)
+    tiles = sorted(t for t in tiles if t != actor.tile or sortie is not None)
     reason = lock_reason(state, rules, actor)
     targets, obstructed = [], []
     for t in tiles:
@@ -589,53 +699,23 @@ def _lost_aboard(ctx, ship) -> None:
         )
 
 
-def auto_flak(ctx) -> None:
-    """高射炮自动开火：本回合还没开过火的高射炮，打射程内最近的一架在空中（出击中）的敌机。"""
-    s, rules, g = ctx.state, ctx.rules, ctx.state.grid
-    planes = [u for u in s.units.values() if u.sortie is not None]
-    if not planes:
-        return
-    guns = sorted(
-        (u for u in s.units.values() if rules.units[u.type].anti_air and u.layer == "surface"),
-        key=lambda u: u.id,
-    )
-    for gun in guns:
-        if gun.attacked_turn == s.turn or gun.id not in s.units:
-            continue
-        reach = rules.units[gun.type].range
-        near = [
-            p
-            for p in planes
-            if p.id in s.units and p.nation != gun.nation and g.distance(p.tile, gun.tile) <= reach
-        ]
-        if not near:
-            continue
-        plane = min(near, key=lambda p: (g.distance(p.tile, gun.tile), p.id))
-        power = strength(s, rules, gun, ranged=True, against=plane.nation)
-        own = strength(s, rules, plane, against=gun.nation)
-        damage = min(plane.hp, max(6, min(40, FLAK_FACTOR * power // own)))
-        plane.hp -= damage
-        plane.damaged_turn = gun.attacked_turn = s.turn
-        ctx.log.add(
-            "anti_air_fire",
-            unit=ref("unit", gun.id),
-            target=ref("unit", plane.id),
-            tile=plane.tile,
-            damage=damage,
-            target_hp=plane.hp,
-        )
-        gain(ctx, gun, 3 + (6 if plane.hp <= 0 else 0), "unit")
-        if plane.hp <= 0:
-            _destroy(ctx, plane, plane.tile, "被防空火力击落")
-
-
 def seize(ctx, unit, nation) -> None:
-    """俘虏：平民（开拓者、工兵）归 nation；将领、军事单位不投降，就地消灭。"""
-    rules = ctx.rules
-    if unit.rank or rules.units[unit.type].category == "military":
-        _destroy(ctx, unit, unit.tile, "被俘" if unit.rank else "投降")
+    """俘虏：平民（开拓者、工兵、将领）归 nation；军事单位不投降，就地消灭。
+    被俘的将领原来的军团解散，到新国家另编一个军团番号。"""
+    s, rules = ctx.state, ctx.rules
+    if rules.units[unit.type].category == "military":
+        _destroy(ctx, unit, unit.tile, "投降")
         return
     old = unit.nation
+    if unit.rank:
+        for member in s.units.values():
+            if member.corps == unit.id:
+                member.corps = None
+        captor = s.nations[nation]
+        captor.corps_count += 1
+        unit.title = (
+            f"第{captor.corps_count}{'舰队' if rules.units[unit.type].domain == 'sea' else '军团'}"
+        )
     unit.nation = nation
     unit.formation = unit.destination = unit.task = unit.corps = None
     unit.managed, unit.ai_goal, unit.fortified = True, "", False
@@ -802,13 +882,23 @@ def _resolve(ctx: StepContext) -> None:
                 continue
             ctx.log.reject(order.model_dump(mode="json"), "cannot_attack", problem)
             continue
-        if (
-            isinstance(actor, Unit)
-            and rules.units[actor.type].domain == "air"
-            and actor.sortie is None
-        ):
-            air.launch(ctx, actor, tile)  # 第 1 回合只起飞、飞到目标上空，下回合才攻击
-            continue
+        start = actor.tile
+        if isinstance(actor, Unit) and rules.units[actor.type].domain == "air":
+            if actor.sortie is None:
+                # 起飞：轰炸机这回合只飞到目标上空（下回合轰炸）；战斗机飞到就打
+                if not air.launch(ctx, actor, tile) or actor.sortie["stage"] != "patrol":
+                    continue
+            elif actor.tile != tile and not air.fly(ctx, actor, tile):
+                continue  # 在空中的战斗机转去打别的目标，途中被击落
+            info, problem = preview(s, rules, actor, tile)  # 飞到了：按带伤后的状态重新结算
+            if problem:
+                actor.attacked_turn = s.turn
+                continue
+            if info.get("facility_strike"):
+                bomb_facility(ctx, actor, tile)
+                actor.attacked_turn = s.turn
+                gain(ctx, actor, 4, "unit")
+                continue
         if info.get("seize"):
             # 俘虏平民：开进去，格子里的外国平民归本国（将领宁死不降）
             start = actor.tile
@@ -826,25 +916,6 @@ def _resolve(ctx: StepContext) -> None:
             ctx.log.add("unit_moved", unit=ref("unit", actor.id), path=[start, tile])
             continue
         target = target_at(s, rules, actor, tile)
-        start = actor.tile
-        if info["flak"]:
-            gun = s.units[parse_ref(info["flak_from"], "unit")]
-            gun.attacked_turn = s.turn  # 这门已经开过火，战斗阶段末不再自动开火
-            actor.hp -= info["flak"]
-            actor.damaged_turn = s.turn
-            ctx.log.add(
-                "anti_air_fire",
-                unit=info["flak_from"],
-                target=ref("unit", actor.id),
-                tile=start,
-                damage=info["flak"],
-                target_hp=actor.hp,
-            )
-            gain(ctx, gun, 3 + (6 if actor.hp <= 0 else 0), "unit")
-            if actor.hp <= 0:
-                actor.attacked_turn = s.turn
-                _destroy(ctx, actor, start, "被防空火力击落")
-                continue
         target.hp = max(0, target.hp - info["damage"])
         splashed = []
         for hit in info["area"]:
@@ -882,6 +953,8 @@ def _resolve(ctx: StepContext) -> None:
             defender_hp=target.hp,
         )
         gain(ctx, actor, 4 + (8 if target.hp <= 0 else 0), key)
+        if info["kind"] == "air" and bombable(s, rules, actor, tile):
+            bomb_facility(ctx, actor, tile)  # 轰炸格上的敌方设施一并炸坏
         gain(ctx, target, 3, "city" if isinstance(target, City) else "unit")
         for other in splashed:
             if isinstance(other, Unit) and other.hp <= 0 and other.id in s.units:

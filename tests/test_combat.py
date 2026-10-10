@@ -231,11 +231,15 @@ def test_air_strikes_and_city_defense_cannot_repeat(board):
     a = add(board, "fighter", 1, 2, 3)
     d = add(board, "fighter", 2, 6, 3)
     first = action(board, order(a, "attack", to=[6, 3]))
-    assert not first.rejected and first.state.units[a.id].sortie["stage"] == "outbound"
-    assert action(first.state, order(a, "attack", to=[6, 3])).rejected  # 出击中不能再下令
-    flying = step(first.state, [], RULES).state  # 第 1 回合结束：在目标上空
-    fought = step(flying, [], RULES).state  # 第 2 回合：在目标上空空战
+    # 战斗机起飞当回合就空战，之后留在空中巡逻
+    assert not first.rejected and first.state.units[a.id].sortie["stage"] == "patrol"
+    fought = first.state
     assert fought.units[d.id].hp < 100 and fought.units[a.id].hp < 100  # 战斗机互相开火
+    assert action(fought, order(a, "attack", to=[6, 3])).rejected  # 本回合已经打过
+    # 下一回合在空中还能再打一次；下令“驻守”= 返航，本回合降落
+    again = step(fought, [], RULES).state
+    home = step(again, parse_orders([order(again.units[a.id], "fortify")]), RULES).state
+    assert home.units[a.id].sortie is None and home.units[a.id].tile == board.grid.idx(2, 3)
     c = City(board.new_id(), "A城", 1, board.grid.idx(3, 3), 2)
     board.cities[c.id] = c
     ground = add(board, "infantry", 2, 4, 3)
@@ -261,7 +265,7 @@ def test_capture_with_aircraft_and_noncombatants_on_base(board):
     assert result.state.units[a.id].tile == c.tile
 
 
-def test_lone_civilians_can_be_captured_but_generals_never_surrender(board):
+def test_lone_civilians_and_generals_can_be_captured(board):
     a = add(board, "infantry", 1, 3, 3)
     settler = add(board, "settler", 2, 4, 3)
     out = action(board, order(a, "attack", to=[4, 3]))
@@ -271,7 +275,7 @@ def test_lone_civilians_can_be_captured_but_generals_never_surrender(board):
     boss = add(board, "general", 2, 4, 5)
     boss.rank = 3
     out = action(board, order(b, "attack", to=[4, 5]))
-    assert boss.id not in out.state.units  # 将领宁死不降
+    assert out.state.units[boss.id].nation == 1  # 将领也算平民：被俘，归占领方
 
 
 def test_group_does_not_overfill_destination(board):
@@ -425,11 +429,13 @@ def test_air_strike_into_anti_air_cover_is_weakened_or_shot_down(board):
     covered = board.clone()
     covered.add_unit(Unit(covered.new_id(), "anti_air", 2, covered.grid.idx(7, 3), "surface"))
     launched, result = fly(covered)
-    # 飞到目标上空那回合就挨高射炮，轰炸那回合再挨一轮，炸得也更轻
-    assert any(e["type"] == "anti_air_fire" for e in launched)
-    assert any(e["type"] == "anti_air_fire" for e in result.events)
+    # 航线飞进防空圈时挨一次；在圈里轰炸不挨打，带伤炸得更轻；飞出防空圈返航时再挨一次
+    assert [e["phase"] for e in launched if e["type"] == "anti_air_fire"] == ["enter"]
+    assert not any(e["type"] == "anti_air_fire" for e in result.events)
     assert result.state.units[bomber.id].hp < 100
     assert full - result.state.units[target.id].hp < open_sky
+    back = step(result.state, [], RULES)
+    assert [e["phase"] for e in back.events if e["type"] == "anti_air_fire"] == ["leave"]
 
     covered.units[bomber.id].hp = 20
     launched, result = fly(covered)
@@ -695,3 +701,47 @@ def test_several_anti_air_guns_fire_together(board):
     add(board, "anti_air", 2, 8, 4)
     two, _ = preview(board, RULES, bomber, target.tile)
     assert two["flak"] > one["flak"] > 0
+
+
+def test_bombers_wreck_facilities_and_cities_repair_them(board):
+    from engine.systems.cities import facility_active
+    from engine.systems.movement import is_air_base
+
+    base(board, 1, 1, 3)
+    home = base(board, 2, 9, 3)
+    field = board.grid.idx(8, 3)
+    board.grid.owner[field], board.grid.city_of[field] = 2, home.id
+    board.grid.facility[field] = RULES.facility_index("airfield")
+    bomber = add(board, "bomber", 1, 1, 3)
+    launched = action(board, order(bomber, "attack", to=[8, 3]))
+    assert not launched.rejected
+    hover = step(launched.state, [], RULES)  # 第 1 回合结束：在目标上空
+    hit = step(hover.state, [], RULES)  # 第 2 回合：投弹
+    s = hit.state
+    assert any(e["type"] == "facility_bombed" for e in hit.events)
+    assert field in s.damaged and not facility_active(s, RULES, field)
+    assert not is_air_base(s, RULES, 2, field)  # 炸坏的机场不能起降
+    # 城市花一半工期修复
+    raw = {"type": "develop_city", "issuer": "nation:2", "city": f"city:{home.id}",
+           "facility": "airfield", "to": [8, 3]}  # fmt: skip
+    started = step(s, parse_orders([raw]), RULES, immediate=True)
+    assert not started.rejected, started.rejected
+    s = started.state
+    assert s.cities[home.id].construction.repair
+    for _ in range(6):
+        s.cities[home.id].construction and setattr(s.cities[home.id].construction, "paid", 999)
+        s = step(s, [], RULES).state
+        if field not in s.damaged:
+            break
+    assert field not in s.damaged and is_air_base(s, RULES, 2, field)
+
+
+def test_warships_fire_flak_when_planes_enter_and_leave(board):
+    base(board, 1, 1, 3)
+    target = add(board, "infantry", 2, 6, 3)
+    add(board, "cruiser", 2, 4, 5)  # 舰艇自带防空：航线经过它的 2 格防空圈
+    fighter = add(board, "fighter", 1, 1, 3)
+    out = action(board, order(fighter, "attack", to=[6, 3]))
+    shots = [e for e in out.events if e["type"] == "anti_air_fire"]
+    assert shots and {e["phase"] for e in shots} <= {"enter", "leave"}
+    assert out.state.units[target.id].hp < RULES.units["infantry"].hp

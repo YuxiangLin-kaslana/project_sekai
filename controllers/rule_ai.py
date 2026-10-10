@@ -115,6 +115,8 @@ FRONT_SPREAD = 8  # 新战线的目标离已有战线目标这么近（格，随
 LINE_START = 6  # 战线从目标城外这么多步开始往前推（随地图放大）
 BORDER_WATCH = 8  # 城市这么近（格，随地图放大）有外国军队，就往边境派哨兵
 HUNT_RADIUS = 8  # 战舰追击这么近（格，随地图放大）的敌舰
+FLEET_MIN = 3  # 舰队不到这么多艘先集结
+AIRFIELD_MARGIN = 2  # 机场离目标至少留这么多格（别修在敌城射程里）
 CARRIER_STANDOFF = 5  # 航母停在目标城外这么远（舰载机够得着，岸上火力打不着）
 # 跨海登陆
 OVERSEAS_CANDIDATES = 4  # 只细算最近的这么多座海外敌城
@@ -257,7 +259,9 @@ def _superiority(ctx, ours, theirs):
     return max(1.0, ai["army"][ours] / max(1, ai["army"][theirs]))
 
 
-def _target_key(target):
+def _target_key(target, tile=None):
+    if target is None:
+        return ("facility", tile)  # 轰炸设施
     return ("city" if isinstance(target, City) else "unit", target.id)
 
 
@@ -277,6 +281,8 @@ def stays(ctx, tile, actor):
     enemies = [u for u in s.units_at(tile) if u.nation != actor.nation and is_military(rules, u)]
     if not enemies:
         city = s.city_at(tile)
+        if city is None and combat.bombable(s, rules, actor, tile):
+            return True  # 设施不会跑
         return city is not None and city.nation != actor.nation
     return any(predicted_tile(ctx, u) == tile for u in enemies)
 
@@ -289,13 +295,15 @@ def attack_choice(ctx, actor, *, only_static=False):
         return None
     planned = _ai(ctx)["damage"]
     candidates = []
-    radius = combat.attack_range(rules, actor)
+    radius = combat.attack_range(rules, actor, s.grid)
+    # 飞机的作战半径从起飞机场量（在空中的战斗机也一样）
+    origin = actor.sortie["base"] if getattr(actor, "sortie", None) is not None else actor.tile
     # 射程大（轰炸机、战列舰）时只看有军事单位或城市的格子，不逐格扫整个射程
     occupied = _occupied(ctx)
     if 1 + 3 * radius * (radius + 1) > len(occupied):
-        tiles = [t for t in occupied if s.grid.distance(actor.tile, t) <= radius]
+        tiles = [t for t in occupied if s.grid.distance(origin, t) <= radius]
     else:
-        tiles = s.grid.within(actor.tile, radius)
+        tiles = s.grid.within(origin, radius)
     for tile in tiles:
         target = combat.target_at(s, rules, actor, tile)
         if target is None:
@@ -306,12 +314,35 @@ def attack_choice(ctx, actor, *, only_static=False):
         if left <= 0 and not isinstance(target, City):
             continue
         candidates.append((left, s.grid.distance(actor.tile, tile), tile, target))
+    if isinstance(actor, Unit) and actor.sortie is None:
+        # 轰炸机：敌方设施也是目标，机场最优先（炸坏了对方飞机就起降不了）
+        for tile, airfield in _enemy_facilities(ctx, actor.nation):
+            if (
+                s.grid.distance(origin, tile) <= radius
+                and combat.bombable(s, rules, actor, tile)
+                and not planned.get(("facility", tile))
+            ):
+                candidates.append(
+                    (-1 if airfield else 999, s.grid.distance(actor.tile, tile), tile, None)
+                )
     best = []
     # 只细算最脆弱的八个目标；同样的状态选出同样的目标。
     for left, _, tile, target in sorted(candidates, key=lambda c: c[:3])[:8]:
         info, problem = combat.preview(s, rules, actor, tile)
         if problem:
             continue
+        if info.get("facility_strike"):
+            if info["flak"] >= actor.hp:
+                continue
+            airfield = rules.buildings[info["facility"]].air_base
+            score = (90 if airfield else 20) - info["flak"]
+            if score > 0:
+                best.append((-score, tile, info, None))
+            continue
+        if target is None:
+            target = combat.target_at(s, rules, actor, tile)  # 设施格上也有敌军：按打部队算
+            if target is None:
+                continue
         kill = info["damage"] >= max(1, left)
         # 己方损失 = 对方反击 + 敌方高射火力（空袭进了防空范围）
         loss = info["retaliation"] + info.get("flak", 0)
@@ -346,6 +377,24 @@ def attack_choice(ctx, actor, *, only_static=False):
     return tile, info, target
 
 
+def _enemy_facilities(ctx, nation):
+    """外国领土上还完好的城外设施：[(格子, 是不是机场)]，每回合统计一次（轰炸机挑目标、陆军奔袭机场用）。"""
+    ai = _ai(ctx)
+    if ai.get("facilities_turn") != ctx.state.turn:
+        s, rules, g = ctx.state, ctx.rules, ctx.state.grid
+        air = np.array(
+            [False] + [rules.buildings[f].air_base for f in rules.facility_ids], dtype=bool
+        )
+        tiles = np.flatnonzero((g.facility > 0) & (g.owner >= 0))
+        ai["facilities"] = [
+            (int(t), int(g.owner[t]), bool(air[g.facility[t]]))
+            for t in tiles
+            if int(t) not in s.damaged
+        ]
+        ai["facilities_turn"] = s.turn
+    return [(t, a) for t, n, a in ai["facilities"] if n != nation]
+
+
 def _occupied(ctx):
     """本回合有军事单位或城市的格子（攻击挑目标用；单位决策期间不会变）。"""
     ai = _ai(ctx)
@@ -374,8 +423,8 @@ def _generals_at(ctx, nid):
 def intend_attack(ctx, actor, tile, info, target, reason, *, priority=1):
     """记下攻击意图，等所有单位决策完再统一提交（见 resolve_attacks）。"""
     ai = _ai(ctx)
-    key = _target_key(target)
-    ai["damage"][key] = ai["damage"].get(key, 0) + info["damage"]
+    key = _target_key(target, tile)
+    ai["damage"][key] = ai["damage"].get(key, 0) + (1 if target is None else info["damage"])
     ai["intents"].append((priority, len(ai["intents"]), actor, tile, reason))
 
 
@@ -832,7 +881,7 @@ def _siege_type(rules, have):
 
 
 def choose_target(
-    ctx, nation, cities, components, current=None, skip=None, taken=(), overseas=True
+    ctx, nation, cities, components, current=None, skip=None, taken=(), overseas=True, origin=None
 ):
     """按"价值 − 代价"挑战争目标城市，返回 (城市, 说明)。current：现有目标（仍是敌城时），
     只有新目标明显更好（高出 SWITCH_MARGIN）才换。taken：其他战线的目标城格子——不重复挑，
@@ -850,10 +899,17 @@ def choose_target(
         d = land_steps(ctx, nation.id).get(c.tile)
         if d is None:
             continue  # 陆路走不到
+        if origin is not None:
+            d = g.distance(origin, c.tile)  # 军团自己挑目标：按离将领多远算
         enemies.append((d, c.id, c, None))
     if overseas:
         enemies += _overseas_targets(ctx, nation, cities, far, current)
     best = kept = None
+    airfields = {}
+    for t, is_air in _enemy_facilities(ctx, nation.id):
+        if is_air:
+            cid = int(g.city_of[t])
+            airfields[cid] = airfields.get(cid, 0) + 1
     scored = sorted(enemies)[:TARGET_CANDIDATES]
     if current is not None and all(c.id != current.id for _, _, c, _ in scored):
         scored += [e for e in enemies if e[2].id == current.id]
@@ -875,6 +931,7 @@ def choose_target(
                 if u.nation != nation.id and is_military(rules, u)
             )
         value = 30 + 6 * c.population + (40 if c.capital else 0)
+        value += 25 * airfields.get(c.id, 0)  # 夺取机场：辖区里有机场的城更值得打
         cost = 4 * d / map_scale(g) + 1.5 * defense + 0.8 * garrison + c.hp / 10
         if any(g.distance(c.tile, t) < FRONT_SPREAD * map_scale(g) for t in taken):
             cost += 40  # 离别的战线目标太近：战线挤在一个方向
@@ -1452,6 +1509,8 @@ def plan_nation(ctx, nation, units):
     fronts = plan_fronts(ctx, nation, p, units, cities, components, replan)
     p["fronts"] = fronts
     _navy_plan(ctx, nation, p, units, cities)
+    _fleet_plans(ctx, nation, p, units, cities)
+    _airfield_plan(ctx, nation, p, units, cities)
     # 汇总：城市托管按各战线的兵力缺口补军备
     p.update(
         want_siege=sum(f.get("want_siege", 0) for f in fronts),
@@ -1571,7 +1630,9 @@ def plan_fronts(ctx, nation, p, units, cities, components, replan):
     """开几条战线、各打哪座城、部队怎么分。战线数随野战陆军规模（每 FRONT_UNITS 支一条）和将领数增加，
     最多 MAX_FRONTS 条；各条战线的目标尽量分散到不同方向，同时最多一条跨海战线。"""
     s, rules = ctx.state, ctx.rules
-    fronts = [dict(f) for f in p.get("fronts") or []]
+    every = [dict(f) for f in p.get("fronts") or []]
+    fronts = [f for f in every if not f.get("corps_front")]
+    corps_old = {f["corps_front"]: f for f in every if f.get("corps_front")}
     skip = p["skip"]
     alive = []
     for f in fronts:
@@ -1582,12 +1643,18 @@ def plan_fronts(ctx, nation, p, units, cities, components, replan):
             alive.append(f)
     fronts = alive
     if p.get("posture") == "扩张":
-        for f in fronts:
+        for f in [*fronts, *corps_old.values()]:
             _end_front(ctx, nation, f, s.cities.get(f["target_city"]))
         return []
-    pool = [u for u in units if _front_pool(ctx, u)]
+    # 军团独立作战：每个陆军军团自己一条战线（自己挑目标、只带自己的部队），国家战线不调动它们
+    gens = [
+        u
+        for u in units
+        if "general" in rules.units[u.type].tags and rules.units[u.type].domain == "land"
+    ]
+    commanded = {gen.id for gen in gens}
+    pool = [u for u in units if _front_pool(ctx, u) and u.corps not in commanded]
     troops = [u for u in pool if _troop(ctx, u)]
-    gens = [u for u in units if "general" in rules.units[u.type].tags]
     # 战线数按兵力：现有战线都配满（need_total）之后，剩下的野战陆军够再开一条才开；不够配满就收缩
     staffed = sum(f.get("need_total", FRONT_UNITS) for f in fronts)
     spare = len(troops) - staffed
@@ -1629,11 +1696,54 @@ def plan_fronts(ctx, nation, p, units, cities, components, replan):
             if new is None:
                 break
             fronts.append(_new_front(p, new, why))
-    _assign_fronts(ctx, nation, fronts, pool, gens, components, cities)
-    _assign_engineers(ctx, nation, p, fronts, units, components)
-    for f in fronts:
+    _assign_fronts(ctx, nation, fronts, pool, [], components, cities)
+    corps = _corps_fronts(ctx, nation, p, units, gens, corps_old, cities, components, replan)
+    _assign_engineers(ctx, nation, p, fronts + corps, units, components)
+    for f in fronts + corps:
         plan_front(ctx, nation, p, f, cities, components)
-    return [f for f in fronts if not f.get("ended")]
+    return [f for f in fronts + corps if not f.get("ended")]
+
+
+def _corps_fronts(ctx, nation, p, units, gens, old, cities, components, replan):
+    """军团的独立战线：将领按自己所在的位置挑最划算的敌城（离将领近的优先，不和别的军团撞同一个
+    目标），带着自己军团的部队打；拿下或打不下去了自己换目标。国家不往军团里塞部队、也不调走。"""
+    s = ctx.state
+    skip = p["skip"]
+    out = []
+    for gen in sorted(gens, key=lambda u: u.id):
+        if gen.layer == "cargo":
+            if gen.id in old:
+                out.append(old[gen.id])
+            continue
+        f = old.get(gen.id)
+        t = s.cities.get(f["target_city"]) if f else None
+        if f is not None and (
+            t is None or t.nation == nation.id or skip.get(str(t.id), -1) > s.turn
+        ):
+            _end_front(ctx, nation, f, t)
+            f = t = None
+        if f is None or (replan and f.get("mode") not in LOCKED):
+            taken = [s.cities[o["target_city"]].tile for o in out]
+            new, why = choose_target(
+                ctx, nation, cities, components, t, skip, taken, origin=gen.tile
+            )
+            if new is None:
+                if f is not None:
+                    _end_front(ctx, nation, f, t)
+                continue
+            if f is None or new.id != f["target_city"]:
+                if f is not None:
+                    _end_front(ctx, nation, f, t)
+                f = _new_front(p, new, why)
+            else:
+                f["target_info"] = why
+        f["corps_front"] = gen.id
+        f["corps"] = [gen.id]
+        f["units"] = sorted(
+            u.id for u in units if u.corps == gen.id and _front_pool(ctx, u) and u.layer != "cargo"
+        ) + [u.id for u in units if u.corps == gen.id and u.layer == "cargo"]
+        out.append(f)
+    return out
 
 
 def _assign_engineers(ctx, nation, p, fronts, units, components):
@@ -1962,7 +2072,7 @@ def plan_front(ctx, nation, p, f, cities, components):
         if u.layer != "cargo"
         and (
             any(g.distance(u.tile, t) <= 2 for t in line["back"] or line["tiles"])
-            or g.distance(u.tile, target.tile) <= combat.attack_range(rules, u)
+            or g.distance(u.tile, target.tile) <= combat.attack_range(rules, u, g)
         )
     )
     ready = len(siege_units) >= need_siege and len(melee_units) >= need_melee
@@ -1973,7 +2083,8 @@ def plan_front(ctx, nation, p, f, cities, components):
     # 围城耐心从“接敌”算起：远程部队进了射程，或城防已经开始掉。大军还在路上不算久攻不下
     if mode == "围城" and f.get("contact_turn") is None:
         contact = target.hp < (f.get("siege_hp") or target.hp) or any(
-            is_siege(rules, u) and g.distance(u.tile, target.tile) <= combat.attack_range(rules, u)
+            is_siege(rules, u)
+            and g.distance(u.tile, target.tile) <= combat.attack_range(rules, u, g)
             for u in military
         )
         if contact:
@@ -2092,7 +2203,9 @@ def _battle_plan(ctx, nation, f, target, origin):
         arrows.append({"kind": "sail", "from": f["sea"]["port"], "to": f["sea"]["beach"]})
     arrows.append({"kind": "main", "from": center, "to": target.tile})
     if old is None or old.get("target") != target.id:
-        old = {"name": f"{target.name}战役", "target": target.id, "started": s.turn}
+        leader = s.units.get(f.get("corps_front") or -1)
+        name = f"{leader.title}·{target.name}战役" if leader else f"{target.name}战役"
+        old = {"name": name, "target": target.id, "started": s.turn}
         ctx.log.add(
             "battle_plan",
             nation=ref("nation", nation.id),
@@ -2154,6 +2267,176 @@ def _navy_plan(ctx, nation, p, units, cities):
     p["carrier_want"] = int(bool(ports and shore and len(planes) >= 2 and not carriers))
 
 
+def _fleet_plans(ctx, nation, p, units, cities):
+    """海军舰队独立作战：每个海军将领自己挑目标，不听国家海军的安排——
+    舰队不到 FLEET_MIN 艘先在最近的港口集结；同一片海里有敌舰就去歼灭（最近的）；
+    没有敌舰就去炮击离将领最近、从海上打得到的敌方沿海城市；都没有就回港待命。"""
+    s, rules, g = ctx.state, ctx.rules, ctx.state.grid
+    wc = geography(s, rules)["water_components"]
+    ports = [c for c in cities if coastal(g, c.tile)]
+    fleets = {}
+    for adm in sorted(
+        (u for u in units if u.rank and rules.units[u.type].domain == "sea"), key=lambda u: u.id
+    ):
+        seas = _sea_comps(ctx, adm.tile)
+        members = [u for u in units if u.corps == adm.id]
+        home = [c for c in ports if _sea_comps(ctx, c.tile) & seas]
+        port = min(home, key=lambda c: (g.distance(adm.tile, c.tile), c.id)) if home else None
+        plan = None
+        if len(members) < FLEET_MIN:
+            if port is not None:
+                plan = {"kind": "muster", "target": port.tile, "name": f"在 {port.name} 集结"}
+        else:
+            foes = [t for t, n in _enemy_ships(ctx) if n != nation.id and int(wc[t]) in seas]
+            if foes:
+                foe = min(foes, key=lambda t: (g.distance(adm.tile, t), t))
+                plan = {"kind": "hunt", "target": foe, "name": "歼灭敌方舰队"}
+            else:
+                shore = [
+                    c
+                    for c in s.cities.values()
+                    if c.nation != nation.id
+                    and any(int(wc[w]) in seas for w in g.within(c.tile, 2) if wc[w] >= 0)
+                ]
+                if shore:
+                    c = min(shore, key=lambda c: (g.distance(adm.tile, c.tile), c.id))
+                    plan = {"kind": "bombard", "target": c.tile, "name": f"炮击 {c.name}"}
+                elif port is not None:
+                    plan = {"kind": "port", "target": port.tile, "name": f"回 {port.name} 待命"}
+        if plan is not None:
+            fleets[str(adm.id)] = {**plan, "title": adm.title, "ships": len(members)}
+    p["fleets"] = fleets
+
+
+def _airfield_plan(ctx, nation, p, units, cities):
+    """修机场：本国有飞机、某条战线的目标城在所有本国机场（城市也算）的作战半径之外时，在本国领土上
+    挑一格修机场——够得着那座城的格子里离它最远的（安全）；都够不着就修在最近的地方往前挪。
+    已经有机场在修、或者目标都够得着了就不修（飞机能飞到就行，不一直修）。城市格不能修机场。"""
+    from engine.systems.cities import facility_problem
+    from engine.systems.movement import air_radius
+
+    s, rules, g = ctx.state, ctx.rules, ctx.state.grid
+    p["airfield"] = None
+    planes = [u for u in units if rules.units[u.type].domain == "air"]
+    fronts = [f for f in p.get("fronts") or [] if f.get("target_city") in s.cities]
+    if not planes or not fronts:
+        return
+    kinds = [b for b in (rules.buildings[f] for f in rules.facility_ids) if b.air_base]
+    if not kinds:
+        return
+    b = kinds[0]
+    if any(
+        c.construction is not None and rules.buildings[c.construction.facility].air_base
+        for c in cities
+    ):
+        return  # 已经在修一座了
+    reach = max(air_radius(g, rules.units[u.type]) for u in planes)
+    index = rules.facility_index(b.id)
+    mine = (g.owner == nation.id) & (g.facility == index)
+    bases = [c.tile for c in cities] + [
+        int(t) for t in np.flatnonzero(mine) if int(t) not in s.damaged
+    ]
+    best = None
+    for f in fronts:
+        target = s.cities[f["target_city"]]
+        gap = min(g.distance(t, target.tile) for t in bases) - reach
+        if gap > 0 and (best is None or (gap, target.id) < best[:2]):
+            best = (gap, target.id, target)
+    if best is None:
+        return
+    target = best[2]
+    dist = g.distance_from(target.tile)
+    near = min(g.distance(t, target.tile) for t in bases)
+    spots = np.flatnonzero(
+        (g.owner == nation.id)
+        & (g.facility == 0)
+        & ~g.is_water
+        & (g.city_of >= 0)
+        & (dist < near - 2)
+    )
+    if not len(spots):
+        return  # 修了也近不了多少：不修
+    keep = max(CITY_RANGE + AIRFIELD_MARGIN, 3)
+    inside = spots[(dist[spots] <= reach) & (dist[spots] >= keep)]
+    # 够得着的格子里挑离目标最远的；都够不着就挑最近的
+    order = (
+        sorted(inside.tolist(), key=lambda t: (-int(dist[t]), t))
+        if len(inside)
+        else sorted(spots.tolist(), key=lambda t: (int(dist[t]), t))
+    )
+    for t in order[:40]:
+        city = s.cities.get(int(g.city_of[t]))
+        if city is None or city.nation != nation.id or city.construction is not None:
+            continue
+        if facility_problem(s, rules, nation.id, t, b) is None:
+            p["airfield"] = {
+                "tile": int(t),
+                "city": city.id,
+                "facility": b.id,
+                "target": target.id,
+                "reason": f"{target.name}在飞机作战半径（{reach} 格）之外：修前线机场",
+            }
+            return
+
+
+def _admiral(ctx, unit):
+    """海军将领随舰队：待在舰队中心（离各舰总距离最近的那艘旁边）；没有舰船护着、敌舰又贴近时回港。"""
+    s, rules, g = ctx.state, ctx.rules, ctx.state.grid
+    fleet = ((s.nations[unit.nation].strategy or {}).get("fleets") or {}).get(str(unit.id))
+    escorted = any(
+        v.nation == unit.nation and is_military(rules, v) for v in s.units_at(unit.tile, "surface")
+    )
+    threat = any(n != unit.nation and g.distance(t, unit.tile) <= 3 for t, n in _enemy_ships(ctx))
+    tiles = [v.tile for v in s.units.values() if v.corps == unit.id and v.layer == "surface"]
+    if threat and not escorted:
+        ports = [c for c in s.nation_cities(unit.nation) if coastal(g, c.tile)]
+        if ports:
+            safe = min(ports, key=lambda c: (g.distance(unit.tile, c.tile), c.id))
+            if march(ctx, unit, safe.tile, f"{unit.title} 旗舰遇险，撤回港口", stop_within=1):
+                return
+    if tiles:
+        goal = min(tiles, key=lambda t: (sum(g.distance(t, o) for o in tiles), t))
+        why = f"{unit.title} 随舰队指挥（{len(tiles)} 艘）" + (
+            f"：{fleet['name']}" if fleet else ""
+        )
+    elif fleet:
+        goal, why = fleet["target"], f"{unit.title} {fleet['name']}"
+    else:
+        unit.ai_goal = f"{unit.title} 待命"
+        return
+    if unit.tile != goal and march(ctx, unit, goal, why):
+        return
+    _hold(ctx, unit, why)
+
+
+def _fleet_member(ctx, unit):
+    """舰队里的舰船听海军将领的：不离旗舰太远（统御半径内才有加成），朝舰队目标前进。"""
+    s, rules, g = ctx.state, ctx.rules, ctx.state.grid
+    adm = s.units.get(unit.corps)
+    if adm is None or rules.units[adm.type].domain != "sea":
+        return False
+    fleet = ((s.nations[unit.nation].strategy or {}).get("fleets") or {}).get(str(adm.id))
+    if fleet is None:
+        return False
+    ut = rules.units[unit.type]
+    radius = rules.generals.radius
+    if g.distance(unit.tile, adm.tile) > radius:
+        return march(ctx, unit, adm.tile, f"{adm.title} 向旗舰靠拢", stop_within=radius - 1)
+    if "unarmed" in ut.tags or "carrier" in ut.tags:
+        stop = 1
+    else:
+        stop = combat.attack_range(rules, unit, g)
+    if fleet["kind"] in ("muster", "port"):
+        stop = 1
+    why = f"{adm.title}：{fleet['name']}"
+    if g.distance(unit.tile, fleet["target"]) > stop and march(
+        ctx, unit, fleet["target"], why, stop_within=stop
+    ):
+        return True
+    _hold(ctx, unit, why)
+    return True
+
+
 def _enemy_ships(ctx):
     """本回合所有舰船的位置（格子、国家），每回合统计一次。"""
     ai = _ai(ctx)
@@ -2178,7 +2461,7 @@ def _navy(ctx, unit, plan, target):
         return _carrier(ctx, unit, plan, target)
     if "unarmed" in ut.tags:
         return False  # 运输船不参战
-    reach = combat.attack_range(rules, unit)
+    reach = combat.attack_range(rules, unit, g)
     seas = _sea_comps(ctx, unit.tile)
     wc = geography(s, rules)["water_components"]
     hunt = min(round(HUNT_RADIUS * map_scale(g)), ut.moves + reach + 2)  # 一两回合追得上的才追
@@ -2285,41 +2568,49 @@ def _carrier(ctx, unit, plan, target):
 
 
 def _assign_generals(ctx, nation, p):
-    """将领把身边同一条战线上、还没编入军团的野战部队编进自己的军团（不超过上限）。"""
+    """将领把身边还没编入军团的野战部队（守军、边境哨除外）编进自己的军团（不超过上限）。
+    海军将领只收舰船，陆军将领只收陆军和飞机。"""
     from engine.systems import generals
 
     s, rules, g = ctx.state, ctx.rules, ctx.state.grid
-    for f in p.get("fronts") or []:
-        mine = set(f.get("units") or [])
-        for gid in f.get("corps") or []:
-            gen = s.units.get(gid)
-            if gen is None or gen.layer == "cargo":
-                continue
-            room = generals.capacity(rules, gen.rank) - len(generals.members(s, gen))
-            if room <= 0:
-                continue
-            recruits = sorted(
-                (
-                    s.units[uid]
-                    for uid in mine
-                    if uid in s.units
-                    and s.units[uid].corps is None
-                    and s.units[uid].layer != "cargo"
-                    and g.distance(s.units[uid].tile, gen.tile) <= rules.generals.radius
+    free = [
+        u.id
+        for u in s.units.values()
+        if u.nation == nation.id and u.corps is None and _front_pool(ctx, u)
+    ]
+    leaders = [gid for f in p.get("fronts") or [] for gid in f.get("corps") or []]
+    leaders += sorted(int(k) for k in (p.get("fleets") or {}))
+    for gid in leaders:
+        gen = s.units.get(gid)
+        if gen is None or gen.layer == "cargo":
+            continue
+        naval = rules.units[gen.type].domain == "sea"
+        mine = {uid for uid in free if (rules.units[s.units[uid].type].domain == "sea") == naval}
+        room = generals.capacity(rules, gen.rank) - len(generals.members(s, gen))
+        if room <= 0:
+            continue
+        recruits = sorted(
+            (
+                s.units[uid]
+                for uid in mine
+                if uid in s.units
+                and s.units[uid].corps is None
+                and s.units[uid].layer != "cargo"
+                and g.distance(s.units[uid].tile, gen.tile) <= rules.generals.radius
+            ),
+            key=lambda u: (g.distance(u.tile, gen.tile), u.id),
+        )[:room]
+        if recruits:
+            automatic(
+                ctx,
+                AssignCorps(
+                    issuer=ref("nation", nation.id),
+                    general=ref("unit", gen.id),
+                    units=[ref("unit", u.id) for u in recruits],
                 ),
-                key=lambda u: (g.distance(u.tile, gen.tile), u.id),
-            )[:room]
-            if recruits:
-                automatic(
-                    ctx,
-                    AssignCorps(
-                        issuer=ref("nation", nation.id),
-                        general=ref("unit", gen.id),
-                        units=[ref("unit", u.id) for u in recruits],
-                    ),
-                    goal="unit_ai",
-                    reason=f"{gen.title}（{gen.name}）收编身边的部队",
-                )
+                goal="unit_ai",
+                reason=f"{gen.title}（{gen.name}）收编身边的部队",
+            )
 
 
 def _bodyguards(ctx, nid):
@@ -2558,7 +2849,7 @@ def _siege(ctx, unit, plan, target):
     ut = rules.units[unit.type]
     d = g.distance(unit.tile, target.tile)
     if is_siege(rules, unit):
-        reach = combat.attack_range(rules, unit)
+        reach = combat.attack_range(rules, unit, g)
         if d <= reach and not combat.line_blocked(ctx.state, rules, unit, unit.tile, target.tile):
             return False  # 已在射程里、视线通畅，本回合没打（已攻击 / 刚到），原地待命
         if d <= reach:
@@ -2582,7 +2873,7 @@ def _siege(ctx, unit, plan, target):
             unit,
             target.tile,
             f"进入 {target.name} 射程轰击城防",
-            stop_within=combat.attack_range(rules, unit),
+            stop_within=combat.attack_range(rules, unit, g),
         )
     if ut.domain != "land":
         return False
@@ -2679,7 +2970,7 @@ def _engage(ctx, unit):
     s, rules, g = ctx.state, ctx.rules, ctx.state.grid
     if health(rules, unit) < 50:
         return False
-    reach = combat.attack_range(rules, unit)
+    reach = combat.attack_range(rules, unit, g)
     best = None
     for t in g.within(unit.tile, ENGAGE_RADIUS):
         if s.city_at(t) is not None:
@@ -2696,6 +2987,38 @@ def _engage(ctx, unit):
     if best is None:
         return False
     return march(ctx, unit, best[1], "敌军挡住去路，上前交战打开通道", stop_within=reach)
+
+
+def _raid_airfield(ctx, unit):
+    """奔袭机场：附近（两回合路程内）有敌方机场、守得又不重（机场周围 2 格敌军不超过 1 支）时，
+    派一支近战部队冲过去拆掉它（_pillage）。每座机场每回合只派一支。"""
+    s, rules, g = ctx.state, ctx.rules, ctx.state.grid
+    reach = 2 * movement.unit_moves(g, rules.units[unit.type]) + 1
+    raids = _ai(ctx).setdefault("raids", {})
+    best = None
+    for tile, airfield in _enemy_facilities(ctx, unit.nation):
+        if not airfield or g.distance(unit.tile, tile) > reach:
+            continue
+        if raids.get(tile, unit.id) != unit.id:
+            continue
+        guards = sum(
+            1
+            for t in g.within(tile, 2)
+            for v in s.units_at(t, "surface")
+            if v.nation != unit.nation and is_military(rules, v)
+        )
+        if guards > 1:
+            continue
+        key = (g.distance(unit.tile, tile), tile)
+        if best is None or key < best:
+            best = key
+    if best is None:
+        return False
+    tile = best[1]
+    raids[tile] = unit.id
+    if unit.tile == tile:
+        return _pillage(ctx, unit)
+    return march(ctx, unit, tile, "奔袭敌方机场，拆掉它")
 
 
 def _pillage(ctx, unit):
@@ -2729,10 +3052,23 @@ def decide_unit(ctx, unit, plan, guards, claimed):
         _settler(ctx, unit, plan, claimed)
         return
     if unit.sortie is not None:
+        if unit.sortie["stage"] == "patrol":
+            # 在空中的战斗机：还能打就接着打（机场作战半径内），没目标或伤重就返航
+            choice = None if health(rules, unit) < WOUNDED else attack_choice(ctx, unit)
+            if choice is not None:
+                tile, info, victim = choice
+                intend_attack(ctx, unit, tile, info, victim, "战斗机留空巡逻，继续空战 / 扫射")
+                return
+            if combat.lock_reason(s, rules, unit) is None:
+                emit(ctx, unit, Fortify(issuer=issuer, unit=uid), "没有目标，战斗机返航降落")
+            return
         unit.ai_goal = "出击任务中" if unit.sortie["stage"] == "outbound" else "返航中"
         return
     if "general" in ut.tags:
-        _general(ctx, unit, plan)
+        if ut.domain == "sea":
+            _admiral(ctx, unit)
+        else:
+            _general(ctx, unit, plan)
         return
     if "build_facility" in ut.tags and _engineer(ctx, unit, plan):
         return
@@ -2816,6 +3152,8 @@ def decide_unit(ctx, unit, plan, guards, claimed):
             "驻守边境，防备偷袭" if border else "守卫城市并恢复生命",
         )
         return
+    if ut.domain == "sea" and unit.corps is not None and _fleet_member(ctx, unit):
+        return  # 编入舰队的舰船听海军将领的，不听国家海军的安排
     if ut.domain == "sea" and (_fleet(ctx, unit, plan, target) or _navy(ctx, unit, plan, target)):
         return
     if (
@@ -2832,6 +3170,8 @@ def decide_unit(ctx, unit, plan, guards, claimed):
         and not is_air_defense(rules, unit)
         and "scout" not in ut.tags
     )
+    if line and mode != "围城" and health(rules, unit) >= 60 and _raid_airfield(ctx, unit):
+        return
     if line and mode != "围城" and health(rules, unit) >= 50 and _flank(ctx, unit):
         return
     if target is not None and target.nation != unit.nation:
@@ -2951,7 +3291,10 @@ def resolve_attacks(ctx):
             tile = choice[0]
         target = combat.target_at(s, rules, actor, tile)
         info, problem = combat.preview(s, rules, actor, tile)
-        if target is None or problem:
+        if problem or (target is None and not info.get("facility_strike")):
+            continue
+        if target is None:
+            _submit(ctx, actor, tile, reason)
             continue
         key = _target_key(target)
         if isinstance(target, City) and target.hp > 0 and priority == 2:
@@ -3084,6 +3427,7 @@ def _guards(ctx, nid, owned):
         if rules.units[u.type].domain == "land"
         and is_military(rules, u)
         and not is_air_defense(rules, u)
+        and u.corps is None  # 军团成员听将领的，不抽去守城
     ]
     guards = {}
     cities = s.nation_cities(nid)
@@ -3216,10 +3560,39 @@ def resolve(ctx):
     for u in active:
         if u.id in s.units and u.moves_left > 0:
             decide_unit(ctx, u, view_of(u), guards, claimed)
+    _opportunity_fire(ctx, [u for u in awake if u.id not in {a.id for a in active}], armies)
     if riders:
         _landings(ctx, riders, view_of, geography(s, ctx.rules)["land_components"])
     defend_cities(ctx)
     resolve_attacks(ctx)
+
+
+def _opportunity_fire(ctx, waiting, armies):
+    """这回合没轮到决策的部队（超出 ACTOR_BUDGET）：射程里有敌军就原地开火 / 接战，不白白挨打。
+    只看射程内确实有外国军队的，开销很小。舰船、炮兵、空军也在这里打。"""
+    s, rules, g = ctx.state, ctx.rules, ctx.state.grid
+    for u in waiting:
+        if u.id not in s.units or u.moves_left <= 0 or not is_military(rules, u):
+            continue
+        if u.layer == "cargo" or u.sortie is not None or "carrier" in rules.units[u.type].tags:
+            continue
+        reach = combat.attack_range(rules, u, g)
+        if rules.units[u.type].domain == "air":
+            continue  # 飞机出击要算航线和防空，留给正常决策
+        if not any(n != u.nation for t in g.within(u.tile, reach) for n in armies.get(int(t), ())):
+            continue
+        choice = attack_choice(ctx, u)
+        if choice is not None:
+            tile, info, victim = choice
+            intend_attack(
+                ctx,
+                u,
+                tile,
+                info,
+                victim,
+                "射程内出现敌军，原地开火",
+                priority=0 if info["kind"] != "melee" else 1,
+            )
 
 
 def defend_cities(ctx):

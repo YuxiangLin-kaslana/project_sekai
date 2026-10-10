@@ -130,6 +130,7 @@ def found_city(
     g.owner[tile] = nation
     g.city_of[tile] = city.id
     g.facility[tile] = 0  # 市中心格不放城外设施
+    state.damaged.pop(tile, None)
     claim_territory(g, city, round(cfg.coastal_waters * city_scale(g)))
     state._territory_cache = None
     state._network_cache = None
@@ -167,8 +168,8 @@ def facility_problem(
         return "市中心格不能建设施"
     if g.facility[tile]:
         return "这一格已经有设施了"
-    if any(u.nation != nation for u in state.units_at(tile)):
-        return "地块有外国部队，暂时无法施工"
+    if any(u.nation != nation for u in state.units_at(tile, "surface")):
+        return "地块有外国部队，暂时无法施工"  # 头顶飞过的飞机不挡施工
     terrain = rules.terrain_at(int(g.terrain[tile]))
     res = rules.resource_at(int(g.resource[tile]))
     res_id = res.id if res else None
@@ -260,8 +261,8 @@ def worked_facilities(
         free, staffed = [], []
         for t in city_tiles(state, city):
             b = rules.facility_at(int(g.facility[t]))
-            if b is None:
-                continue
+            if b is None or t in state.damaged:
+                continue  # 被炸坏的设施修好之前不运作
             (staffed if b.workers else free).append((t, b))
         if planned and state._economy_cache_enabled:
             # 城市托管评估候选设施时，同一座城要算几十遍：现有设施格只收集一次（缓存随产出缓存一起失效）
@@ -452,8 +453,8 @@ def population_upkeep(rules: Ruleset, city: City) -> int:
 def facility_active(state: GameState, rules: Ruleset, tile: int) -> bool:
     """城外设施有人劳作才生效（产出、机场起降、防御等）；不需要人口的设施总是生效。"""
     b = rules.facility_at(int(state.grid.facility[tile]))
-    if b is None:
-        return False
+    if b is None or tile in state.damaged:
+        return False  # 被炸坏了：修好之前不能用（机场不能起降）
     if not b.workers:
         return True
     city = state.cities.get(int(state.grid.city_of[tile]))

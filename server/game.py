@@ -29,10 +29,11 @@ from engine.ids import parse_ref, ref
 from engine.rules.schema import Ruleset
 from engine.state import MOVE_STEPS
 from engine.step import step
+from engine.systems.air import PATROL_TURNS
 from engine.systems.cities import city_stat, city_yields, food_to_grow, nation_resources
-from engine.systems.combat import lock_reason, strength
+from engine.systems.combat import attack_range, lock_reason, strength
 from engine.systems.economy import unit_upkeep, upkeep
-from engine.systems.movement import GameState, unit_moves
+from engine.systems.movement import GameState, air_radius, unit_moves
 from engine.systems.networks import city_network
 from engine.systems.progression import LEVEL_BASE, THRESHOLDS, progress
 from engine.systems.settlement import (
@@ -134,6 +135,9 @@ def rules_json(rules: Ruleset) -> dict:
                 "ranged_strength": u.ranged_strength,
                 "anti_air": u.anti_air,
                 "torpedo": u.torpedo,
+                "deck_gun": u.deck_gun,
+                "flak": u.flak,
+                "flak_range": u.flak_range,
                 "carry": u.carry,
                 "air_capacity": u.air_capacity,
                 "hp": u.hp,
@@ -370,7 +374,20 @@ def _snapshot(game: Game, rules: Ruleset) -> dict:
                 "carried_by": ref("unit", u.carried_by) if u.carried_by is not None else None,
                 "corps": ref("unit", u.corps) if u.corps is not None else None,
                 "sortie": u.sortie["stage"] if u.sortie else None,
+                **(
+                    {
+                        # 飞机：作战半径和量半径的机场（出击中是起飞的机场），前端画作战半径圈
+                        "air_radius": air_radius(s.grid, rules.units[u.type]),
+                        "air_base": u.sortie["base"] if u.sortie else u.tile,
+                        "patrol_left": max(0, PATROL_TURNS - (s.turn - u.sortie["turn"]))
+                        if u.sortie and u.sortie["stage"] == "patrol"
+                        else None,
+                    }
+                    if rules.units[u.type].domain == "air"
+                    else {}
+                ),
                 "max_moves": unit_moves(s.grid, rules.units[u.type]),
+                "attack_range": attack_range(rules, u, s.grid),
                 **({"name": u.name, "rank": u.rank, "title": u.title} if u.rank else {}),
                 "destination": _cr(s, u.destination) if u.destination is not None else None,
                 "task": (
@@ -400,6 +417,7 @@ def _snapshot(game: Game, rules: Ruleset) -> dict:
         "id": game.id,
         "world": game.world,
         "settings": dict(s.grid.tuning),
+        "damaged": sorted(s.damaged),  # 被炸坏的设施格
         "turn": s.turn,
         "state_hash": s.state_hash(),
         "nations": nations,

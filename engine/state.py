@@ -60,6 +60,11 @@ class CityConstruction:
     started_turn: int
     reason: str = "国家直接组织辖区施工"
     paid: int = 0  # 已付的生产力；工期走完且付清设施造价才竣工
+    repair: bool = False  # 修复被炸坏的设施：造价、工期减半，修好就能用
+
+    def cost(self, rules) -> int:
+        b = rules.buildings[self.facility]
+        return b.cost // 2 if self.repair else b.cost
 
 
 @dataclass(slots=True)
@@ -139,6 +144,8 @@ class GameState:
     units: dict[int, Unit] = field(default_factory=dict)
     next_id: int = 1
     facility_xp: dict[int, int] = field(default_factory=dict)
+    # 被炸坏的城外设施：格子 → 炸坏的回合。炸坏的设施不产出、机场不能起降，要城市修复
+    damaged: dict[int, int] = field(default_factory=dict)
     region_xp: dict[int, int] = field(default_factory=dict)
     roads: dict[tuple[int, int], dict] = field(default_factory=dict)
     # 索引：(格子, 层) → 该处的单位 ID（升序）。只通过 add_unit / move_unit / remove_unit 维护
@@ -270,6 +277,7 @@ class GameState:
             units=units,
             next_id=self.next_id,
             facility_xp=dict(self.facility_xp),
+            damaged=dict(self.damaged),
             region_xp=dict(self.region_xp),
             roads={edge: dict(value) for edge, value in self.roads.items()},
             _at={k: list(v) for k, v in self._at.items()},
@@ -298,6 +306,7 @@ class GameState:
                 for _, v in sorted(self.units.items())
             ],
             "facility_xp": sorted(self.facility_xp.items()),
+            "damaged": sorted(self.damaged.items()),
             "region_xp": sorted(self.region_xp.items()),
             "roads": [[a, b, v] for (a, b), v in sorted(self.roads.items())],
             "grid": self.grid.content_hash(),

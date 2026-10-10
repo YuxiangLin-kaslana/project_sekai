@@ -170,6 +170,7 @@ export function setGame(snap, rules, W, H) {
     G.owned.push([t, idx]);
   }
   G.labels = nationLabels(snap, W);
+  G.damaged = new Set(snap.damaged ?? []);
   G.facilityAt = new Map();
   G.facilityXp = new Map();
   if (snap.facility) {
@@ -471,8 +472,21 @@ function drawFacilities(ctx, v) {
     const info = v.tile ? v.tile(t % G.W, (t / G.W) | 0) : null;
     eachCopy(v, wx, wy, z * 1.8, (x, y) => {
       drawFacilityTile(ctx, b.icon, x, y, z, c, info, t);
+      if (G.damaged.has(t)) drawWrecked(ctx, x, y, z);
     });
   }
+}
+
+// 被炸坏的设施：暗红底 + 叉，修好之前不能用
+function drawWrecked(ctx, x, y, z) {
+  const r = Math.max(5, z * 0.42);
+  ctx.save();
+  ctx.fillStyle = 'rgba(70,20,14,.45)';
+  ctx.beginPath(); ctx.arc(x, y, r * 1.15, 0, Math.PI * 2); ctx.fill();
+  ctx.strokeStyle = '#ff8a6a'; ctx.lineWidth = Math.max(1.6, z * 0.07); ctx.lineCap = 'round';
+  ctx.beginPath(); ctx.moveTo(x - r * .7, y - r * .7); ctx.lineTo(x + r * .7, y + r * .7);
+  ctx.moveTo(x + r * .7, y - r * .7); ctx.lineTo(x - r * .7, y + r * .7); ctx.stroke();
+  ctx.restore();
 }
 
 function drawCityTiles(ctx, v) {
@@ -2356,9 +2370,48 @@ function drawRangeBoundary(ctx, v, tiles, color) {
   ctx.strokeStyle=color;ctx.lineWidth=1.7;ctx.stroke(path);ctx.restore();
 }
 
+// 选中飞机：画作战半径圈（从起飞的机场量），以及圈里敌方防空单位的防空圈（进出各挨一次）
+function drawAirRadius(ctx, v, plane) {
+  if (plane.air_radius == null) return;
+  const base = plane.air_base ?? plane.tile;
+  const [bx, by] = center(base);
+  const r = (plane.air_radius + 0.5) * SQRT3 * v.z;
+  ctx.save();
+  eachCopy(v, bx, by, r + 20, (x, y) => {
+    ctx.fillStyle = 'rgba(120,180,230,.06)';
+    ctx.beginPath(); ctx.arc(x, y, r, 0, Math.PI * 2); ctx.fill();
+    ctx.setLineDash([10, 6]); ctx.lineWidth = 2; ctx.strokeStyle = 'rgba(25,43,45,.6)';
+    ctx.beginPath(); ctx.arc(x, y, r, 0, Math.PI * 2); ctx.stroke();
+    ctx.lineWidth = 1.4; ctx.strokeStyle = '#9fd0f2';
+    ctx.beginPath(); ctx.arc(x, y, r, 0, Math.PI * 2); ctx.stroke();
+    ctx.setLineDash([]);
+    ctx.font = `600 12px ${FONT}`; ctx.textAlign = 'center'; ctx.textBaseline = 'bottom';
+    const label = `作战半径 ${plane.air_radius} 格`;
+    const w = ctx.measureText(label).width + 10;
+    ctx.fillStyle = '#16242cdd'; ctx.fillRect(x - w / 2, y - r - 20, w, 17);
+    ctx.fillStyle = '#cfe8f7'; ctx.fillText(label, x, y - r - 5);
+  });
+  for (const u of G.snap.units) {
+    if (u.nation === plane.nation || u.layer !== 'surface') continue;
+    const def = G.rules.units[u.type];
+    const reach = def?.anti_air ? def.range : def?.flak ? def.flak_range : 0;
+    if (!reach) continue;
+    const [ux, uy] = center(u.tile);
+    const rr = (reach + 0.5) * SQRT3 * v.z;
+    eachCopy(v, ux, uy, rr + 4, (x, y) => {
+      ctx.setLineDash([4, 4]); ctx.lineWidth = 1.3; ctx.strokeStyle = 'rgba(240,110,90,.85)';
+      ctx.fillStyle = 'rgba(220,80,60,.07)';
+      ctx.beginPath(); ctx.arc(x, y, rr, 0, Math.PI * 2); ctx.fill(); ctx.stroke();
+    });
+  }
+  ctx.restore();
+}
+
 function drawTactics(ctx, v) {
   const t = G.tactics;
   if (!t || t.actor !== G.actor || v.z < 3) return;
+  const plane = G.units.get(G.actor);
+  if (plane?.air_radius != null) drawAirRadius(ctx, v, plane);
   ctx.save();
   const attacking = G.actionMode === 'attack';
   const moving = G.actionMode === 'move' || G.actionMode === 'inspect';

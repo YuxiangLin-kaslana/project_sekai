@@ -60,6 +60,7 @@ def pillage(ctx: StepContext, unit, target: dict) -> None:
     city = s.cities.get(target["city"]) if target["city"] >= 0 else None
     if target["kind"] == "facility":
         g.facility[tile] = 0
+        s.damaged.pop(tile, None)
         s.facility_xp.pop(tile, None)
     elif target["kind"] == "construction":
         city.construction = None

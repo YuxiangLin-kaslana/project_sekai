@@ -8,6 +8,7 @@
 #   torpedo 鱼雷（驱逐舰）：只打舰船，射程 range，近距离伤害很高
 #   carry 舰船能载运几支陆军（相邻的陆军登船，随船航行，到岸边下船；船沉了部队一起损失）
 #   air_capacity 航空母舰能搭载几支飞机（移动机场：飞机转场到航母上，随舰航行、从航母出击）
+#   flak / flak_range 舰艇自带防空：敌机飞进、飞出防空圈时各开火一次（不能主动攻击）
 #   anti_air 防空火力：只能打飞机（主动射击 range 内的敌方航空单位）；range 内的格子挨敌方空袭时，
 #            先对来袭飞机开火（高射火力），飞机带伤再投弹，血打光就被击落、炸不到目标
 #   tags 能力标签：found_city 建城、build_facility 建设施、scout 侦察、siege 攻城、
@@ -141,6 +142,22 @@ armor:
     - { stat: strength, op: mul, value: 125, when: { defending: false } }   # 坦克进攻 +25%
   icon: armor
 
+# 海军将领统御舰队：身边的舰船（战舰、航母、运输船）编入“第 N 舰队”，规则同陆军军团（星级、加成、上限）。
+# 本身没有战斗力，跟着舰队走；被敌舰贴上来会被俘。
+admiral:
+  name: 海军将领
+  short: 提
+  domain: sea
+  category: civilian
+  moves: 9
+  sight: 3
+  cost: 360
+  population: 1
+  gold: 100
+  upkeep: 3
+  tags: [general]
+  icon: general
+
 # ---- 海军 ----
 # 三级战舰：驱逐（快、鱼雷近战）→ 巡洋（中速、舰炮 2 格）→ 战列（慢、重炮 3 格、炮击整格）；
 # 越大的船载兵越多。运输船载 4 支陆军、没有攻击手段；航空母舰本身也没有攻击手段，靠舰载机作战。
@@ -151,6 +168,7 @@ destroyer:
   domain: sea
   strength: 10
   torpedo: 24
+  deck_gun: 10   # 甲板炮：打岸上的部队和城市
   range: 2
   damage_vs_units: 150
   moves: 11
@@ -160,6 +178,7 @@ destroyer:
   gold: 40
   upkeep: 2
   carry: 1
+  flak: 12   # 舰载防空：敌机进 / 出 2 格防空圈各挨一次
   icon: destroyer
 
 cruiser:
@@ -178,6 +197,7 @@ cruiser:
   upkeep: 3
   carry: 2
   requires_resources: [iron]
+  flak: 10   # 舰载防空：敌机进 / 出 2 格防空圈各挨一次
   icon: cruiser
 
 battleship:
@@ -196,6 +216,7 @@ battleship:
   carry: 3
   requires_resources: [iron, oil]
   tags: [area_damage, suppress]
+  flak: 14   # 舰载防空：敌机进 / 出 2 格防空圈各挨一次
   icon: battleship
 
 transport:

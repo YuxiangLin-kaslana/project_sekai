@@ -453,8 +453,13 @@ def test_ai_generals_take_command_of_nearby_field_troops(board):
     assert any(e["type"] == "corps_assigned" for e in result.events)
     led = [u for u in troops if result.state.units[u.id].corps == boss.id]
     assert led and len(led) <= generals.capacity(RULES, boss.rank)
-    front = result.state.nations[1].strategy["fronts"][0]
-    assert boss.id in front["corps"] and {u.id for u in led} <= set(front["units"])
+    # 军团独立：自己一条战线（自己挑目标），只带自己军团的部队；国家战线不调动军团成员
+    fronts = step(result.state, [], RULES).state.nations[1].strategy["fronts"]  # 下一回合编进战线
+    own = next(f for f in fronts if f.get("corps_front") == boss.id)
+    assert own["corps"] == [boss.id] and {u.id for u in led} == set(own["units"])
+    for f in fronts:
+        if f is not own:
+            assert not {u.id for u in led} & set(f["units"])
 
 
 def test_front_line_moves_forward_toward_the_target(board):

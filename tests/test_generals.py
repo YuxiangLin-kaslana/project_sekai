@@ -68,19 +68,25 @@ def test_generals_are_drawn_by_lot_with_rare_high_ranks(board):
 
 
 def test_assign_corps_respects_radius_and_capacity(board):
-    boss = general(board, 5, 5, rank=1)  # ★1：最多 6 支
-    near = [add(board, "infantry", 1, 5 + (k % 3), 4 + k // 3) for k in range(7)]
+    boss = general(board, 5, 5, rank=1)  # ★1：最多 17 支（★5 封顶 25 支）
+    spots = [t for t in board.grid.within(boss.tile, 2) if t != boss.tile]
+    near = [
+        add(board, "infantry", 1, *board.grid.col_row(spots[k % len(spots)])) for k in range(18)
+    ]
     far = add(board, "infantry", 1, 14, 9)
     order = {"issuer": "nation:1", "type": "assign_corps", "general": f"unit:{boss.id}"}
     too_far = act(board, {**order, "units": [f"unit:{far.id}"]})
     assert "身边" in too_far.rejected[0]["message"]
     too_many = act(board, {**order, "units": [f"unit:{u.id}" for u in near]})
     assert "统御上限" in too_many.rejected[0]["message"]
-    ok = act(board, {**order, "units": [f"unit:{u.id}" for u in near[:6]]})
+    ok = act(board, {**order, "units": [f"unit:{u.id}" for u in near[:17]]})
     assert not ok.rejected
-    assert [u.corps for u in ok.state.units.values() if u.id in {v.id for v in near[:6]}] == [
+    assert [u.corps for u in ok.state.units.values() if u.id in {v.id for v in near[:17]}] == [
         boss.id
-    ] * 6
+    ] * 17
+    from engine.systems.generals import capacity
+
+    assert capacity(RULES, 5) == 25
     left = act(
         ok.state, {"issuer": "nation:1", "type": "leave_corps", "unit": f"unit:{near[0].id}"}
     )
@@ -107,3 +113,15 @@ def test_military_upkeep_is_one_and_a_half_times_the_table(board):
         add(board, "infantry", 1, 2, 2)  # 表上每支 1 金
     add(board, "settler", 1, 3, 3)  # 平民不加收
     assert upkeep(board, RULES, 1) == 4 * 3 // 2 + RULES.units["settler"].upkeep
+
+
+def test_admirals_lead_fleets_of_ships_only(board):
+    from engine.systems import generals
+
+    boss = add(board, "admiral", 1, 5, 5)
+    generals.appoint(board, RULES, boss)
+    assert boss.title.endswith("舰队")
+    soldier = add(board, "infantry", 1, 5, 6)
+    order = {"issuer": "nation:1", "type": "assign_corps", "general": f"unit:{boss.id}"}
+    refused = act(board, {**order, "units": [f"unit:{soldier.id}"]})
+    assert "舰队只能编入舰船" in refused.rejected[0]["message"]

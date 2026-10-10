@@ -58,6 +58,7 @@ DEV_RETRY = 3  # 没找到合适开发项目的城市，隔这么多回合再搜
 DEV_WAIT_REASON = "暂无合适的开发项目，过几回合再看"
 RICH_RESERVE_MULTIPLE = 4  # 国库超过储备金这么多倍算"富裕"：放宽维护费限制、扩大军备
 GENERAL_MIN = 6  # 没人统率的野战部队比将领空位多出这么多才造将领
+ADMIRAL_MIN = 3  # 没编进舰队的战舰比海军将领空位多出这么多艘，就造海军将领
 WAR_MODES = (
     "备战",
     "推进",
@@ -100,6 +101,10 @@ class Budget:
         default_factory=dict
     )  # 各兵种的实战效率（同样投入打出的伤害），相对全国平均值
     posture: str = ""
+    airfield: dict | None = None  # 国家要修的前线机场（rule_ai._airfield_plan）：格子、哪座城修
+    want_admiral: int = (
+        0  # 没人统率的战舰比海军将领的统御空位多出多少（多于 ADMIRAL_MIN 就造海军将领）
+    )
 
     @property
     def net(self):
@@ -175,21 +180,43 @@ def budget_for(state, rules, nation, cities):
     else:
         target += posts
     # 将领：没人统率的野战陆军比现有将领（含在造的）的统御空位多出 GENERAL_MIN 支，就该造一个
-    want_general = 0
+    want_general = want_admiral = 0
     if strategy.get("posture") == "战争":
         from engine.systems import generals
+
+        def leader(ut, sea):
+            return "general" in ut.tags and (ut.domain == "sea") == sea
 
         queued_generals = sum(
             1
             for c in cities
             for item in c.queue
-            if item.startswith("unit:") and "general" in rules.units[item[5:]].tags
+            if item.startswith("unit:") and leader(rules.units[item[5:]], False)
+        )
+        queued_admirals = sum(
+            1
+            for c in cities
+            for item in c.queue
+            if item.startswith("unit:") and leader(rules.units[item[5:]], True)
         )
         room = sum(
             generals.capacity(rules, u.rank) - len(generals.members(state, u))
             for u in state.units.values()
-            if u.nation == nation.id and u.rank
+            if u.nation == nation.id and u.rank and rules.units[u.type].domain != "sea"
         )
+        sea_room = sum(
+            generals.capacity(rules, u.rank) - len(generals.members(state, u))
+            for u in state.units.values()
+            if u.nation == nation.id and u.rank and rules.units[u.type].domain == "sea"
+        )
+        loose_ships = sum(
+            1
+            for u in units
+            if u.corps is None
+            and rules.units[u.type].domain == "sea"
+            and "unarmed" not in rules.units[u.type].tags
+        )
+        want_admiral = max(0, loose_ships - sea_room - 8 * queued_admirals)
         loose = sum(
             1
             for u in units
@@ -311,6 +338,8 @@ def budget_for(state, rules, nation, cities):
         threat_mix,
         effect,
         strategy.get("posture", ""),
+        want_admiral=want_admiral,
+        airfield=strategy.get("airfield"),
     )
 
 
@@ -627,7 +656,7 @@ def decide_city(state, rules, city, budget):
         if budget.want_general >= GENERAL_MIN:
             # 将领：没人统率的野战部队多了就造，生产力高的城市更合适（将领造价很高）
             for u in rules.units.values():
-                if "general" not in u.tags:
+                if "general" not in u.tags or u.domain == "sea":
                     continue
                 if (
                     production_problem(state, rules, city, "unit:" + u.id, budget.have)
@@ -644,10 +673,33 @@ def decide_city(state, rules, city, budget):
                         f"{budget.want_general} 支野战部队没有将领统率：造将领组建军团",
                     )
                 )
+        if budget.want_admiral >= ADMIRAL_MIN:
+            # 海军将领：没编进舰队的战舰多了就造（沿海城市），组建舰队独立作战
+            for u in rules.units.values():
+                if "general" not in u.tags or u.domain != "sea":
+                    continue
+                if (
+                    production_problem(state, rules, city, "unit:" + u.id, budget.have)
+                    or _spawn_tile(state, rules, city, u.id) is None
+                    or nation.gold < budget.reserve + u.gold
+                    or (budget.margin < math.ceil(unit_upkeep(rules, u)) and not budget.rich)
+                ):
+                    continue
+                score = 40 + 6 * min(8, budget.want_admiral - ADMIRAL_MIN) + y.production
+                candidates.append(
+                    (
+                        score,
+                        "unit:" + u.id,
+                        f"{budget.want_admiral} 艘战舰没有编入舰队：造海军将领组建舰队",
+                    )
+                )
         if candidates:
             _, item, reason = sorted(candidates, key=lambda x: (-x[0], x[1]))[0]
             if item.startswith("unit:") and "general" in rules.units[item[5:]].tags:
-                budget.want_general -= 8  # 一座城在造就够了
+                if rules.units[item[5:]].domain == "sea":
+                    budget.want_admiral -= 8
+                else:
+                    budget.want_general -= 8  # 一座城在造就够了
             if item.startswith("unit:") and "build_facility" in rules.units[item[5:]].tags:
                 budget.engineer_want -= 1
             intents.append((CityOrder(issuer=issuer, city=cid, queue=[item]), "production", reason))
@@ -657,6 +709,18 @@ def decide_city(state, rules, city, budget):
                 status="idle", reason="暂无需要且可承担的新生产项目，等待人口、财政或军备需求变化"
             )
 
+    urgent = _urgent_development(state, rules, city, budget) if city.construction is None else None
+    if urgent is not None:
+        fid, tile, reason = urgent
+        intents.append(
+            (
+                DevelopCity(issuer=issuer, city=cid, facility=fid, to=state.grid.col_row(tile)),
+                "development",
+                reason,
+            )
+        )
+        report["development_reason"] = reason
+        return report, intents
     waiting = city.management.get("dev_wait", 0) if city.management else 0
     if city.construction is None and waiting > state.turn:
         # 上次没找到合适的开发项目：隔 DEV_RETRY 回合再搜（人口、财政变化最多晚几回合反应）
@@ -776,6 +840,26 @@ def decide_city(state, rules, city, budget):
     else:
         report["development_reason"] = city.construction.reason
     return report, intents
+
+
+def _urgent_development(state, rules, city, budget):
+    """优先的城外工程：先修被炸坏的设施（机场最先），再修国家要的前线机场。返回 (设施, 格子, 原因)。"""
+    g = state.grid
+    broken = [
+        t
+        for t in state.damaged
+        if int(g.city_of[t]) == city.id
+        and int(g.owner[t]) == city.nation
+        and not any(u.nation != city.nation for u in state.units_at(t, "surface"))
+    ]
+    if broken:
+        t = min(broken, key=lambda t: (not rules.facility_at(int(g.facility[t])).air_base, t))
+        b = rules.facility_at(int(g.facility[t]))
+        return b.id, t, f"修复被炸坏的{b.name}（修好前不能用）"
+    plan = budget.airfield
+    if plan and plan.get("city") == city.id and not g.facility[plan["tile"]]:
+        return plan["facility"], plan["tile"], plan["reason"]
+    return None
 
 
 def road_components(state):

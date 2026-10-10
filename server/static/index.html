@@ -429,6 +429,10 @@
           <div class="row" title="陆军每回合移动力（地图越大本来就越快，这里再乘一个倍数）"><label for="set-land_speed">陆军移速</label><input type="range" id="set-land_speed" data-setting="land_speed" min="50" max="300" step="10" value="100"><output></output></div>
           <div class="row" title="舰船每回合移动力倍数"><label for="set-sea_speed">海军移速</label><input type="range" id="set-sea_speed" data-setting="sea_speed" min="50" max="300" step="10" value="100"><output></output></div>
           <div class="row" title="城市辖区、城市间距、每片承载区能放几座城：调小 → 城市更小更密"><label for="set-city_size">城市范围</label><input type="range" id="set-city_size" data-setting="city_size" min="50" max="200" step="10" value="100"><output></output></div>
+          <div class="row" title="飞机作战半径（也是转场半径）倍数"><label for="set-air_range">飞机半径</label><input type="range" id="set-air_range" data-setting="air_range" min="50" max="300" step="10" value="100"><output></output></div>
+          <div class="row" title="舰炮、鱼雷射程倍数"><label for="set-naval_range">海军射程</label><input type="range" id="set-naval_range" data-setting="naval_range" min="50" max="300" step="10" value="100"><output></output></div>
+          <div class="row" title="炮兵等陆上远程单位的射程倍数"><label for="set-artillery_range">炮兵射程</label><input type="range" id="set-artillery_range" data-setting="artillery_range" min="50" max="300" step="10" value="100"><output></output></div>
+          <div class="row" title="每片地区（承载区）能建几座城的倍数：调高 → 城市更多"><label for="set-capacity">地区承载</label><input type="range" id="set-capacity" data-setting="capacity" min="50" max="400" step="10" value="100"><output></output></div>
           <div class="row" title="每个国家开局的国库"><label for="set-start_gold">起始金币</label><input type="range" id="set-start_gold" data-setting="start_gold" min="0" max="1000" step="25" value="100"><output></output></div>
           <div class="row" title="军事单位维护费倍数：越高越养不起大军"><label for="set-upkeep">军费</label><input type="range" id="set-upkeep" data-setting="upkeep" min="0" max="300" step="10" value="100"><output></output></div>
           <label class="check-row"><input type="checkbox" id="set-auto-ai"> 开局后全部国家交给 AI</label>
@@ -877,7 +881,8 @@ const EVENT_KIND = {
   pillaged: 'war', anti_air_fire: 'war', unit_encircled: 'war', city_encircled: 'war',
   city_unrest: 'alert', city_independence: 'alert', famine: 'alert', production_blocked: 'alert',
   city_founded: 'build', building_completed: 'build', facility_built: 'build', unit_created: 'build',
-  level_up: 'build', gold_assist: 'build',
+  level_up: 'build', gold_assist: 'build', facility_repaired: 'build',
+  facility_bombed: 'war', unit_captured: 'war', nation_eliminated: 'alert',
 };
 function logHtml() {
   return logLines.filter((l) => logKind === "all" || l.head || l.bad || (logKind === "other" ? !l.kind : l.kind === logKind)).map((l) => `<div class="${l.bad ? 'bad' : l.head ? 'head' : l.kind ?? ''}">${esc(l.text)}</div>`).join('');
@@ -888,10 +893,10 @@ const EVENT_TEXT = {
   city_management_changed: e => `${cityName(e.city)} ${e.enabled ? '恢复国家管理' : '改为手动管理'}`,
   gold_assist_changed: e => `${cityName(e.city)} ${e.enabled ? '开启金币补足建设' : '停止金币补足建设'}`,
   gold_assist: e => `${cityName(e.city)} 用 ${e.gold} 金补足${e.project} ${e.production} 点生产力`,
-  development_started: e => `${cityName(e.city)} 开始建设${game.G.rules.buildings[e.facility].name}，工期 ${e.turns} 回合`,
+  development_started: e => `${cityName(e.city)} 开始${e.repair ? '修复' : '建设'}${game.G.rules.buildings[e.facility].name}，工期 ${e.turns} 回合`,
   directive_report: e => `${e.city ? cityName(e.city) : game.nationOf(e.nation)?.name ?? '国家'}：${e.reason}`,
   combat: (e) => `${e.kind === 'air' ? '起飞出击，' : ''}${KIND_TEXT[e.kind] ?? "远程攻击"}：敌方损失 ${e.damage}${e.retaliation ? `，己方损失 ${e.retaliation}` : ""}${e.suppressed?.length ? `，压制 ${e.suppressed.length} 支部队的驻守` : ""}${e.kind === 'air' ? (e.attacker_hp > 0 ? '，返航降落' : '，飞机没能返航') : ''}`,
-  anti_air_fire: (e) => `高射炮对来袭飞机开火：飞机损失 ${e.damage}${e.target_hp <= 0 ? "，被击落" : ""}`,
+  anti_air_fire: (e) => `${e.phase === 'enter' ? '敌机飞进防空圈' : e.phase === 'leave' ? '敌机飞出防空圈' : '防空火力开火'}：飞机损失 ${e.damage}${e.target_hp <= 0 ? "，被击落" : ""}`,
   unit_destroyed: (e) => `${unitName(e.unit_type)} 损失${e.reason ? `（${e.reason}）` : ""}`,
   unit_moved: (e) => `部队沿路线移动 ${e.path.length-1} 格`,
   group_formed: (e) => `${e.units.length} 支部队合成编队，按最慢成员移动`,
@@ -915,7 +920,10 @@ const EVENT_TEXT = {
   disembarked: (e) => `${unitName(e.unit_type)} 下船登陆`,
   unit_captured: (e) => `${game.nationOf(e.nation)?.name ?? ''} 俘虏了${game.nationOf(e.previous)?.name ?? ''}的${unitName(e.unit_type)}`,
   nation_eliminated: (e) => `${e.name} 灭亡`,
-  air_sortie: (e) => `${unitName(e.unit_type)} 起飞出击，飞往目标上空（下回合攻击，再下回合返航）`,
+  air_sortie: (e) => e.fighter ? `${unitName(e.unit_type)} 起飞出击，飞到就打，之后留空巡逻` : `${unitName(e.unit_type)} 起飞出击，飞往目标上空（下回合轰炸，再下回合返航）`,
+  air_recalled: (e) => `${unitName(e.unit_type)} 奉命返航`,
+  facility_bombed: (e) => `${game.nationOf(e.nation)?.name ?? ''} 的轰炸机炸坏了${game.nationOf(e.victim)?.name ?? ''}的${game.G.rules.buildings[e.facility]?.name ?? '设施'}（修好前不能用）`,
+  facility_repaired: (e) => `${cityName(e.city)} 修好了${game.G.rules.buildings[e.facility]?.name ?? '设施'}`,
   air_returned: (e) => `${unitName(e.unit_type)} 返航降落`,
   road_demolished: (e) => `${game.nationOf(e.nation)?.name ?? ''} 拆掉了 ${e.edges.length} 段道路`,
   pillaged: (e) => `${game.nationOf(e.nation)?.name ?? e.nation} 破坏了${e.city ? cityName(e.city) + '的' : ''}${e.target}，掠走 ${e.loot} 金`,
@@ -1080,7 +1088,8 @@ function renderLegend() {
 
 function unitStatus(u) {
   if (u.task) return `施工中：${game.G.rules.buildings[u.task.facility].name}（还剩 ${u.task.turns_left} 回合）`;
-  if (u.sortie) return u.sortie === 'outbound' ? '出击中：在目标上空，下回合攻击' : '返航中：下回合降落';
+  if (u.sortie === 'patrol') return `空中巡逻：还能留空 ${u.patrol_left ?? 0} 回合（可继续攻击，或下令返航）`;
+  if (u.sortie) return u.sortie === 'outbound' ? '出击中：在目标上空，下回合轰炸' : '返航中：本回合降落';
   if (u.destination) return `行军中 → (${u.destination[0]}, ${u.destination[1]})`;
   if (u.fortified) return "驻守";
   const corps = u.corps != null ? game.G.units.get(u.corps) : null;
@@ -1205,7 +1214,7 @@ function facilityCard(info) {
   const box = document.createElement("div"); box.className = "card settlement-card";
   box.innerHTML = `<div class="settlement-hero"><div class="settlement-title"><small>城外设施</small><b>${esc(def.name)}</b><span>${esc(info.owner?.name ?? "无主地")}</span></div></div>` +
     `<div class="settlement-body">${xpHtml(game.facilityProgress(info.tile),"facility")}<h3 style="margin-top:0">设施基础产出</h3>${settlementYields(def.yields)}` +
-    `<div class="kv"><span>所需人口</span><b>${def.workers ?? 0}</b><span>维护费</span><b>${def.upkeep ?? 0} / 回合</b></div></div>`;
+    `<div class="kv"><span>所需人口</span><b>${def.workers ?? 0}</b><span>维护费</span><b>${def.upkeep ?? 0} / 回合</b>${game.G.damaged?.has(info.tile) ? '<span>状态</span><b class="danger">被炸坏：修好前不产出、不能起降</b>' : ''}</div></div>`;
   const nation = info.owner ? game.nationOf(info.owner.id) : null;
   const terrain = terrainInfo(info.col, info.row);
   settlementPreview(box, (ctx, x, y, z) => game.drawFacilityTile(ctx, def.icon, x, y, z, nation?.rgb ?? [120,120,120], terrain, info.tile));
@@ -1443,6 +1452,10 @@ function renderRuleSummary() {
     ["陆军移速", `${pct("land_speed")} · 实际 ×${land.toFixed(2)}`],
     ["海军移速", `${pct("sea_speed")} · 实际 ×${sea.toFixed(2)}`],
     ["城市范围", `${pct("city_size")} · 实际 ×${city.toFixed(2)}`],
+    ["飞机半径", pct("air_range")],
+    ["海军射程", pct("naval_range")],
+    ["炮兵射程", pct("artillery_range")],
+    ["地区承载", pct("capacity")],
     ["起始金币", pct("start_gold")],
     ["军费", pct("upkeep")],
   ].map(([k, v]) => `<span>${k}</span><b>${esc(v)}</b>`).join("");
@@ -1649,11 +1662,14 @@ function tacticalCard(actor) {
   }
   if(unit)buttons.appendChild(commandButton('移动','move',()=>setCommandMode('move'),commandBusy||move<=0));
   const air=unit&&def.domain==='air';
-  if(!unit||def.category==='military')buttons.appendChild(commandButton(air?'出击':'攻击','attack',()=>setCommandMode('attack'),commandBusy||!!actor.attack_blocked,actor.attack_blocked??(air?'出击三回合：这回合起飞飞到目标上空，下回合攻击，再下回合返航降落；在空中会挨防空炮、被敌机拦截':'')));
+  const fighterPlane=air&&def.tags?.includes('air_superiority');
+  const airTip=fighterPlane?'战斗机：起飞当回合就攻击，之后最多留空 3 回合，每回合可再攻击机场作战半径内的目标；下令返航后降落':'轰炸机：起飞飞到目标上空 → 下回合轰炸（可以炸坏设施，机场优先）→ 再下回合返航降落';
+  if(!unit||def.category==='military')buttons.appendChild(commandButton(air?(actor.sortie?'攻击':'出击'):'攻击','attack',()=>setCommandMode('attack'),commandBusy||!!actor.attack_blocked,actor.attack_blocked??(air?airTip+'；航线进出敌方防空圈（高射炮、战舰）各挨一次':'')));
   if(unit){
     if(def.tags?.includes('found_city'))buttons.appendChild(commandButton('建立城市','group',()=>executeCommand(actorOrder('found_city')),commandBusy||!!game.G.tactics?.found_city_blocked,game.G.tactics?.found_city_blocked??''));
     buttons.appendChild(commandButton(actor.managed?'接管单位':'交回单位 AI','group',()=>executeCommand(actorOrder('unit_management',{enabled:!actor.managed})),commandBusy));
-    buttons.appendChild(commandButton('驻守','fortify',()=>executeCommand(actorOrder('fortify')),commandBusy));
+    if(air&&actor.sortie==='patrol')buttons.appendChild(commandButton('返航','fortify',()=>executeCommand(actorOrder('fortify')),commandBusy,'本回合飞回机场降落（降落占一个回合）'));
+    else if(!actor.sortie)buttons.appendChild(commandButton('驻守','fortify',()=>executeCommand(actorOrder('fortify')),commandBusy));
     if(def.domain==='land'){const ship=game.G.tactics?.embark;buttons.appendChild(commandButton('登船','move',()=>executeCommand(actorOrder('embark')),commandBusy||!ship,ship?`登上旁边的${ship}（用掉本回合行动，当回合船就能起航）`:(game.G.tactics?.embark_blocked??'')));}
     for(const r of game.G.tactics?.lay_road??[])buttons.appendChild(commandButton(`修路·${r.dir} ${r.cost}金`,'move',()=>executeCommand(actorOrder('lay_road',{to:r.to})),commandBusy,`工兵往${r.dir}修一段${r.kind==='bridge'?'桥':r.kind==='tunnel'?'隧道':'路'}（${r.cost} 金，用掉本回合行动）；道路上移动快 3 倍`));
     if(def.domain==='land'&&game.G.tactics&&!game.G.tactics.demolish_blocked)buttons.appendChild(commandButton('拆路','pillage',()=>executeCommand(actorOrder('demolish_road')),commandBusy,'拆掉连到脚下这一格的本国道路，拖慢来犯之敌（用掉本回合行动）'));

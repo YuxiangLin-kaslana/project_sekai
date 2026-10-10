@@ -140,6 +140,9 @@ class UnitType(_Strict):
     )  # 打部队的伤害（百分比；不改战斗力，不影响反击）
     damage_vs_city: int = Field(100, ge=0, le=500)  # 打城市（城防）的伤害（百分比）
     torpedo: int = Field(0, ge=0)  # 鱼雷：只打舰船，射程 range（近距离），伤害高
+    deck_gun: int = Field(0, ge=0)  # 驱逐舰甲板炮：没有敌舰时打岸上部队 / 城市（射程 range）
+    flak: int = Field(0, ge=0)  # 舰艇自带防空火力：敌机飞进 / 飞出 flak_range 圈时各开火一次
+    flak_range: int = Field(2, ge=1)
     carry: int = Field(0, ge=0)  # 舰船能载运几支陆军（登船 / 下船）
     air_capacity: int = Field(0, ge=0)  # 航空母舰能搭载几支航空单位（移动机场）
     moves: int = Field(2, ge=1)  # 每回合移动力

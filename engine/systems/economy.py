@@ -257,10 +257,11 @@ def resolve(ctx: StepContext) -> None:
         if p is None:
             continue
         b = rules.buildings[p.facility]
-        due = b.cost - p.paid
+        total = p.cost(rules)
+        due = total - p.paid
         if due <= 0:
             continue
-        installment = due if p.turns_left <= 0 else min(due, -(-b.cost // b.build_turns))
+        installment = due if p.turns_left <= 0 else min(due, -(-total // b.build_turns))
         pay = min(installment, city_yields(state, rules, city).production)
         p.paid += pay
         paid[city.id] = pay

@@ -231,6 +231,15 @@ def _apply(ctx: StepContext, order: Order) -> None:
         return
 
     unit = _unit(ctx, nation, order.unit)
+    if unit.sortie is not None and isinstance(order, Fortify):
+        # 在空中的战斗机“驻守”= 返航：本回合降落
+        if unit.sortie["stage"] != "patrol":
+            raise Rejected("on_sortie", "轰炸机按航线飞完三回合，不能中途返航")
+        from engine.systems.air import recall
+
+        recall(unit)
+        log.add("air_recalled", unit=order.unit, unit_type=unit.type, tile=unit.tile)
+        return
     if unit.sortie is not None and not isinstance(order, (UnitManagement, Attack)):
         raise Rejected("on_sortie", "飞机出击任务中（飞往目标 / 返航），完成前不能下别的命令")
     if unit.layer == "cargo" and not isinstance(order, (Disembark, UnitManagement, LeaveCorps)):

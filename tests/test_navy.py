@@ -61,9 +61,11 @@ def test_three_warship_tiers_differ_in_speed_cargo_and_reach():
 def test_destroyer_torpedoes_only_hit_ships_hard_at_close_range(board):
     tin = add(board, "destroyer", 1, 6, 3)
     target = add(board, "cruiser", 2, 7, 3)
-    add(board, "infantry", 2, 4, 3)  # 岸上的步兵：鱼雷打不到
+    shore = add(board, "infantry", 2, 4, 3)  # 岸上的步兵：鱼雷打不到，用甲板炮打
     targets = {t["tile"]: t for t in tactics(board, RULES, tin)["targets"]}
-    assert set(targets) == {target.tile}
+    assert set(targets) == {target.tile, shore.tile}
+    gun = targets[shore.tile]
+    assert gun["kind"] == "ranged" and 0 < gun["damage"] < targets[target.tile]["damage"]
     info = targets[target.tile]
     assert info["kind"] == "torpedo" and info["damage"] >= 50
     assert {"side": "attacker", "label": "对部队火力", "value": 50} in info["modifiers"]
@@ -240,3 +242,14 @@ def test_ships_sail_much_faster_than_armies():
     land = RULES.units["infantry"].moves
     for kind in ("destroyer", "cruiser", "battleship", "carrier", "transport"):
         assert RULES.units[kind].moves >= 2 * land
+
+
+def test_lone_admiral_at_sea_is_captured_by_an_adjacent_warship(board):
+    from engine.systems import generals
+
+    boss = add(board, "admiral", 2, 8, 3)
+    generals.appoint(board, RULES, boss)
+    ship = add(board, "cruiser", 1, 7, 3)
+    out = act(board, order(ship, "attack", to=[8, 3]))
+    assert not out.rejected and out.state.units[boss.id].nation == 1
+    assert out.state.units[ship.id].tile == boss.tile

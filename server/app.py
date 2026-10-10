@@ -215,9 +215,23 @@ class GameCreate(BaseModel):
     city_size: int = Field(100, ge=50, le=200)
     start_gold: int = Field(100, ge=0, le=1000)
     upkeep: int = Field(100, ge=0, le=300)
+    air_range: int = Field(100, ge=50, le=300)
+    naval_range: int = Field(100, ge=50, le=300)
+    artillery_range: int = Field(100, ge=50, le=300)
+    capacity: int = Field(100, ge=50, le=400)
 
 
-TUNING_KEYS = ("land_speed", "sea_speed", "city_size", "start_gold", "upkeep")
+TUNING_KEYS = (
+    "land_speed",
+    "sea_speed",
+    "city_size",
+    "start_gold",
+    "upkeep",
+    "air_range",
+    "naval_range",
+    "artillery_range",
+    "capacity",
+)
 
 
 class TurnSubmit(BaseModel):

@@ -78,6 +78,11 @@ def has_room(state: GameState, rules: Ruleset, unit: Unit, tile: int) -> bool:
     )
 
 
+def air_radius(grid, ut) -> int:
+    """飞机的作战半径（也是转场半径）：单位表的 range × 开局设置 air_range%。"""
+    return max(1, round(ut.range * grid.tuning.get("air_range", 100) / 100))
+
+
 def unit_moves(grid, ut) -> int:
     """一回合的移动力：陆军、舰船随地图放大（地图尺度的平方根：80×50 不变，128×80 约 1.26 倍，
     800×460 约 3.1 倍），大地图上走得过来；飞机不变（作战半径另算）。"""
@@ -167,7 +172,9 @@ def local_step_problem(ctx, unit, a, b, final=True):
     s, rules = ctx.state, ctx.rules
     ut = rules.units[unit.type]
     if ut.domain == "air":
-        if not is_air_base(s, rules, unit.nation, b) or s.grid.distance(a, b) > ut.range:
+        if not is_air_base(s, rules, unit.nation, b) or s.grid.distance(a, b) > air_radius(
+            s.grid, ut
+        ):
             return "超出本国基地转场范围"
     elif b not in s.grid.neighbors_of(a):
         return "路线地块不相邻"
@@ -209,7 +216,7 @@ def movement_map(state, rules, unit, cost=None) -> tuple[dict[int, int], dict[in
     if budget <= 0:
         return best, parents
     if ut.domain == "air":
-        radius = min(rules.units[u.type].range for u in members)
+        radius = min(air_radius(state.grid, rules.units[u.type]) for u in members)
         for t in state.grid.within(unit.tile, radius):
             if t != unit.tile and t not in blocked and is_air_base(state, rules, unit.nation, t):
                 best[t], parents[t] = 0, unit.tile
@@ -279,7 +286,9 @@ def move_target_problem(ctx: StepContext, unit: Unit, tile: int) -> str | None:
     if ut.domain == "air":
         if not is_air_base(state, rules, unit.nation, tile):
             return "航空单位只能转场到本国城市或机场"
-        radius = min(rules.units[u.type].range for u in group_members(state, unit))
+        radius = min(
+            air_radius(state.grid, rules.units[u.type]) for u in group_members(state, unit)
+        )
         if state.grid.distance(unit.tile, tile) > radius:
             return f"超出转场半径（{radius} 格）"
     city = state.city_at(tile)
