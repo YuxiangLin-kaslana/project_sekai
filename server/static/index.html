@@ -167,6 +167,33 @@
   .rel.war { background: rgba(208, 87, 63, 0.25); color: #f0a08c; }
   .rel.peace { background: rgba(127, 168, 131, 0.2); color: #a9d0ac; }
   .rel.alliance { background: rgba(110, 160, 220, 0.25); color: #a9c9f0; }
+  .rel-meter { position: relative; display: inline-block; vertical-align: middle; width: 64px; height: 12px; margin-left: 6px; border-radius: 6px; background: rgba(255, 255, 255, 0.07); overflow: hidden; }
+  .rel-meter i { position: absolute; left: 0; top: 0; bottom: 0; background: rgba(127, 168, 131, 0.45); }
+  .rel-meter i.war { background: rgba(208, 87, 63, 0.55); }
+  .rel-meter i.alliance { background: rgba(110, 160, 220, 0.55); }
+  .rel-meter b { position: relative; display: block; text-align: center; font-size: 10px; line-height: 12px; font-weight: 600; color: var(--text); }
+  .md { font-size: 13px; line-height: 1.6; color: var(--text); }
+  .md h2 { font-size: 15px; margin: 18px 0 6px; color: var(--gold); }
+  .md h3 { font-size: 14px; margin: 14px 0 4px; }
+  .md h4 { font-size: 13px; margin: 10px 0 4px; color: var(--muted); }
+  .md p { margin: 6px 0; }
+  .md ul, .md ol { margin: 4px 0; padding-left: 18px; }
+  .md li.sub { margin-left: 16px; }
+  .md code { font-size: 12px; padding: 0 3px; border-radius: 3px; background: rgba(255, 255, 255, 0.08); }
+  .md hr { border: 0; border-top: 1px solid var(--line); margin: 12px 0; }
+  .md-table { overflow-x: auto; margin: 6px 0; }
+  .md table { border-collapse: collapse; font-size: 12px; min-width: 100%; }
+  .md th, .md td { border: 1px solid var(--line); padding: 3px 6px; text-align: left; vertical-align: top; }
+  .md th { background: rgba(255, 255, 255, 0.05); white-space: nowrap; }
+  .tech-era { margin: 10px 0 4px; font-size: 11px; letter-spacing: 0.08em; color: var(--gold); }
+  .tech-row { display: grid; grid-template-columns: 1fr auto auto; gap: 8px; align-items: center; padding: 5px 4px; border-bottom: 1px solid var(--line); font-size: 13px; }
+  .tech-row .sub { display: block; color: var(--muted); font-size: 11px; }
+  .tech-row .track { display: block; height: 4px; margin-top: 4px; border-radius: 2px; background: rgba(255, 255, 255, 0.08); overflow: hidden; }
+  .tech-row .track i { display: block; height: 100%; background: var(--gold); }
+  .tech-row.done b { color: #a9d0ac; }
+  .tech-row.current { background: rgba(216, 184, 120, 0.08); }
+  .tech-row.locked { opacity: 0.55; }
+  .tech-row button { padding: 3px 8px; font-size: 12px; }
   .offer-card { margin-top: 8px; padding: 8px 10px; border: 1px solid rgba(216, 184, 120, 0.5); border-radius: 8px; background: rgba(216, 184, 120, 0.08); font-size: 13px; display: flex; gap: 6px; align-items: center; }
   .offer-card span { flex: 1; }
   .check-row { display: flex; align-items: center; gap: 8px; margin: 8px 0; font-size: 13px; color: var(--text); }
@@ -537,7 +564,10 @@
         <div class="filter-row"><label class="hint" for="diplo-nation" style="align-self:center">视角</label><select id="diplo-nation" aria-label="外交视角国家"></select></div>
         <div id="diplo-offers"></div>
         <div class="list" id="diplo-list"></div>
-        <p class="hint">和平：不能攻击，边境关闭（部队进不了对方领土）；同盟：开放边境，对方被宣战时一起参战；求和、结盟向 AI 国家提出时对方当场答复，向玩家国家提出时等对方处理。和约签订后 15 回合内不能再宣战。</p>
+        <p class="hint">关系值低于 0% 两国开战，高于 100% 结盟。和平：不能攻击，边境关闭（部队进不了对方领土）；同盟：开放边境，对方被宣战时一起参战；求和、结盟向 AI 国家提出时对方当场答复，向玩家国家提出时等对方处理。和约签订后 15 回合内不能再宣战。</p>
+        <div class="list-head"><h3>科技</h3><small id="tech-summary"></small></div>
+        <div class="list" id="tech-list"></div>
+        <p class="hint">科研值每回合投进当前研究；研究完给对应兵种加战斗力（科技不解锁东西，所有兵种、建筑开局就能造）。AI 国家自动选研究方向。</p>
       </section>
 
       <!-- ================= 城市 ================= -->
@@ -590,7 +620,8 @@
         <div class="kv" id="rule-summary"><span class="hint">开局后显示</span></div>
         <h3>兵牌图例</h3>
         <div class="legend-units" id="unit-legend"></div>
-        <p class="hint">完整规则见仓库里的《游戏规则.md》。快捷键：<kbd>1</kbd>–<kbd>8</kbd> 切换分类，<kbd>H</kbd> 收起侧边栏。</p>
+        <details class="fold rules-doc" id="rules-doc-fold"><summary>完整规则</summary><div class="md" id="rules-doc"><span class="hint">正在加载…</span></div></details>
+        <p class="hint">快捷键：<kbd>1</kbd>–<kbd>8</kbd> 切换分类，<kbd>H</kbd> 收起侧边栏。</p>
       </section>
     </div>
     <div class="resizer" id="resizer" title="拖动调整侧边栏大小"></div>
@@ -918,13 +949,14 @@ const EVENT_KIND = {
   city_unrest: 'alert', city_independence: 'alert', famine: 'alert', production_blocked: 'alert',
   city_founded: 'build', building_completed: 'build', facility_built: 'build', unit_created: 'build',
   level_up: 'build', gold_assist: 'build', facility_repaired: 'build',
-  facility_bombed: 'war', unit_captured: 'war', nation_eliminated: 'alert',
+  facility_bombed: 'war', unit_captured: 'war', nation_eliminated: 'alert', base_fire: 'war', district_captured: 'war',
+  tech_researched: 'build', road_built: 'build',
   war_declared: 'alert', peace_signed: 'alert', alliance_formed: 'alert', alliance_broken: 'alert', diplomatic_offer: 'alert',
 };
 function logHtml() {
   return logLines.filter((l) => logKind === "all" || l.head || l.bad || (logKind === "other" ? !l.kind : l.kind === logKind)).map((l) => `<div class="${l.bad ? 'bad' : l.head ? 'head' : l.kind ?? ''}">${esc(l.text)}</div>`).join('');
 }
-const KIND_TEXT = { melee: "近战交锋", air: "航空打击", ranged: "远程攻击", anti_air: "防空射击", torpedo: "鱼雷攻击", capture: "俘虏平民" };
+const KIND_TEXT = { melee: "近战交锋", air: "航空打击", ranged: "远程攻击", anti_air: "防空射击", torpedo: "鱼雷攻击", capture: "舰队开进港口" };
 const EVENT_TEXT = {
   policy_changed: e => `${game.nationOf(e.nation)?.name ?? e.nation} ${e.enabled ? '开启城市托管 · ' + (game.G.rules.city_policies[e.policy]?.name ?? e.policy) : '暂停城市托管'}`,
   city_management_changed: e => `${cityName(e.city)} ${e.enabled ? '恢复国家管理' : '改为手动管理'}`,
@@ -943,7 +975,12 @@ const EVENT_TEXT = {
   corps_left: (e) => `一支部队离开${e.title || '军团'}`,
   city_captured: (e) => `${cityName(e.city)} 被占领`,
   level_up: (e) => `${e.kind === 'unit' ? '部队晋升' : e.kind === 'city' ? '城市发展' : '设施发展'}至 Lv.${e.level}`,
-  road_built: (e) => `修建 ${e.segments.length} 段道路，花费 ${e.cost} 金`,
+  road_built: (e) => `${e.city ? cityName(e.city) + ' ' : ''}修通 ${e.segments.length} 段道路${e.cost ? `（${e.cost} 生产力）` : ''}`,
+  road_planned: (e) => `${cityName(e.city)} 把修路排进生产队列（${e.path.length - 1} 格，${e.cost} 生产力）`,
+  base_fire: (e) => `${game.nationOf(e.nation)?.name ?? ''}的${game.G.rules.buildings[e.facility]?.name ?? '军事基地'}炮击敌军：敌方损失 ${e.damage}${e.target_hp <= 0 ? '，被消灭' : ''}`,
+  district_captured: (e) => `${game.nationOf(e.nation)?.name ?? e.nation} 占领了${game.nationOf(e.previous)?.name ?? ''}的${game.G.rules.buildings[e.facility]?.name ?? '区域'}${e.tiles?.length > 1 ? `，连同 ${e.tiles.length - 1} 格土地` : ''}，划归 ${cityName(e.city)}`,
+  tech_researched: (e) => `${game.nationOf(e.nation)?.name ?? e.nation} 研究完成：${e.name}`,
+  research_set: (e) => `${game.nationOf(e.nation)?.name ?? e.nation} 开始研究 ${game.G.rules.techs?.[e.tech]?.name ?? e.tech}`,
   city_founded: (e) => `建立城市 ${e.name}`,
   unit_created: (e) => `${unitName(e.unit_type)} 编成`,
   building_completed: (e) => `${cityName(e.city)} 建成 ${game.G.rules.buildings[e.building].name}`,
@@ -1156,15 +1193,30 @@ function settlementYields(y = {}) {
   return `<div class="settlement-yields">${[["food", "粮食"], ["production", "生产"], ["gold", "金钱"], ["science", "科研"]].map(([k, label]) => `<span><b>${y[k] ?? 0}</b>${label}</span>`).join("")}</div>`;
 }
 
+function districtList(city) {
+  // 区域（住宅区、工厂……）和改良设施：劳作人数、是否有道路连到市中心、是否被炸坏
+  const rows = (city.districts ?? []).map(([tile, id, workers, linked, damaged]) => ({tile, def: game.G.rules.buildings[id], workers, linked, damaged})).filter((d) => d.def);
+  if (!rows.length) return "";
+  const districts = rows.filter((d) => d.def.placement === "district"), improvements = rows.filter((d) => d.def.placement !== "district");
+  const tag = (d) => {
+    const jobs = d.def.jobs ? ` · ${d.workers}/${d.def.jobs} 人` : "";
+    const road = d.def.placement === "district" && (d.def.road_housing || d.def.road_yields) ? (d.linked ? " · 已连路" : " · 未连路") : "";
+    return `<span class="${d.damaged ? "danger" : ""}" title="(${d.tile % game.G.W}, ${Math.floor(d.tile / game.G.W)})${d.damaged ? " 已损坏，不产出" : ""}">${esc(d.def.name)}${jobs}${road}${d.damaged ? " · 损坏" : ""}</span>`;
+  };
+  let html = `<h3>区域 <small>${districts.length}</small></h3><div class="settlement-buildings">${districts.map(tag).join("") || '<span class="empty">还没有区域</span>'}</div>`;
+  if (improvements.length) html += `<h3>改良设施 <small>${improvements.length}</small></h3><div class="settlement-buildings">${improvements.map(tag).join("")}</div>`;
+  return html;
+}
 function cityCard(city) {
   const nation = game.nationOf(city.nation);
   const box = document.createElement("div"); box.className = "card settlement-card";
   const growth = Math.min(100, city.food / Math.max(1, city.food_to_grow) * 100);
   let html = `<div class="settlement-hero"><div class="settlement-title"><small>${city.capital ? "首都" : "城市"}</small><b>${esc(city.name)}</b><span>${esc(nation.name)}</span></div></div>` +
     `<div class="settlement-body">${xpHtml(city,"city")}${settlementYields(city.yields)}` +
-    `<div class="kv"><span>人口</span><b>${city.population}</b><span>本城粮食结余</span><b>${signed(city.food_balance ?? city.yields.food-city.population*2)} / 回合</b><span>城防</span><b>${city.defense}</b><span>辖区半径</span><b>${city.radius} 格</b><span>稳定度</span><b class="${(city.stability ?? 100) < (game.G.rules.stability_unrest ?? 30) ? 'danger' : ''}">${city.stability ?? 100} / 100${city.stability_lack?.length ? ' · ' + city.stability_lack.join('、') : ''}${city.garrisoned && city.stability_lack?.length ? '（驻军减轻）' : ''}</b></div>` +
+    `<div class="kv"><span>人口 / 人口上限</span><b>${city.population} / ${city.pop_cap ?? '—'}</b><span>住房</span><b title="人口上限 = 住房 − 已征召（每造一个单位永久占一个住房）">${city.housing ?? '—'}（已征召 ${city.drafted ?? 0}）</b><span>本城粮食结余</span><b>${signed(city.food_balance ?? city.yields.food-city.population)} / 回合</b><span>城防值</span><b title="城市本体 + 守城近战部队生命的一半；打到 0 才能占领">${city.defense_value ?? city.hp} / ${city.max_hp ?? '—'}${city.garrison?.length ? `（守军 ${city.garrison.length}）` : ''}</b><span>稳定度</span><b class="${(city.stability ?? 100) < (game.G.rules.stability_unrest ?? 30) ? 'danger' : ''}">${city.stability ?? 100} / 100${city.stability_lack?.length ? ' · ' + city.stability_lack.join('、') : ''}${city.garrisoned && city.stability_lack?.length ? '（驻军减轻）' : ''}</b></div>` +
     `<div class="growth-line"><div><span>人口增长</span><b>存粮 ${city.food} / ${city.food_to_grow}</b></div><div class="track"><i style="width:${growth}%"></i></div></div>` +
-    `<h3>市中心建筑 <small>${city.buildings.length}</small></h3><div class="settlement-buildings">${city.buildings.map(b => `<span>${esc(game.G.rules.buildings[b].name)}</span>`).join("")}</div>`;
+    `<h3>市中心建筑 <small>${city.buildings.length}</small></h3><div class="settlement-buildings">${city.buildings.map(b => `<span>${esc(game.G.rules.buildings[b].name)}</span>`).join("")}</div>` +
+    districtList(city);
   html += '<h3>城市生产</h3><div class="queue">';
   if (!city.queue.length) html += '<div class="empty">当前没有生产项目</div>';
   city.queue.forEach((item, i) => {
@@ -1179,7 +1231,7 @@ function cityCard(city) {
   management.innerHTML=`<div class="card-head"><b>${managed?'国家管理 · '+esc(game.G.rules.city_policies[nation.policy]?.name??'均衡发展'):'手动管理'}</b><span class="grow"></span></div><p>${esc(managed ? report.reason ?? '下一回合按国家方针安排' : city.managed ? '国家尚未开启托管' : '手动安排优先，国家不会改动本城队列')}</p>${(managed?report.alerts??[]:[]).map(a=>`<div class="management-alert">${esc(a)}</div>`).join('')}`;
   const environment=document.createElement('p');environment.className='hint';
   const env=city.environment??{},net=city.network??{};
-  environment.textContent=`环境 ${env.description??'—'} · 区域城市 ${env.regional_cities??0} / ${env.regional_capacity??0} · 当地间距 ${env.min_distance??4} 格。城市人口和辖区无固定上限。${net.production_percent?' 首都道路：生产 +'+net.production_percent+'%。':''}${net.trade_gold?' 对外道路贸易：+'+net.trade_gold+' 金 / 回合。':''}`;
+  environment.textContent=`环境 ${env.description??'—'} · 区域城市 ${env.regional_cities??0} / ${env.regional_capacity??0} · 当地间距 ${env.min_distance??4} 格。人口受住房限制；住宅区以自身为中心向外扩辖区，遇到外国领土就停。${net.production_percent?' 首都道路：生产 +'+net.production_percent+'%。':''}${net.trade_gold?' 对外道路贸易：+'+net.trade_gold+' 金 / 回合。':''}`;
   box.querySelector('.settlement-body').appendChild(environment);
   const manageButton=document.createElement('button');manageButton.textContent=city.managed?'接管本城':'交回国家管理';manageButton.disabled=commandBusy;
   manageButton.onclick=()=>executeCommand({type:'city_management',issuer:city.nation,city:city.id,enabled:!city.managed});
@@ -1485,6 +1537,56 @@ function renderBrief() {
   el.innerHTML = items.map(([tab, label, v]) => `<button type="button" data-goto="${tab}"><b>${esc(v)}</b>${label}</button>`).join("");
   for (const b of el.querySelectorAll("[data-goto]")) b.onclick = () => openTab(b.dataset.goto);
 }
+// 完整规则文档（剧本目录里的 规则.md）：简单的 Markdown 渲染（标题、表格、列表、粗体、行内代码）
+let rulesDocFor = null;
+async function loadRulesDoc() {
+  const scenario = game.G.rules?.scenario?.id ?? $("scenario")?.value ?? "";
+  if (!scenario || rulesDocFor === scenario) return;
+  const el = $("rules-doc");
+  try {
+    const r = await fetch(`/api/scenarios/${encodeURIComponent(scenario)}/rules-doc`);
+    if (!r.ok) { el.innerHTML = '<span class="hint">这个剧本没有规则文档</span>'; return; }
+    el.innerHTML = markdownHtml((await r.json()).markdown);
+    rulesDocFor = scenario;
+  } catch { el.innerHTML = '<span class="hint">规则文档加载失败</span>'; }
+}
+function markdownHtml(md) {
+  const inline = (t) => esc(t).replace(/\*\*(.+?)\*\*/g, "<b>$1</b>").replace(/`([^`]+)`/g, "<code>$1</code>");
+  const lines = md.split("\n"), out = [];
+  let i = 0;
+  while (i < lines.length) {
+    const line = lines[i];
+    if (!line.trim()) { i++; continue; }
+    const h = line.match(/^(#{1,4})\s+(.*)$/);
+    if (h) { const n = Math.min(4, h[1].length + 1); out.push(`<h${n}>${inline(h[2])}</h${n}>`); i++; continue; }
+    if (/^---+\s*$/.test(line)) { out.push("<hr>"); i++; continue; }
+    if (line.trim().startsWith("|")) {
+      const rows = [];
+      while (i < lines.length && lines[i].trim().startsWith("|")) { rows.push(lines[i].trim()); i++; }
+      const cells = (r) => r.replace(/^\|/, "").replace(/\|$/, "").split("|").map((c) => c.trim());
+      const body = rows.filter((r) => !/^\|[\s:|-]+\|$/.test(r));
+      out.push(`<div class="md-table"><table><thead><tr>${cells(body[0]).map((c) => `<th>${inline(c)}</th>`).join("")}</tr></thead><tbody>${body.slice(1).map((r) => `<tr>${cells(r).map((c) => `<td>${inline(c)}</td>`).join("")}</tr>`).join("")}</tbody></table></div>`);
+      continue;
+    }
+    const li = line.match(/^(\s*)([-*]|\d+\.)\s+(.*)$/);
+    if (li) {
+      const ordered = /\d/.test(li[2]), items = [];
+      while (i < lines.length) {
+        const m = lines[i].match(/^(\s*)([-*]|\d+\.)\s+(.*)$/);
+        if (m) { items.push({ depth: m[1].length >= 2 ? 1 : 0, text: m[3] }); i++; continue; }
+        if (lines[i].trim() && /^\s{2,}/.test(lines[i]) && items.length) { items[items.length - 1].text += " " + lines[i].trim(); i++; continue; }
+        break;
+      }
+      const tag = ordered ? "ol" : "ul";
+      out.push(`<${tag}>${items.map((it) => `<li${it.depth ? ' class="sub"' : ""}>${inline(it.text)}</li>`).join("")}</${tag}>`);
+      continue;
+    }
+    const para = [];
+    while (i < lines.length && lines[i].trim() && !/^(#{1,4}\s|\||---|\s*([-*]|\d+\.)\s)/.test(lines[i])) { para.push(lines[i].trim()); i++; }
+    out.push(`<p>${inline(para.join(""))}</p>`);
+  }
+  return out.join("");
+}
 function renderRuleSummary() {
   const snap = game.G.snap, el = $("rule-summary");
   if (!snap) { el.innerHTML = '<span class="hint">开局后显示</span>'; return; }
@@ -1514,7 +1616,7 @@ function relationOf(a, b) {
   const d = game.G.snap?.diplomacy;
   if (!d || a === b) return null;
   const r = d.relations.find((x) => (x.a === a && x.b === b) || (x.a === b && x.b === a));
-  return r ?? { status: d.default ?? "war", since: 0, truce: null };
+  return r ?? { status: d.default ?? "war", since: 0, truce: null, value: 50 };
 }
 let diploNation = null;
 function renderDiplomacy() {
@@ -1551,7 +1653,9 @@ function renderDiplomacy() {
     row.className = "diplo-row";
     const truce = r.truce && r.truce > snap.turn ? ` · 休战到第 ${r.truce} 回合` : "";
     const since = r.since ? ` · 第 ${r.since} 回合起` : "";
-    row.innerHTML = `<i class="nation-dot" style="background:${n.color}"></i><div>${esc(n.name)}<span class="rel ${r.status}">${REL_TEXT[r.status]}</span><span class="sub">${n.cities} 城 · ${n.units} 兵${since}${truce}</span></div>`;
+    const v = Math.round(r.value ?? 50), tone = v < 0 ? "war" : v >= 100 ? "alliance" : "peace";
+    const meter = `<span class="rel-meter" title="关系值 ${v}%：低于 0% 开战，高于 100% 结盟。接壤、对方军队压境、没地方扩张会下降；有共同的敌国会上升；一国实力太强、只剩 4 国及以下时都会下降"><i class="${tone}" style="width:${Math.max(0, Math.min(100, (v + 50) / 2))}%"></i><b>${v}%</b></span>`;
+    row.innerHTML = `<i class="nation-dot" style="background:${n.color}"></i><div>${esc(n.name)}<span class="rel ${r.status}">${REL_TEXT[r.status]}</span>${meter}<span class="sub">${n.cities} 城 · ${n.units} 兵${since}${truce}</span></div>`;
     const acts = document.createElement("div"); acts.className = "acts";
     const btn = (label, type, title, disabled = false) => {
       const b = document.createElement("button"); b.type = "button"; b.textContent = label; b.title = title; b.disabled = disabled || commandBusy;
@@ -1567,6 +1671,37 @@ function renderDiplomacy() {
     if (r.status === "alliance") btn("解除同盟", "break_alliance", "解除后两国恢复和平（有休战期）");
     row.appendChild(acts);
     list.appendChild(row);
+  }
+  renderTechs();
+}
+
+function renderTechs() {
+  const list = $("tech-list"), sum = $("tech-summary");
+  if (!list) return;
+  list.innerHTML = "";
+  const me = game.nationOf(diploNation), techs = game.G.rules.techs ?? {};
+  if (!me || me.techs == null || !Object.keys(techs).length) { sum.textContent = ""; return; }
+  const done = new Set(me.techs), can = new Set(me.can_research ?? []);
+  const eraName = Object.fromEntries((game.G.rules.eras ?? []).map((e) => [e.id, `${e.name} · ${e.year}`]));
+  sum.textContent = `${eraName[me.era] ?? ""} · 已研究 ${done.size} / ${Object.keys(techs).length} · 科研 ${me.science ?? 0}`;
+  for (const era of game.G.rules.eras ?? []) {
+    const head = document.createElement("div"); head.className = "tech-era"; head.textContent = eraName[era.id];
+    list.appendChild(head);
+    for (const [id, t] of Object.entries(techs).filter(([, t]) => t.era === era.id)) {
+      const row = document.createElement("div");
+      const current = me.research === id, state = done.has(id) ? "done" : current ? "current" : can.has(id) ? "open" : "locked";
+      row.className = `tech-row ${state}`;
+      const need = t.requires.filter((r) => !done.has(r)).map((r) => techs[r]?.name ?? r);
+      const progress = current ? `<span class="track"><i style="width:${Math.min(100, 100 * (me.research_progress ?? 0) / t.cost)}%"></i></span>` : "";
+      row.innerHTML = `<div><b>${state === "done" ? "✓ " : ""}${esc(t.name)}</b><span class="sub">${esc(t.description || "")}${need.length ? ` · 需要 ${esc(need.join("、"))}` : ""}</span>${progress}</div><span class="num">${current ? `${me.research_progress ?? 0} / ` : ""}${t.cost}</span>`;
+      if (state === "open") {
+        const b = document.createElement("button"); b.type = "button"; b.textContent = "研究"; b.disabled = commandBusy;
+        b.title = me.research ? "换研究项目：已投入当前项目的科研值清零" : "开始研究";
+        b.onclick = () => executeCommand({ type: "set_research", issuer: me.id, tech: id });
+        row.appendChild(b);
+      }
+      list.appendChild(row);
+    }
   }
 }
 
@@ -1657,7 +1792,7 @@ function renderVisibleTab() {
   if (tab === "nations") { renderNations(); renderDiplomacy(); }
   if (tab === "cities") { renderCityList(); renderCityManagement(); }
   if (tab === "army") renderArmyList();
-  if (tab === "wiki") renderRuleSummary();
+  if (tab === "wiki") { renderRuleSummary(); loadRulesDoc(); }
 }
 
 // ================================================================ 战术指挥
@@ -1713,7 +1848,7 @@ function updateCommandHint() {
   const visible = !!actor || mode === 'road'; el.hidden = !visible;
   if (!visible) return;
   const name = actor?.type ? unitName(actor.type) : actor?.name ?? '道路规划';
-  const instructions = {inspect:'蓝色：移动范围 · 红色：可攻击目标',move:'点选蓝色格子预览路线',attack:'点选红色目标预览战斗',road: game.G.roadStart == null ? '点选本国陆地作为道路起点' : '点选终点，预览道路与工程费用'};
+  const instructions = {inspect:'蓝色：移动范围 · 红色：可攻击目标',move:'点选蓝色格子预览路线',attack:'点选红色目标预览战斗',road: game.G.roadStart == null ? '点选本国城市作为道路起点' : '点选目标（住宅区 / 工厂 / 本国城市 / 工兵），预览路线与生产力造价'};
   $('command-name').textContent = mode === 'road' ? '道路规划' : `${name}${actor?.formation!=null?' · 编队':''}`;
   $('command-hint').textContent = commandBusy ? '正在执行…' : instructions[mode];
   $('command-cancel').textContent = mode === 'inspect' ? '取消选择' : '取消';
@@ -1781,7 +1916,6 @@ function tacticalCard(actor) {
     if(air&&actor.sortie==='patrol')buttons.appendChild(commandButton('返航','fortify',()=>executeCommand(actorOrder('fortify')),commandBusy,'本回合飞回机场降落（降落占一个回合）'));
     else if(!actor.sortie)buttons.appendChild(commandButton('驻守','fortify',()=>executeCommand(actorOrder('fortify')),commandBusy));
     if(def.domain==='land'){const ship=game.G.tactics?.embark;buttons.appendChild(commandButton('登船','move',()=>executeCommand(actorOrder('embark')),commandBusy||!ship,ship?`登上旁边的${ship}（用掉本回合行动，当回合船就能起航）`:(game.G.tactics?.embark_blocked??'')));}
-    for(const r of game.G.tactics?.lay_road??[])buttons.appendChild(commandButton(`修路·${r.dir} ${r.cost}金`,'move',()=>executeCommand(actorOrder('lay_road',{to:r.to})),commandBusy,`工兵往${r.dir}修一段${r.kind==='bridge'?'桥':r.kind==='tunnel'?'隧道':'路'}（${r.cost} 金，用掉本回合行动）；道路上移动快 3 倍`));
     if(def.domain==='land'&&game.G.tactics&&!game.G.tactics.demolish_blocked)buttons.appendChild(commandButton('拆路','pillage',()=>executeCommand(actorOrder('demolish_road')),commandBusy,'拆掉连到脚下这一格的本国道路，拖慢来犯之敌（用掉本回合行动）'));
     if(def.category==='military'&&def.domain==='land'){const p=game.G.tactics?.pillage;buttons.appendChild(commandButton('破坏','pillage',()=>executeCommand(actorOrder('pillage')),commandBusy||!p,p?`破坏${p.name}，掠走 ${p.loot} 金，所属城市稳定度下降`:(game.G.tactics?.pillage_blocked??'')));}
     if(actor.formation!=null)buttons.appendChild(commandButton('解散编队','group',()=>executeCommand(actorOrder('ungroup')),commandBusy));
@@ -1879,25 +2013,24 @@ function beginRoad(nation, tile = null) {
   if(commandBusy)return;
   ++roadRequest; game.G.layers.roads=true;
   document.querySelector('[data-game-layer="roads"]')?.classList.add("on");
-  game.G.roadNation=nation;game.G.roadStart=tile;game.G.roadPlan=null;
+  const from=tile==null?null:(game.G.snap.cities??[]).find(c=>c.tile===tile&&c.nation===nation);
+  game.G.roadNation=nation;game.G.roadStart=from?tile:null;game.G.roadCity=from?.id??null;game.G.roadPlan=null;
   game.G.actionMode='road';game.G.actor=null;game.setTactics(null);
   renderSelection();updateCommandHint();redraw();
 }
 async function roadClick(tile) {
   const nation=game.G.roadNation;
   if(!nation){showCommandError('先选择修路的国家');return;}
-  const terrain=terrainInfo(tile%world.width,Math.floor(tile/world.width));
-  if(terrain?.water){showCommandError('道路起点和终点要在陆地上，中间的浅水会自动架桥');return;}
+  const city=(game.G.snap.cities??[]).find(c=>c.tile===tile);
   if(game.G.roadStart==null){
-    const owner=game.tileInfo(tile).owner;
-    const ownRoad=(game.G.snap.roads??[]).some(r=>r.nation===nation&&(r.a===tile||r.b===tile));
-    if(owner?.id!==nation&&!ownRoad){showCommandError('请点选本国领土或已有道路的端点');return;}
-    game.G.roadStart=tile;game.select(tile);renderSelection();updateCommandHint();redraw();return;
+    // 第一步：选本国的一座城（道路从它的市中心修出去，花这座城的生产力）
+    if(!city||city.nation!==nation){showCommandError('道路从本国城市的市中心修出去：先点选一座本国城市');return;}
+    game.G.roadStart=tile;game.G.roadCity=city.id;game.G.roadPlan=null;game.select(tile);renderSelection();updateCommandHint();redraw();return;
   }
-  const token=++roadRequest,id=gameId,from=game.G.roadStart;
+  const token=++roadRequest,id=gameId;
   game.G.roadPlan={loading:true};renderSelection();
   try{
-    const data=await api(`/api/games/${encodeURIComponent(id)}/road-plan`,{issuer:nation,start:[from%world.width,Math.floor(from/world.width)],to:[tile%world.width,Math.floor(tile/world.width)]});
+    const data=await api(`/api/games/${encodeURIComponent(id)}/road-plan`,{city:game.G.roadCity,to:[tile%world.width,Math.floor(tile/world.width)]});
     if(token!==roadRequest||id!==gameId||game.G.actionMode!=='road')return;
     if(data.error){game.G.roadPlan=null;showCommandError(data.error);}
     else game.G.roadPlan=data;
@@ -1907,23 +2040,24 @@ async function roadClick(tile) {
 function roadCard(){
   const box=document.createElement('div');box.className='road-panel';
   const plan=game.G.roadPlan, n=game.nationOf(game.G.roadNation);
-  box.innerHTML=`<div class="card-head"><b>道路规划</b><span class="grow"></span><small>${esc(n?.name??'')}</small></div><p class="hint">连接大区与各类地形。过河架桥，穿山开隧道，沼泽铺设堤道；道路每格消耗 ½ 点移动力。</p>`;
+  const city=(game.G.snap.cities??[]).find(c=>c.id===game.G.roadCity&&c.tile===game.G.roadStart);
+  box.innerHTML=`<div class="card-head"><b>道路规划</b><span class="grow"></span><small>${esc(n?.name??'')}</small></div><p class="hint">道路只能从本国城市的市中心修到：还没连上路的住宅区 / 工厂、别的本国城市、工兵所在的位置。按“最少新建”走现有路网，不能修在山峰上，最多跨一格水域。造价是城市的生产力：每格 1，丘陵 2，跨河 3，跨水域 5。</p>`;
   const select=document.createElement('select');select.setAttribute('aria-label','道路建设国家');
-  select.innerHTML=game.G.snap.nations.map(n=>`<option value="${esc(n.id)}" ${n.id===game.G.roadNation?'selected':''}>${esc(n.name)} · ${n.gold} 金</option>`).join('');
+  select.innerHTML=game.G.snap.nations.map(n=>`<option value="${esc(n.id)}" ${n.id===game.G.roadNation?'selected':''}>${esc(n.name)}</option>`).join('');
   select.disabled=commandBusy;select.onchange=()=>beginRoad(select.value);box.appendChild(select);
   const hint=document.createElement('p');hint.className='hint';
-  hint.textContent=plan?.loading?'正在规划最省工程费用的路线…':game.G.roadStart==null?'在地图上选择起点。':'起点已选，点选陆地终点预览。';box.appendChild(hint);
+  hint.textContent=plan?.loading?'正在规划新建最少的路线…':!city?'在地图上点选一座本国城市（道路的起点）。':`从 ${city.name} 出发：点选目标预览路线。`;box.appendChild(hint);
   if(plan?.segments){
-    const names={road:'道路',bridge:'桥梁',tunnel:'隧道',causeway:'堤道'};
+    const names={road:'道路',bridge:'桥梁'};
     const preview=document.createElement('div');preview.className='command-preview';
-    preview.innerHTML=`<small>工程预览 · ${plan.path.length-1} 格</small><b>${plan.cost} 金 <span class="num">/ 可用 ${plan.gold}</span></b><span>${Object.entries(plan.counts).map(([kind,count])=>`${names[kind]} ${count} 段`).join(' · ')||'已全部建成'}</span><span>跨越 ${plan.regions.length} 个大区 · 最多连续跨 3 格浅水</span>`;
-    const b=document.createElement('button');b.className='primary';b.textContent=plan.affordable?(plan.cost?'修建这条道路':'路线已建成'):'资金不足';b.disabled=commandBusy||!plan.affordable||plan.cost===0;
+    preview.innerHTML=`<small>工程预览 · 新建 ${plan.segments.length} 段</small><b>${plan.cost} 生产力</b><span>${Object.entries(plan.counts).map(([kind,count])=>`${names[kind]??kind} ${count} 段`).join(' · ')}</span><span>排进 ${esc(city?.name??'')} 的生产队列，用这座城的生产力修</span>`;
+    const b=document.createElement('button');b.className='primary';b.textContent='加入生产队列';b.disabled=commandBusy;
     b.onclick=()=>{
-      const a=plan.start, end=plan.end;
-      executeCommand({type:'build_road',issuer:game.G.roadNation,start:[a%world.width,Math.floor(a/world.width)],to:[end%world.width,Math.floor(end/world.width)]});
+      const end=plan.target;
+      executeCommand({type:'build_road',issuer:game.G.roadNation,city:`city:${plan.city}`,to:[end%world.width,Math.floor(end/world.width)]});
     };preview.appendChild(b);box.appendChild(preview);
   }
-  const reset=document.createElement('button');reset.textContent='重选起点';reset.disabled=commandBusy;reset.onclick=()=>beginRoad(game.G.roadNation);box.appendChild(reset);
+  const reset=document.createElement('button');reset.textContent='重选城市';reset.disabled=commandBusy;reset.onclick=()=>beginRoad(game.G.roadNation);box.appendChild(reset);
   return box;
 }
 

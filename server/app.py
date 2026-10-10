@@ -309,6 +309,19 @@ def scenario_asset(name: str, path: str):
     return FileResponse(target, headers=LONG_CACHE)
 
 
+@app.get("/api/scenarios/{name}/rules-doc")
+def scenario_rules_doc(name: str) -> dict:
+    """剧本的完整规则文档（rules/<剧本>/规则.md，Markdown），百科页显示。"""
+    from engine.rules.loader import RULES_ROOT
+
+    if name not in SCENARIOS:
+        raise HTTPException(404, "没有这个剧本")
+    doc = RULES_ROOT / name / "规则.md"
+    if not doc.is_file():
+        raise HTTPException(404, "这个剧本没有规则文档")
+    return {"scenario": name, "markdown": doc.read_text("utf-8")}
+
+
 @app.get("/api/scenarios")
 def scenarios() -> list[dict]:
     """可选的剧本（开局页的下拉框）。"""
@@ -478,6 +491,16 @@ def game_tactics(game_id: str, actor: str, col: int | None = None, row: int | No
                 ),
             )
             result["move_tiles"] = [int(t) for t in result["move_tiles"]]
+            # 敌方控制区：走进去就得停（坦克、飞机不受影响）。只给移动范围附近的格子
+            from engine.systems import zoc
+
+            if not zoc.ignores(game.rules, entity):
+                domain = "sea" if game.rules.units[entity.type].domain == "sea" else "land"
+                mask = zoc.mask(s, game.rules, entity.nation, domain)
+                near = {int(t) for t in result["move_tiles"]} | {entity.tile}
+                result["zoc"] = sorted(
+                    {int(n) for t in near for n in s.grid.within(t, 1) if mask[n]}
+                )
             if col is not None and row is not None:
                 try:
                     tile = s.grid.idx(col, row)

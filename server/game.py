@@ -31,6 +31,7 @@ from engine.state import MOVE_STEPS
 from engine.step import step
 from engine.systems.air import PATROL_TURNS
 from engine.systems.cities import (
+    FOOD_PER_POP,
     assign_jobs,
     city_sites,
     city_stat,
@@ -367,6 +368,7 @@ def _snapshot(game: Game, rules: Ruleset) -> dict:
         )
     cities = []
     for cid, c in sorted(s.cities.items()):
+        jobs, linked = assign_jobs(s, rules, c), connected(s, c)
         cities.append(
             {
                 "id": ref("city", cid),
@@ -379,12 +381,17 @@ def _snapshot(game: Game, rules: Ruleset) -> dict:
                 "housing": housing(s, rules, c),
                 "pop_cap": pop_cap(s, rules, c),
                 "drafted": c.drafted,
-                "jobs": {str(t): n for t, n in sorted(assign_jobs(s, rules, c).items())},
+                "jobs": {str(t): n for t, n in sorted(jobs.items())},
                 "linked": sorted(
                     t
                     for t, b in city_sites(s, rules, c)
-                    if b.placement == "district" and t in connected(s, c)
+                    if b.placement == "district" and t in linked
                 ),
+                # 本城的区域和改良设施：[格子, 类型, 劳作人数, 连路, 损坏]
+                "districts": [
+                    [t, b.id, jobs.get(t, 0), t in linked, t in s.damaged]
+                    for t, b in city_sites(s, rules, c)
+                ],
                 "radius": c.radius,
                 "buildings": c.buildings,
                 "queue": c.queue,
@@ -392,7 +399,7 @@ def _snapshot(game: Game, rules: Ruleset) -> dict:
                 "food": c.food,
                 "food_to_grow": food_to_grow(c.population, rules),
                 "yields": outputs[cid].model_dump(),
-                "food_balance": outputs[cid].food - c.population * 2,
+                "food_balance": outputs[cid].food - c.population * FOOD_PER_POP,
                 "network": city_network(s, rules, c),
                 "environment": city_environment(s, rules, c),
                 "managed": c.managed,
@@ -434,6 +441,7 @@ def _snapshot(game: Game, rules: Ruleset) -> dict:
                 "layer": u.layer,
                 "hp": u.hp,
                 "max_hp": rules.units[u.type].hp,
+                "facing": u.facing,  # 朝向 0–5（东、东北、西北、西、西南、东南）：侧面挨打 +30%，背后 +80%
                 "moves_left": u.moves_left,
                 "xp": u.xp,
                 "formation": u.formation,
@@ -507,6 +515,7 @@ def _snapshot(game: Game, rules: Ruleset) -> dict:
                     "status": v["status"],
                     "since": v.get("since", 0),
                     "truce": v.get("truce"),
+                    "value": v.get("value", 50),  # 关系值：低于 0 开战，高于 100 结盟
                 }
                 for k, v in sorted(s.relations.items())
             ],

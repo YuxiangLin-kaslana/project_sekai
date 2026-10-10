@@ -19,7 +19,7 @@ DEFAULT（交战）处理——老存档、测试棋盘照旧；新开的对局�
 - 某国兵力远超其余各国平均 → 大家和它的关系都下降；只剩 4 国及以下 → 所有关系一起下降。
 AI（resolve，每回合在国家 AI 规划之前，按国家编号依次）：关系值低于 0 开战（两边都是 AI 时兵力强的
 一方宣战）、高于 100 结盟；打了 MIN_WAR 回合以上，打不过（兵力不到对方 PEACE_RATIO）或僵持（STALEMATE
-回合没有城市易手）就求和，对方占上风（DOMINATE 倍）且不僵持时拒绝。签和约后关系值回到 30，休战 TRUCE 回合。
+回合没有城市易手）就求和，对方占上风（DOMINATE 倍）且不僵持时拒绝；只剩 FEW_NATIONS 国及以下时占上风的一方僵持也拒绝。签和约后关系值回到 30，休战 TRUCE 回合。
 """
 
 from __future__ import annotations
@@ -253,7 +253,9 @@ def accepts(state, kind, nation, other, pw) -> tuple[bool, str]:
     if kind == "peace":
         rel = relation(state, nation, other)
         stalled = state.turn - rel.get("progress", rel.get("since", 0)) >= STALEMATE
-        if ratio(pw, nation, other) >= DOMINATE and not stalled:
+        few = sum(1 for n in state.nations if state.nation_cities(n)) <= FEW_NATIONS
+        if ratio(pw, nation, other) >= DOMINATE and (not stalled or few):
+            # 占上风不和；只剩几个国家时（统一在望）僵持也不和
             return False, "我方占上风，继续打"
         return True, ""
     if kind == "alliance":

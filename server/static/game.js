@@ -555,6 +555,7 @@ const EDGE_ANGLE = [0, -60, -120, 180, 120, 60].map((d) => (d * Math.PI) / 180);
 const TILE_GROUND = {
   city: "#cbbd9b", farm: "#c3b25a", mine: "#9a8b76", lumber: "#667640", plantation: "#6f8a45",
   oil: "#a8997c", factory: "#a29e94", base: "#ae9f74", airfield: "#93a362", port: "#bcb095",
+  residential: "#b6ab8c", market: "#c9bd98", research: "#a9b39a", quarry: "#b3ad94", fishing: "#6c9db0", pasture: "#9fb46a",
 };
 
 function poly(ctx, pts) {
@@ -1460,7 +1461,136 @@ function portTile(ctx, x, y, z, R, c, info) {
   };
 }
 
+// 住宅区：一片低层住宅，屋顶颜色错落，间杂行道树
+function residentialTile(ctx, x, y, z, R) {
+  const lw = lineWidth(z);
+  groundFill(ctx, x, y, z, "#b9b392");
+  speckle(ctx, x, y, z, R, 50, ["rgba(226,219,190,0.25)", "rgba(96,112,70,0.18)"], 0.014);
+  const roofs = [["#b5644a", "#83432f"], ["#8c6a55", "#634a3a"], ["#7f8b8e", "#596569"], ["#a9774f", "#7a5236"]];
+  for (const [px, py] of lattice(0.34, 0.86, 0.5, R)) {
+    const bx = x + px * z, by = y + py * z;
+    if (R() < 0.18) { roundTree(ctx, bx, by, z * 0.07, R() < 0.5); continue; }
+    const a = z * (0.09 + R() * 0.035), h = z * (0.08 + R() * 0.07);
+    house(ctx, bx, by, a, h, roofs[Math.floor(R() * roofs.length)], lw);
+  }
+}
+// 商业中心：广场上的市场棚和一座商会大楼
+function marketTile(ctx, x, y, z, R) {
+  const lw = lineWidth(z);
+  groundFill(ctx, x, y, z, "#c9bd98");
+  blob(ctx, x, y + z * 0.05, z * 0.55, z * 0.3, "rgba(232,222,190,0.6)");
+  speckle(ctx, x, y, z, R, 40, ["rgba(120,104,72,0.18)"], 0.012);
+  isoBox(ctx, x + z * 0.05, y - z * 0.18, z * 0.26, z * 0.24, "#e2d3b3", "#b19e7d", lw, z * 0.18);
+  windows(ctx, x + z * 0.05, y - z * 0.18, z * 0.26, z * 0.24, "#4b5258");
+  gableRoof(ctx, x + z * 0.05, y - z * 0.18, z * 0.26, z * 0.18, z * 0.24, z * 0.1, "#9a5b3e", "#6f3f2a", "#c7b591", lw);
+  const awnings = ["#c4553f", "#e0b04a", "#4f86a8", "#6f9a52"];
+  for (const [i, [px, py]] of [[-0.45, 0.2], [-0.15, 0.36], [0.2, 0.3], [0.48, 0.14], [-0.3, 0.55], [0.12, 0.6]].entries()) {
+    const bx = x + px * z, by = y + py * z, w = z * 0.09;
+    isoBox(ctx, bx, by, w, z * 0.05, "#d8c8a4", "#a8977a", lw);
+    fillPoly(ctx, [bx - w * 1.15, by - w * 0.6 - z * 0.05, bx, by - z * 0.05 + w * 0.05, bx + w * 1.1, by - w * 0.55 - z * 0.05, bx, by - w * 1.15 - z * 0.09], awnings[i % awnings.length], lw);
+  }
+}
+// 科研中心：带圆顶天文台的研究所、实验楼和天线
+function researchTile(ctx, x, y, z, R) {
+  const lw = lineWidth(z);
+  groundFill(ctx, x, y, z, "#a9b39a");
+  speckle(ctx, x, y, z, R, 50, ["rgba(212,222,190,0.22)", "rgba(70,96,64,0.18)"], 0.014);
+  for (const [px, py] of [[-0.6, -0.1], [0.6, 0.05], [-0.45, 0.5], [0.5, 0.55]]) roundTree(ctx, x + px * z, y + py * z, z * 0.08, R() < 0.5);
+  // 天线
+  const ax = x + z * 0.42, ay = y - z * 0.32;
+  line(ctx, [ax, ay, ax, ay - z * 0.42], "#7d8486", z * 0.018);
+  line(ctx, [ax - z * 0.08, ay - z * 0.3, ax + z * 0.08, ay - z * 0.3], "#7d8486", z * 0.014);
+  blob(ctx, ax, ay - z * 0.42, z * 0.025, z * 0.025, "#d9584a");
+  // 实验楼
+  isoBox(ctx, x - z * 0.2, y + z * 0.1, z * 0.3, z * 0.16, "#e6e3d8", "#b4b1a6", lw, z * 0.16);
+  windows(ctx, x - z * 0.2, y + z * 0.1, z * 0.3, z * 0.16, "#5a7685");
+  flatRoof(ctx, x - z * 0.2, y + z * 0.1, z * 0.3, z * 0.16, "#8f9693", lw, z * 0.16);
+  // 圆顶天文台
+  const ox = x + z * 0.2, oy = y - z * 0.05, r = z * 0.15;
+  isoBox(ctx, ox + r * 0.7, oy + r * 0.35, r * 1.4, z * 0.14, "#ddd8c8", "#aaa596", lw);
+  ctx.beginPath(); ctx.ellipse(ox, oy - z * 0.14 - r * 0.35, r, r * 0.95, 0, Math.PI, 0);
+  ctx.fillStyle = "#c7ccd0"; ctx.fill();
+  if (lw) { ctx.strokeStyle = INK; ctx.lineWidth = lw; ctx.stroke(); }
+  line(ctx, [ox - r * 0.1, oy - z * 0.14 - r * 1.25, ox + r * 0.1, oy - z * 0.14 - r * 0.4], "#4f5960", r * 0.18);
+}
+// 采石场：开采面、切好的石块和吊杆
+function quarryTile(ctx, x, y, z, R, c, info) {
+  const lw = lineWidth(z);
+  groundFill(ctx, x, y, z, info?.color ?? "#a9a27c");
+  const pit = ctx.createRadialGradient(x, y, z * 0.1, x, y, z * 0.7);
+  pit.addColorStop(0, "rgba(196,190,166,0.9)"); pit.addColorStop(1, "rgba(196,190,166,0)");
+  ctx.fillStyle = pit; ctx.fillRect(x - z, y - z, z * 2, z * 2);
+  for (const [px, py, size] of [[-0.35, -0.25, 0.42], [0.1, -0.35, 0.38], [0.38, -0.12, 0.3]]) quarryRock(ctx, x + px * z, y + py * z, size * z, "#b2ad96");
+  // 台阶状的开采面
+  for (let k = 0; k < 3; k++) {
+    const w = z * (0.5 - k * 0.12), yy = y + z * (0.05 + k * 0.08);
+    fillPoly(ctx, [x - w, yy, x - w * 0.6, yy - z * 0.06, x + w * 0.6, yy - z * 0.06, x + w, yy], k % 2 ? "#a29d86" : "#bcb7a0", 0);
+  }
+  for (const [px, py] of [[-0.42, 0.42], [-0.28, 0.5], [0.3, 0.45], [0.44, 0.38], [0.36, 0.55]]) {
+    isoBox(ctx, x + px * z, y + py * z, z * 0.05, z * 0.045, "#d6d0b9", "#a39d87", lw);
+    flatRoof(ctx, x + px * z, y + py * z, z * 0.05, z * 0.045, "#e8e2cb", lw);
+  }
+  const dx = x + z * 0.05, dy = y + z * 0.32;
+  line(ctx, [dx, dy, dx, dy - z * 0.38, dx + z * 0.28, dy - z * 0.26], "#7a6648", z * 0.02);
+  line(ctx, [dx + z * 0.28, dy - z * 0.26, dx + z * 0.28, dy - z * 0.12], "#5b4c38", z * 0.008);
+}
+// 渔场：水面上的渔船、浮标和网
+function fishingTile(ctx, x, y, z, R, c, info) {
+  const lw = lineWidth(z);
+  groundFill(ctx, x, y, z, info?.color ?? "#6c9db0");
+  for (let k = 0; k < 14; k++) {
+    const px = (R() - 0.5) * 1.6, py = (R() - 0.5) * 1.6;
+    if (!inHex(px, py, 0.9)) continue;
+    line(ctx, [x + px * z - z * 0.06, y + py * z, x + px * z + z * 0.06, y + py * z], "rgba(235,245,248,0.35)", z * 0.01);
+  }
+  // 网：一圈浮标
+  ctx.beginPath(); ctx.ellipse(x - z * 0.1, y + z * 0.12, z * 0.32, z * 0.16, 0, 0, Math.PI * 2);
+  ctx.strokeStyle = "rgba(240,236,220,0.55)"; ctx.lineWidth = z * 0.012; ctx.stroke();
+  for (let k = 0; k < 10; k++) {
+    const a = (k / 10) * Math.PI * 2;
+    blob(ctx, x - z * 0.1 + Math.cos(a) * z * 0.32, y + z * 0.12 + Math.sin(a) * z * 0.16, z * 0.02, z * 0.015, k % 2 ? "#e0573f" : "#f0ead4");
+  }
+  for (const [px, py, ang] of [[0.32, -0.25, -0.4], [-0.38, -0.3, 0.3], [0.35, 0.42, 0.2]]) {
+    const bx = x + px * z, by = y + py * z, L = z * 0.16;
+    ctx.save(); ctx.translate(bx, by); ctx.rotate(ang);
+    fillPoly(ctx, [-L, -L * 0.18, L * 0.85, -L * 0.18, L, 0, L * 0.7, L * 0.22, -L * 0.85, L * 0.22], "#8a5a3a", lw);
+    isoBox(ctx, -L * 0.15, 0, L * 0.25, L * 0.25, "#e6dfcc", "#b8b09a", lw);
+    line(ctx, [L * 0.3, -L * 0.1, L * 0.3, -L * 0.9], "#5b4630", L * 0.05);
+    ctx.restore();
+  }
+}
+// 牧场：围栏草场、谷仓和牲畜
+function pastureTile(ctx, x, y, z, R) {
+  const lw = lineWidth(z);
+  groundFill(ctx, x, y, z, "#9fb46a");
+  speckle(ctx, x, y, z, R, 70, ["rgba(196,214,128,0.3)", "rgba(88,118,52,0.2)"], 0.016);
+  // 围栏
+  const fence = [[-0.62, 0.05], [-0.05, -0.28], [0.6, 0.05], [0.02, 0.4], [-0.62, 0.05]];
+  for (let k = 0; k < fence.length - 1; k++) {
+    const [ax, ay] = fence[k], [bx, by] = fence[k + 1];
+    line(ctx, [x + ax * z, y + ay * z, x + bx * z, y + by * z], "#7d6446", z * 0.012);
+    line(ctx, [x + ax * z, y + ay * z - z * 0.04, x + bx * z, y + by * z - z * 0.04], "#7d6446", z * 0.012);
+  }
+  // 谷仓
+  isoBox(ctx, x + z * 0.32, y - z * 0.36, z * 0.16, z * 0.13, "#b2533c", "#80382a", lw, z * 0.12);
+  gableRoof(ctx, x + z * 0.32, y - z * 0.36, z * 0.16, z * 0.12, z * 0.13, z * 0.09, "#6a5a4c", "#4b3f35", "#c66a50", lw);
+  // 牲畜
+  for (let k = 0; k < 7; k++) {
+    const px = (R() - 0.5) * 0.9, py = (R() - 0.5) * 0.4 + 0.05;
+    const bx = x + px * z, by = y + py * z, dark = R() < 0.4;
+    blob(ctx, bx + z * 0.01, by + z * 0.012, z * 0.045, z * 0.015, "rgba(30,40,20,0.25)");
+    blob(ctx, bx, by - z * 0.02, z * 0.04, z * 0.022, dark ? "#5a4636" : "#efe8d8");
+    blob(ctx, bx + z * 0.038, by - z * 0.032, z * 0.015, z * 0.012, dark ? "#4a382a" : "#d9d0bd");
+  }
+}
+
 const TILE_ART = {
+  residential: residentialTile,
+  market: marketTile,
+  research: researchTile,
+  quarry: quarryTile,
+  fishing: fishingTile,
+  pasture: pastureTile,
   farm: farmTile,
   mine: mineTile,
   lumber: lumberTile,
@@ -1481,6 +1611,8 @@ const ART_KEY = {
   base: (c) => `${c}`,
   airfield: (c) => `${c}`,
   port: (c, info) => `${c}:${info?.coast}`,
+  quarry: (c, info) => `${info?.color}`,
+  fishing: (c, info) => `${info?.color}`,
 };
 
 export function drawFacilityTile(ctx, icon, x, y, z, c, info, seed) {
@@ -1896,6 +2028,7 @@ function drawStack(ctx, x, y, z, st) {
       ctx.stroke();
     }
     drawCard(ctx, x, y, w, h, top, st.surface.length, c, full);
+    if (top.facing != null && G.rules.units[top.type]?.category === 'military' && w >= 30) drawFacing(ctx, x, y, w, h, top.facing, c);
   }
   if (st.air.length) {
     const top = st.air[0];
@@ -1905,6 +2038,19 @@ function drawStack(ctx, x, y, z, st) {
     const ay = st.surface.length ? y - h * 0.62 : y - h * 0.2;
     drawAirCard(ctx, ax, ay, s, top, st.air.length, c);
   }
+}
+
+// 朝向：牌外侧的小三角，指向单位面朝的方向（0 东、1 东北、2 西北、3 西、4 西南、5 东南）。
+// 从侧面挨打 +30%、从背后挨打 +80%。
+function drawFacing(ctx, x, y, w, h, facing, c) {
+  const a = -facing * Math.PI / 3, dx = Math.cos(a), dy = Math.sin(a);
+  const px = x + dx * w * 0.6, py = y + dy * h * 0.7, s = Math.max(4, w * 0.13);
+  ctx.save();
+  ctx.translate(px, py); ctx.rotate(a);
+  ctx.beginPath(); ctx.moveTo(s, 0); ctx.lineTo(-s * 0.55, -s * 0.75); ctx.lineTo(-s * 0.55, s * 0.75); ctx.closePath();
+  ctx.fillStyle = shade(c, -0.35); ctx.fill();
+  ctx.lineWidth = 1.2; ctx.strokeStyle = "rgba(255,248,230,0.85)"; ctx.stroke();
+  ctx.restore();
 }
 
 function drawArmyDots(ctx, v) {
@@ -2374,12 +2520,12 @@ function traceTiles(ctx, v, path, color, dashed = false) {
   ctx.restore();
 }
 
-function tacticalHex(ctx, v, tile, fill, stroke, width = 1) {
+function tacticalHex(ctx, v, tile, fill, stroke, width = 1, dash = null) {
   const [wx, wy] = center(tile);
   eachCopy(v, wx, wy, v.z * 2, (x, y) => {
     ctx.beginPath(); hexPath(ctx, x, y, v.z * .96);
     if (fill) { ctx.fillStyle = fill; ctx.fill(); }
-    if (stroke) { ctx.lineWidth = width; ctx.strokeStyle = stroke; ctx.stroke(); }
+    if (stroke) { ctx.lineWidth = width; ctx.strokeStyle = stroke; if (dash) ctx.setLineDash(dash); ctx.stroke(); if (dash) ctx.setLineDash([]); }
   });
 }
 
@@ -2454,6 +2600,8 @@ function drawTactics(ctx, v) {
   if (moving) {
     for (const tile of t.move_tiles ?? []) tacticalHex(ctx, v, tile, 'rgba(95,186,211,.17)', 'rgba(145,221,239,.32)', .65);
     drawRangeBoundary(ctx, v, t.move_tiles ?? [], '#a5e3ec');
+    // 敌方控制区：走进去就得停下（坦克不受影响）
+    for (const tile of t.zoc ?? []) tacticalHex(ctx, v, tile, 'rgba(214,99,74,.10)', 'rgba(235,135,102,.55)', 1.2, [Math.max(3, v.z * .12), Math.max(3, v.z * .1)]);
   }
   if (attacking) {
     for (const tile of t.attack_tiles) {
