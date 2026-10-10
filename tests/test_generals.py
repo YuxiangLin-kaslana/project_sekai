@@ -55,7 +55,9 @@ def test_generals_are_drawn_by_lot_with_rare_high_ranks(board):
     for _ in range(300):
         g = add(board, "general", 1, 1, 1)
         info = generals.appoint(board, RULES, g)
-        assert 1 <= g.rank <= 5 and len(g.name) == 3 and g.title.startswith("第")
+        assert (
+            1 <= g.rank <= 5 and g.name in RULES.names["west"].people and g.title.startswith("第")
+        )
         assert info["rank"] == g.rank
         ranks[g.rank] += 1
         board.remove_unit(g.id)

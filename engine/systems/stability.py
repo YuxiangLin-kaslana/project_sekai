@@ -170,17 +170,20 @@ def _independence(ctx: StepContext, city) -> None:
                 group.append(other)
                 queue.append(other)
     from engine.setup import _generated_color
+    from engine.systems.names import nation_name
 
     nid = max(s.nations) + 1
+    culture = s.nations[old].culture  # 独立出来的国家和原国家同一个名字系列
     nation = Nation(
         nid,
-        f"{city.name}共和国",
+        nation_name(s, rules, culture, from_city=city.name),
         _generated_color(nid + 7),
         None,
         capital=city.id,
         gold=cfg.start_gold * len(group),
         city_management=True,
         ai_enabled=True,
+        culture=culture,
     )
     s.nations[nid] = nation
     for c in group:

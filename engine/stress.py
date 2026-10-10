@@ -54,12 +54,15 @@ def populate(
         hue = (k * 0.61803398875 + float(rng.random()) * 0.09) % 1
         rgb = colorsys.hls_to_rgb(hue, 0.49, 0.49)
         color = "#" + "".join(f"{round(v * 255):02x}" for v in rgb)
+        from engine.systems.names import nation_name
+
         s.nations[nid] = Nation(
             nid,
-            template.name if k < len(templates) else f"{template.name}{k + 1}",
+            template.name if k < len(templates) else nation_name(s, rules, template.culture),
             color,
             template.id,
             gold=1_000_000,
+            culture=template.culture,
         )
     if not s.nations:
         raise ValueError("这张世界没有可用起始点")

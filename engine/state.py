@@ -53,6 +53,7 @@ class Nation:
     hostile: dict = field(default_factory=dict)
     had_city: bool = False  # 有过城市（之后城全丢了才算灭亡）
     eliminated: bool = False  # 灭亡（一座城都没有了，所有部队、道路、领土已清掉）
+    culture: str = "west"  # 名字系列（东方 east / 西方 west）：城市名、将领名从这个系列的名字库取
 
 
 @dataclass(slots=True)

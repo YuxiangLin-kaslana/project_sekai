@@ -8,7 +8,8 @@
     rules/<name>/resources.yaml
     rules/<name>/units.yaml
     rules/<name>/buildings.yaml   市中心建筑 + 城外设施
-    rules/<name>/nations.yaml     国家模板（名字、颜色、城市名）
+    rules/<name>/nations.yaml     国家模板（名字、颜色、城市名、东方 / 西方系列）
+    rules/<name>/names.yaml       名字库：每个系列的国名、城市名、人名
 
 继承：ruleset.yaml 写 `extends: <父规则集名>`，子规则集里的同名条目整条覆盖父规则集，
 值写 null 表示删除该条目；ruleset.yaml 里的配置段（worldgen、cities 等）按字段合并。
@@ -85,6 +86,10 @@ def _load_raw(directory: Path, root: Path, chain: tuple[str, ...]) -> dict[str, 
                 raw[name].pop(key, None)
             else:
                 raw[name][key] = entry
+    # 名字库（东方 / 西方……）：子规则集的同名系列整个覆盖
+    names = _read_yaml(directory / "names.yaml")
+    if names:
+        raw["names"] = {**(raw.get("names") or {}), **names}
     return raw
 
 

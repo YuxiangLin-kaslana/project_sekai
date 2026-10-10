@@ -72,7 +72,12 @@ def test_city_at_zero_declares_independence_with_restless_neighbours(board):
     event = next(e for e in result.events if e["type"] == "city_independence")
     nid = int(event["nation"].split(":")[1])
     rebel = s.nations[nid]
-    assert rebel.name == "城市10共和国" and rebel.ai_enabled and rebel.city_management
+    # 独立国家的国名从原国家同一系列的国名库取（用完了才“城市名 + 共和国”）
+    assert (
+        rebel.name in RULES.names[rebel.culture].nations
+        and rebel.ai_enabled
+        and rebel.city_management
+    )
     assert rebel.capital == 10 and s.cities[10].capital
     assert {c.id for c in s.nation_cities(nid)} == {10, 12}
     assert s.cities[13].nation == 1 and s.cities[14].nation == 1

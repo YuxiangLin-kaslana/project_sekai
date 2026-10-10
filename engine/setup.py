@@ -95,16 +95,21 @@ def new_game(world: World, rules: Ruleset, tuning: dict | None = None) -> GameSt
     grid.facility[:] = 0
     state = GameState(turn=1, seed=world.params.seed, ruleset_id=rules.id, grid=grid)
 
+    from engine.systems.names import CULTURES, nation_name
+
     templates = list(rules.nations.values())
     for k in range(len(world.starts)):
         tpl = templates[k] if k < len(templates) else None
         nid = state.new_id()
+        # 模板用完后：新国家东西方交替，国名从名字库取
+        culture = tpl.culture if tpl else CULTURES[k % len(CULTURES)]
         state.nations[nid] = Nation(
             id=nid,
-            name=tpl.name if tpl else f"国家 {k + 1}",
+            name=tpl.name if tpl else nation_name(state, rules, culture),
             color=tpl.color if tpl else _generated_color(k),
             template=tpl.id if tpl else None,
             gold=rules.start.gold * grid.tuning.get("start_gold", 100) // 100,
+            culture=culture,
         )
 
     start = rules.start

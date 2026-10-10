@@ -39,13 +39,10 @@ def yield_value(y: Yields) -> int:
 
 
 def city_name(state: GameState, rules: Ruleset, nation_id: int) -> str:
-    nation = state.nations[nation_id]
-    names = rules.nations[nation.template].cities if nation.template else []
-    k = nation.city_names_used
-    nation.city_names_used += 1
-    if k < len(names):
-        return names[k]
-    return f"{nation.name.removesuffix('共和国').removesuffix('王国')[:4]}{k + 1}号城"
+    """新城的名字（engine/systems/names.py）：模板城市名 → 同系列城市名库 → 同系列国名。"""
+    from engine.systems.names import city_name as pick
+
+    return pick(state, rules, nation_id)
 
 
 def found_city_problem(state: GameState, rules: Ruleset, nation: int, tile: int) -> str | None:

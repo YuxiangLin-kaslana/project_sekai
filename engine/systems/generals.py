@@ -44,9 +44,14 @@ def appoint(state, rules, general) -> dict:
             rank = i + 1
             break
         roll -= w
-    name = SURNAMES[int(rng.integers(0, len(SURNAMES)))] + "".join(
-        GIVEN[int(rng.integers(0, len(GIVEN)))] for _ in range(2)
-    )
+    from engine.systems.names import person_name
+
+    # 姓名：所属国家那个系列（东方 / 西方）的人名库；没有人名库时按老办法拼
+    name = person_name(state, rules, state.nations[general.nation].culture, rng)
+    if name is None:
+        name = SURNAMES[int(rng.integers(0, len(SURNAMES)))] + "".join(
+            GIVEN[int(rng.integers(0, len(GIVEN)))] for _ in range(2)
+        )
     nation = state.nations[general.nation]
     nation.corps_count += 1
     unit = "舰队" if rules.units[general.type].domain == "sea" else "军团"

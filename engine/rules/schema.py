@@ -206,14 +206,24 @@ class BuildingType(_Strict):
 
 
 class NationTemplate(_Strict):
-    """国家模板：名字、颜色、城市名（第一个是首都）。开局按顺序取用，不够时自动编号。"""
+    """国家模板：名字、颜色、城市名（第一个是首都）、名字系列（东方 / 西方）。开局按顺序取用；
+    模板用完了从名字库取国名，城市名用完了从同系列的名字库取。"""
 
     id: str
     name: str
     color: str
     cities: list[str] = Field(min_length=1)
+    culture: str = "west"  # 名字系列：names.yaml 里的键（east / west）
 
     check_color = field_validator("color")(_check_color)
+
+
+class NamePool(_Strict):
+    """一个名字系列（东方 / 西方）：国名、城市名、人名（将领）。国名和城市名在系列内可以互用。"""
+
+    nations: list[str] = []
+    cities: list[str] = []
+    people: list[str] = []
 
 
 class CityConfig(_Strict):
@@ -378,6 +388,7 @@ class Ruleset(_Strict):
     units: dict[str, UnitType] = {}
     buildings: dict[str, BuildingType] = {}
     nations: dict[str, NationTemplate] = {}
+    names: dict[str, NamePool] = {}  # 名字库：系列 → 国名、城市名、人名
     worldgen: WorldGenConfig
     cities: CityConfig = CityConfig()
     stacking: StackingConfig = StackingConfig()
