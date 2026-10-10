@@ -959,7 +959,7 @@ def _site(state, rules, city, b, score):
 
 def _urgent_development(state, rules, city, budget):
     """优先的城外工程：先修被炸坏的设施（机场最先），再修国家要的前线机场；住房快满了建住宅区
-    （挑能往无主土地扩张的格子）；要海军的沿海城市建港口；打仗时建军事基地。返回 (设施, 格子, 原因)。"""
+    （挑能往无主土地扩张的格子）；要海军的沿海城市建港口；打仗或离外国很近（5 格内有外国领土）时建军事基地（朝外国那边）。返回 (设施, 格子, 原因)。"""
     g = state.grid
     broken = [
         t
@@ -1005,7 +1005,10 @@ def _urgent_development(state, rules, city, budget):
             tile = _site(state, rules, city, b, lambda t: -g.distance(t, city.tile))
             if tile is not None:
                 return b.id, tile, "要造舰船：沿海城市先建港口（舰船在港口出生、回血）"
-    if budget.posture == "战争" and y.production >= 6:
+    frontier = any(
+        int(g.owner[t]) >= 0 and int(g.owner[t]) != city.nation for t in g.within(city.tile, 5)
+    )
+    if (budget.posture == "战争" and y.production >= 6) or (frontier and y.production >= 5):
         bases = [
             b
             for b in rules.buildings.values()
@@ -1015,9 +1018,19 @@ def _urgent_development(state, rules, city, budget):
         ]
         if bases and bases[0].id not in owned:
             b = bases[0]
-            tile = _site(state, rules, city, b, lambda t: -g.distance(t, city.tile))
+            foreign = [
+                t for t in g.within(city.tile, 6) if int(g.owner[t]) not in (-1, city.nation)
+            ]
+
+            def toward(t):
+                # 靠近市中心，又朝着外国那边（炮击、驻防都对着边境）
+                edge = min((g.distance(t, f) for f in foreign), default=0)
+                return -2 * g.distance(t, city.tile) - edge
+
+            tile = _site(state, rules, city, b, toward)
             if tile is not None:
-                return b.id, tile, "打仗了：建军事基地（造兵省 30%，自带炮击，进驻的部队防守加成）"
+                why = "打仗了" if budget.posture == "战争" else "离外国很近"
+                return b.id, tile, f"{why}：建军事基地（造兵省 30%，自带炮击，进驻的部队防守加成）"
     return None
 
 

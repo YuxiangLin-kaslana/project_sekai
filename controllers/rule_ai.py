@@ -3140,16 +3140,24 @@ def _engage(ctx, unit):
 
 
 def _raid_airfield(ctx, unit):
-    """奔袭机场：附近（两回合路程内）有敌方机场、守得又不重（机场周围 2 格敌军不超过 1 支）时，
-    派一支近战部队冲过去拆掉它（_pillage）。每座机场每回合只派一支。"""
+    """奔袭敌方区域：附近（两回合路程内）有敌方可以占领的区域（住宅区、军事基地、机场、港口）或机场，
+    守得又不重（周围 2 格敌军不超过 1 支）时，派一支近战部队冲过去。能占领的就站上去占领
+    （engine/systems/occupation.py：住宅区连同它扩出来的土地一起归本国，军事基地 / 机场 / 港口归本国使用）；
+    占不了的机场就拆掉（_pillage）。价值：军事基地、机场 > 港口 > 住宅区（按扩张能划走的格子算）。
+    每个目标每回合只派一支。"""
     s, rules, g = ctx.state, ctx.rules, ctx.state.grid
     reach = 2 * movement.unit_moves(g, rules.units[unit.type]) + 1
     raids = _ai(ctx).setdefault("raids", {})
     best = None
     for tile, airfield in _enemy_facilities(ctx, unit.nation):
-        if not airfield or g.distance(unit.tile, tile) > reach:
+        if g.distance(unit.tile, tile) > reach:
+            continue
+        b = rules.facility_at(int(g.facility[tile]))
+        if b is None or not (airfield or b.capturable):
             continue
         if raids.get(tile, unit.id) != unit.id:
+            continue
+        if s.city_at(tile) is not None:
             continue
         guards = sum(
             1
@@ -3157,18 +3165,27 @@ def _raid_airfield(ctx, unit):
             for v in s.units_at(t, "surface")
             if v.nation != unit.nation and is_military(rules, v)
         )
-        if guards > 1:
+        if guards > 1 or (guards and b.bombard):
             continue
-        key = (g.distance(unit.tile, tile), tile)
+        value = 40 if (b.air_base or b.bombard) else 25 if b.shelter else 10 + 2 * (b.expand or 0)
+        key = (g.distance(unit.tile, tile) * 10 - value, tile)
         if best is None or key < best:
-            best = key
+            best = key + (b,)
     if best is None:
         return False
-    tile = best[1]
+    tile, b = best[1], best[2]
     raids[tile] = unit.id
     if unit.tile == tile:
+        if b.capturable:
+            return emit(
+                ctx,
+                unit,
+                Fortify(issuer=ref("nation", unit.nation), unit=ref("unit", unit.id)),
+                f"守住占领的{b.name}（回合结算时归本国）",
+            )
         return _pillage(ctx, unit)
-    return march(ctx, unit, tile, "奔袭敌方机场，拆掉它")
+    verb = "占领" if b.capturable else "拆掉"
+    return march(ctx, unit, tile, f"奔袭敌方{b.name}，{verb}它")
 
 
 def _pillage(ctx, unit):
