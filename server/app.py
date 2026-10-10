@@ -415,32 +415,6 @@ def game_tactics(game_id: str, actor: str, col: int | None = None, row: int | No
             result["pillage_blocked"] = problem
             from engine.systems import roads as road_rules
 
-            if "build_facility" in game.rules.units[entity.type].tags:
-                # 工兵修路：往哪几个相邻格能修、各要多少金（方向按地图上的方位）
-                import math
-
-                g = s.grid
-                lay = []
-                for b in g.neighbors_of(entity.tile):
-                    if road_rules.lay_problem(s, game.rules, entity, b) is None:
-                        kind, price = road_rules.engineering(
-                            s, game.rules, entity.nation, entity.tile, b
-                        )
-                        dq = int(g.axial_q[b]) - int(g.axial_q[entity.tile])
-                        dr = int(g.axial_r[b]) - int(g.axial_r[entity.tile])
-                        if g.wrap_x and abs(dq) > 1:
-                            dq = -1 if dq > 0 else 1
-                        angle = math.degrees(math.atan2(-dr * 0.866, dq + dr / 2)) % 360
-                        names = ["东", "东北", "北", "西北", "西", "西南", "南", "东南"]
-                        lay.append(
-                            {
-                                "to": list(g.col_row(b)),
-                                "cost": price,
-                                "kind": kind,
-                                "dir": names[round(angle / 45) % 8],
-                            }
-                        )
-                result["lay_road"] = lay
             result["demolish_blocked"] = road_rules.demolish_problem(s, game.rules, entity)
             from engine.systems.naval import embark_target
 
@@ -561,8 +535,7 @@ def client_update() -> dict:
 
 
 class RoadPreview(BaseModel):
-    issuer: str
-    start: tuple[int, int]
+    city: str  # 从哪座城的市中心修
     to: tuple[int, int]
 
 
@@ -604,14 +577,20 @@ def road_preview(game_id: str, body: RoadPreview) -> dict:
 
     game = _game(game_id)
     try:
-        nation = parse_ref(body.issuer, "nation")
+        cid = parse_ref(body.city, "city")
     except ValueError as e:
         raise HTTPException(422, str(e)) from e
     with game.lock:
-        return {
-            "state_hash": game.state.state_hash(),
-            **plan(game.state, game.rules, nation, body.start, body.to),
-        }
+        s = game.state
+        city = s.cities.get(cid)
+        if city is None:
+            raise HTTPException(404, "没有这座城市")
+        try:
+            tile = s.grid.idx(*body.to)
+        except IndexError as e:
+            raise HTTPException(422, str(e)) from e
+        proposal = plan(s, game.rules, city, tile)
+        return {"state_hash": s.state_hash(), "production": city.production, **proposal}
 
 
 def _asset_version(name: str) -> str:

@@ -83,7 +83,7 @@ def test_road_segments_obey_engineering_and_bridge_span(dense):
                 if g.is_water[tile]:
                     assert any(not g.is_water[t] for t in g.within(tile, 2))
     assert stats["road_tiles"] <= stats["road_eligible_tiles"]
-    assert {"road", "bridge", "tunnel", "causeway"} <= set(stats["road_types"])
+    assert {"road", "bridge"} <= set(stats["road_types"])
 
 
 def test_territory_index_invalidates_after_founding_and_clone(dense):

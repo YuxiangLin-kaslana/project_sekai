@@ -609,12 +609,30 @@ def production_problem(
         if key in city.buildings:
             return f"{city.name}已经有{b.name}了"
         return None
-    return f"生产项目格式应为 unit:<id> 或 building:<id>，而不是 {item!r}"
+    if kind == "road":
+        from engine.systems.roads import plan
+
+        try:
+            tile = int(key)
+        except ValueError:
+            return f"修路项目格式应为 road:<格子编号>，而不是 {item!r}"
+        if not 0 <= tile < state.grid.size:
+            return "格子编号超出地图"
+        proposal = plan(state, rules, city, tile)
+        return proposal.get("error")
+    return f"生产项目格式应为 unit:<id>、building:<id> 或 road:<格子>，而不是 {item!r}"
 
 
 def item_cost(rules: Ruleset, item: str, state: GameState | None = None, city=None) -> int:
     """生产项目的造价；给了城市时，单位按兵营、军事基地打折。"""
     kind, _, key = item.partition(":")
+    if kind == "road":
+        # 修路：按当前最优路线的新建段数算（平地 1、丘陵 2、跨河 3、跨水域 5）
+        if state is None or city is None:
+            return 1
+        from engine.systems.roads import plan
+
+        return plan(state, rules, city, int(key)).get("cost", 1)
     if kind != "unit":
         return rules.buildings[key].cost
     cost = rules.units[key].cost

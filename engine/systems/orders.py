@@ -26,7 +26,6 @@ from engine.actions import (
     Fortify,
     FoundCity,
     GoldAssist,
-    LayRoad,
     LeaveCorps,
     Move,
     Order,
@@ -155,11 +154,27 @@ def _apply(ctx: StepContext, order: Order) -> None:
         return
 
     if isinstance(order, BuildRoad):
-        from engine.systems.roads import build
+        # 城市修路：校验路线后加进这座城的生产队列（用生产力付造价）
+        from engine.systems.roads import plan
 
-        problem = build(ctx, nation, order.start, order.to)
-        if problem:
-            raise Rejected("cannot_build_road", problem)
+        city = _city(ctx, nation, order.city)
+        try:
+            tile = state.grid.idx(*order.to)
+        except IndexError as e:
+            raise Rejected("bad_target", str(e)) from e
+        proposal = plan(state, rules, city, tile)
+        if "error" in proposal:
+            raise Rejected("cannot_build_road", proposal["error"])
+        item = f"road:{tile}"
+        if item not in city.queue:
+            city.queue.append(item)
+        log.add(
+            "road_planned",
+            city=order.city,
+            tile=tile,
+            cost=proposal["cost"],
+            path=proposal["path"],
+        )
         return
 
     if isinstance(order, FormGroup):
@@ -318,18 +333,6 @@ def _apply(ctx: StepContext, order: Order) -> None:
             raise Rejected("cannot_disembark", problem)
         disembark(ctx, unit, tile)
         return
-    if isinstance(order, LayRoad):
-        from engine.systems.roads import lay, lay_problem
-
-        try:
-            to = state.grid.idx(*order.to)
-        except IndexError as e:
-            raise Rejected("bad_target", str(e)) from e
-        problem = lay_problem(state, rules, unit, to)
-        if problem:
-            raise Rejected("cannot_build_road", problem)
-        lay(ctx, unit, to)
-        return
     if isinstance(order, DemolishRoad):
         from engine.systems.roads import demolish, demolish_problem
 
@@ -426,7 +429,7 @@ def _sort_key(order: Order) -> tuple:
     if isinstance(order, FormGroup):
         target = ",".join(sorted(order.units))
     elif isinstance(order, BuildRoad):
-        target = f"{order.start}:{order.to}"
+        target = f"{order.city}:{order.to}"
     return (ORDER_PRIORITY[order.type], order.issuer, target)
 
 

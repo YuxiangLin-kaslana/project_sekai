@@ -1,4 +1,5 @@
-"""Engineering and movement work across geographic regions and terrain boundaries."""
+"""道路（二战剧本）：城市用生产力从市中心修路，最少新建，跨河、跨水、丘陵造价，住宅区 / 工厂连路加成，
+道路加速移动、拆路，设施等级与回血。"""
 
 import pytest
 
@@ -7,15 +8,16 @@ from engine.hexmap.grid import HexGrid
 from engine.rules.loader import load_ruleset
 from engine.state import City, GameState, Nation, Unit
 from engine.step import step
+from engine.systems.cities import city_yields, connected, found_city, housing
 from engine.systems.movement import movement_map
-from engine.systems.roads import plan
+from engine.systems.roads import COST_HILLS, COST_RIVER, COST_WATER, plan
 
 RULES = load_ruleset("alt_ww2")
 
 
 @pytest.fixture
 def board():
-    g = HexGrid.empty(12, 8, wrap_x=False)
+    g = HexGrid.empty(14, 8, wrap_x=False)
     g.terrain[:] = list(RULES.terrain).index("plains")
     g.area[:] = 0
     g.elevation[:] = 10
@@ -24,17 +26,17 @@ def board():
         1: Nation(1, "A", "#aa3333", None, gold=1000),
         2: Nation(2, "B", "#3333aa", None, gold=1000),
     }
-    g.owner[g.idx(2, 3)] = 1
+    found_city(s, RULES, 1, g.idx(2, 3), capital=True)
+    found_city(s, RULES, 1, g.idx(8, 3))
+    for t in range(g.size):  # 整条走廊都是本国领土
+        if g.owner[t] < 0:
+            g.owner[t] = 1
+    s._territory_cache = None
     return s
 
 
-def build(s, start=(2, 3), end=(6, 3)):
-    return step(
-        s,
-        parse_orders([{"issuer": "nation:1", "type": "build_road", "start": start, "to": end}]),
-        RULES,
-        immediate=True,
-    )
+def home(s):
+    return s.city_at(s.grid.idx(2, 3))
 
 
 def terrain(s, col, row, name):
@@ -44,93 +46,109 @@ def terrain(s, col, row, name):
     return t
 
 
-def test_road_cost_reuse_hash_and_movement_range(board):
-    a = Unit(board.new_id(), "infantry", 1, board.grid.idx(2, 3), "surface", moves_left=2)
-    board.add_unit(a)
-    before = board.state_hash()
-    plain, _ = movement_map(board, RULES, a)
-    assert board.grid.idx(6, 3) not in plain
-    proposal = plan(board, RULES, 1, (2, 3), (6, 3))
-    result = build(board)
-    assert not result.rejected and len(result.state.roads) == 4
-    assert result.state.nations[1].gold == 1000 - proposal["cost"]
-    assert board.state_hash() == before and result.state_hash != before
-    assert result.state.clone().state_hash() == result.state_hash
-    fast, _ = movement_map(result.state, RULES, result.state.units[a.id])
-    assert board.grid.idx(6, 3) in fast
-    reused = plan(result.state, RULES, 1, (2, 3), (6, 3))
-    assert reused["cost"] == 0 and build(result.state).rejected
+def order_road(s, city, to):
+    raw = {"issuer": "nation:1", "type": "build_road", "city": f"city:{city.id}", "to": list(to)}
+    return step(s, parse_orders([raw]), RULES, immediate=True)
 
 
-def test_bridge_crosses_river_and_administrative_region(board):
+def finish(s, city, turns=8):
+    """给城市足够的生产力，把队列里的修路项目做完。"""
+    for _ in range(turns):
+        s.cities[city.id].production = 999
+        s = step(s, [], RULES).state
+        if not s.cities[city.id].queue:
+            break
+    return s
+
+
+def test_roads_go_from_the_city_center_to_another_own_city_and_cost_production(board):
+    c = home(board)
+    p = plan(board, RULES, c, board.grid.idx(8, 3))
+    assert "error" not in p and p["cost"] == 6 and len(p["segments"]) == 6  # 平地每段 1
+    queued = order_road(board, c, (8, 3))
+    assert not queued.rejected and queued.state.cities[c.id].queue == [
+        f"road:{board.grid.idx(8, 3)}"
+    ]
+    built = finish(queued.state, c)
+    assert len(built.roads) == 6 and built.nations[1].gold >= board.nations[1].gold - 50
+    assert board.grid.idx(8, 3) in connected(built, built.cities[c.id])
+    # 已经连上了：不能再修
+    assert "已经有道路" in plan(built, RULES, built.cities[c.id], board.grid.idx(8, 3))["error"]
+
+
+def test_only_allowed_targets_and_least_new_segments(board):
+    c = home(board)
     g = board.grid
-    # A full north-south river and region border makes a crossing unavoidable.
-    for a in range(g.size):
-        for b in g.neighbors_of(a):
-            if (g.col_row(a)[0] <= 3) != (g.col_row(b)[0] <= 3):
-                g.river_edges[a] |= 1 << g.direction_to(a, b)
-    for t in range(g.size):
-        if g.col_row(t)[0] > 3:
-            g.area[t] = 1
-    p = plan(board, RULES, 1, (2, 3), (6, 3))
-    assert p["regions"] == [0, 1] and p["counts"]["bridge"] >= 1
-    s = build(board).state
-    assert any(r["kind"] == "bridge" for r in s.roads.values())
+    assert "道路只能" in plan(board, RULES, c, g.idx(5, 6))["error"]  # 空地不行
+    eng = board.add_unit(Unit(board.new_id(), "engineer", 1, g.idx(5, 6), "surface"))
+    assert "error" not in plan(board, RULES, c, eng.tile)  # 工兵所在的位置可以
+    # 已经有一段路通到 (5,3)：再修到 (8,3) 只算没修的那几段
+    s = finish(order_road(board, c, (8, 3)).state, c)
+    p = plan(s, RULES, s.cities[c.id], g.idx(5, 6))
+    assert p["cost"] <= 3
 
 
-def test_short_water_bridge_and_mountain_tunnel(board):
+def test_terrain_costs_river_hills_water_and_mountains(board):
+    c = home(board)
     g = board.grid
-    # Impassable barrier except for a one-hex shallow strait.
+    terrain(board, 4, 3, "hills")
     for row in range(g.height):
-        terrain(board, 4, row, "ocean")
-    terrain(board, 4, 3, "coast")
+        if row != 3:
+            terrain(board, 4, row, "mountains")  # 只能从丘陵这一格过
+    p = plan(board, RULES, c, g.idx(8, 3))
+    hills = [s for s in p["segments"] if s["b"] == g.idx(4, 3)]
+    assert hills and hills[0]["cost"] == COST_HILLS
     for row in range(g.height):
-        terrain(board, 6, row, "mountains")
-    p = plan(board, RULES, 1, (2, 3), (8, 3))
-    assert "error" not in p and p["counts"]["bridge"] == 2 and p["counts"]["tunnel"] == 2
-    s = build(board, end=(8, 3)).state
-    a = Unit(s.new_id(), "infantry", 1, g.idx(2, 3), "surface", moves_left=10)
-    s.add_unit(a)
-    moved = step(
-        s,
-        parse_orders(
-            [{"issuer": "nation:1", "type": "move", "unit": f"unit:{a.id}", "to": [8, 3]}]
-        ),
-        RULES,
-        immediate=True,
-    )
-    assert not moved.rejected and moved.state.units[a.id].tile == g.idx(8, 3)
-    # No bridge: land units cannot cross the water barrier.
-    board.add_unit(Unit(board.new_id(), "infantry", 1, g.idx(2, 3), "surface", moves_left=10))
-    p0, _ = movement_map(board, RULES, next(iter(board.units.values())))
-    assert g.idx(8, 3) not in p0
+        terrain(board, 4, row, "mountains")  # 一整排山峰：修不过去
+    assert "error" in plan(board, RULES, c, g.idx(8, 3))
+    for row in range(g.height):
+        terrain(board, 4, row, "coast")  # 一格宽的水：架桥，上桥那段 5
+    p = plan(board, RULES, c, g.idx(8, 3))
+    assert any(s["cost"] == COST_WATER for s in p["segments"])
+    for row in range(g.height):
+        terrain(board, 5, row, "coast")  # 两格宽：修不过去
+    assert "error" in plan(board, RULES, c, g.idx(8, 3))
 
 
-def test_long_water_and_enemy_land_rejected(board):
+def test_river_crossing_costs_three(board):
+    from engine.systems.roads import engineering
+
     g = board.grid
-    for col in range(3, 7):
-        for row in range(g.height):
-            terrain(board, col, row, "coast")
-    assert "error" in plan(board, RULES, 1, (2, 3), (8, 3))
-    g.owner[g.idx(8, 3)] = 2
-    assert "error" in plan(board, RULES, 1, (2, 3), (8, 3))
-    assert "error" in plan(board, RULES, 1, (1, 3), (2, 3))
-    assert "error" in plan(board, RULES, 1, (2, 3), (3, 3))
+    a, b = g.idx(4, 3), g.idx(5, 3)
+    assert engineering(board, RULES, 1, a, b) == ("road", 1)
+    g.add_river(a, g.direction_to(a, b))
+    assert engineering(board, RULES, 1, a, b) == ("bridge", COST_RIVER)
 
 
-def test_insufficient_funds_is_atomic(board):
-    board.nations[1].gold = 1
-    before = board.state_hash()
-    result = build(board)
-    assert result.rejected and result.state_hash == before and not result.state.roads
-
-
-def test_development_levels_and_fortified_healing(board):
+def test_residential_and_factory_need_a_road_to_the_center(board):
+    c = home(board)
     g = board.grid
+    res, fac = g.idx(4, 5), g.idx(5, 1)
+    g.facility[res] = RULES.facility_index("residential")
+    g.facility[fac] = RULES.facility_index("factory")
+    for t in (res, fac):
+        g.city_of[t] = c.id
+    board._territory_cache = None
+    base_housing = housing(board, RULES, c)
+    base_prod = city_yields(board, RULES, c).production
+    s = finish(order_road(board, c, g.col_row(res)).state, c)
+    s = finish(order_road(s, s.cities[c.id], g.col_row(fac)).state, s.cities[c.id])
+    city = s.cities[c.id]
+    assert housing(s, RULES, city) == base_housing + 2  # 住宅区连路 +2 住房
+    assert city_yields(s, RULES, city).production >= base_prod + 2  # 工厂连路 +2 生产力
+
+
+def test_development_levels_and_fortified_healing():
+    g = HexGrid.empty(12, 8, wrap_x=False)
+    g.terrain[:] = list(RULES.terrain).index("plains")
+    g.area[:] = 0
+    board = GameState(1, 42, RULES.id, g)
+    board.nations = {1: Nation(1, "A", "#aa3333", None, gold=1000)}
     t = g.idx(2, 3)
     c = City(board.new_id(), "A城", 1, t, 2, xp=29)
     board.cities[c.id] = c
     g.city_of[t] = c.id
+    g.owner[t] = 1
     ft = g.idx(3, 3)
     g.facility[ft] = RULES.facility_index("farm")
     g.city_of[ft] = c.id
@@ -149,45 +167,21 @@ def test_development_levels_and_fortified_healing(board):
     assert board.state_hash() == before
 
 
-def test_roads_bridge_at_most_one_water_hex(board):
-    g = board.grid
-    for col in (4, 5):  # 两格宽的浅水海峡：修不过去
-        for row in range(g.height):
-            terrain(board, col, row, "coast")
-    assert "error" in plan(board, RULES, 1, (2, 3), (8, 3))
-
-
 def test_roads_are_three_times_faster(board):
     from engine.state import MOVE_STEPS
 
-    s = build(board).state  # (2,3) → (6,3) 的道路
+    c = home(board)
+    s = finish(order_road(board, c, (8, 3)).state, c)
     g = s.grid
-    a = s.add_unit(Unit(s.new_id(), "infantry", 1, g.idx(2, 3), "surface", moves_left=1))
+    a = s.add_unit(Unit(s.new_id(), "infantry", 1, g.idx(3, 3), "surface", moves_left=1))
     best, _ = movement_map(s, RULES, a)
-    assert g.idx(5, 3) in best  # 1 点移动力沿路走 3 格；野外只能走 1 格
+    assert g.idx(6, 3) in best  # 1 点移动力沿路走 3 格；野外只能走 1 格
     assert MOVE_STEPS == 3
 
 
-def test_engineers_lay_roads_but_not_into_a_country_at_war(board):
-    g = board.grid
-    eng = board.add_unit(Unit(board.new_id(), "engineer", 1, g.idx(2, 3), "surface", moves_left=3))
-    lay = {"issuer": "nation:1", "type": "lay_road", "unit": f"unit:{eng.id}", "to": [3, 3]}
-    built = step(board, parse_orders([lay]), RULES, immediate=True)
-    assert not built.rejected and (g.idx(2, 3), g.idx(3, 3)) in built.state.roads
-    assert built.state.units[eng.id].moves_left == 0  # 用掉本回合行动
-    assert built.state.nations[1].gold < board.nations[1].gold
-    # 交战国的领土：不能修
-    board.nations[1].hostile["2"] = board.turn
-    g.owner[g.idx(3, 3)] = 2
-    blocked = step(board, parse_orders([lay]), RULES, immediate=True)
-    assert "交战国" in blocked.rejected[0]["message"]
-    # 不交战的外国：可以修
-    board.nations[1].hostile.clear()
-    assert not step(board, parse_orders([lay]), RULES, immediate=True).rejected
-
-
 def test_any_land_unit_can_demolish_its_own_roads(board):
-    s = build(board).state
+    c = home(board)
+    s = finish(order_road(board, c, (8, 3)).state, c)
     g = s.grid
     u = s.add_unit(Unit(s.new_id(), "infantry", 1, g.idx(4, 3), "surface", moves_left=3))
     before = len(s.roads)

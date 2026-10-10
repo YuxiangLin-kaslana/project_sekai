@@ -16,7 +16,7 @@ from engine.hexmap.worldgen import World
 from engine.rules.schema import Ruleset
 from engine.state import City, GameState, Nation, Unit
 from engine.systems.cities import city_name
-from engine.systems.roads import edge_key, engineering
+from engine.systems.roads import FORBIDDEN, MAX_SPAN, edge_key, engineering
 from engine.systems.settlement import city_scale, geography, spacing
 
 
@@ -198,7 +198,8 @@ def populate(
         add(sea_types[int(rng.integers(len(sea_types)))], s.cities[cid].nation, tile)
     # Spanning forest first: every road-compatible land hex participates.
     visited = np.zeros(g.size, dtype=bool)
-    road_tiles = ~g.is_water & (g.terrain != rules.biome_index("volcano"))
+    forbidden = [rules.terrain_index(t) for t in FORBIDDEN if t in rules.terrain]
+    road_tiles = ~g.is_water & ~np.isin(g.terrain, forbidden)  # 山峰、火山上不修路
     for start in np.flatnonzero(road_tiles).tolist():
         if visited[start]:
             continue
@@ -239,7 +240,7 @@ def populate(
                 continue
             path = [a]
             cur = b
-            for _ in range(3):
+            for _ in range(MAX_SPAN):  # 最多跨一格水域
                 if int(g.terrain[cur]) not in shallow_ids:
                     break
                 path.append(cur)

@@ -134,7 +134,7 @@ def budget_for(state, rules, nation, cities):
             if kind == "unit":
                 committed += math.ceil(unit_upkeep(rules, rules.units[key]))
                 pending += rules.units[key].category == "military"
-            elif key not in c.buildings:
+            elif kind == "building" and key not in c.buildings:
                 committed += rules.buildings[key].upkeep
         if c.construction:
             committed += rules.buildings[c.construction.facility].upkeep

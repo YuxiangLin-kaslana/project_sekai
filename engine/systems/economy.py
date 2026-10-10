@@ -135,6 +135,14 @@ def _produce(ctx: StepContext, city: City) -> None:
             ctx.log.add(
                 "general_appointed", **appoint(state, rules, unit), city=ref("city", city.id)
             )
+    elif kind == "road":
+        from engine.systems.roads import build
+
+        problem = build(ctx, city, int(key))
+        if problem:
+            ctx.log.add("production_blocked", city=ref("city", city.id), item=item, reason=problem)
+            city.queue.pop(0)
+            return
     else:
         city.buildings.append(key)
         ctx.log.add("building_completed", building=key, city=ref("city", city.id))
@@ -143,14 +151,18 @@ def _produce(ctx: StepContext, city: City) -> None:
     if not city.queue:
         city.production_reason = ""
     if city.managed and state.nations[city.nation].city_management:
-        definition = rules.units[key] if kind == "unit" else rules.buildings[key]
+        definition_name = (
+            "修路"
+            if kind == "road"
+            else (rules.units[key] if kind == "unit" else rules.buildings[key]).name
+        )
         ctx.log.add(
             "directive_report",
             city=ref("city", city.id),
             nation=ref("nation", city.nation),
             goal="production",
             status="completed",
-            reason=f"{definition.name}生产完成",
+            reason=f"{definition_name}完成",
             item=item,
         )
 

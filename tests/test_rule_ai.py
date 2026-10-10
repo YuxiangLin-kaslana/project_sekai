@@ -4,6 +4,7 @@ import numpy as np
 import pytest
 
 from engine.actions import parse_orders
+from engine.events import EventLog
 from engine.hexmap.biomes import place_resources
 from engine.hexmap.grid import HexGrid
 from engine.rng import RngTree
@@ -18,6 +19,7 @@ from engine.systems.cities import (
     nation_resources,
     tile_yields,
 )
+from engine.systems.context import StepContext
 from engine.systems.networks import city_network
 from engine.systems.settlement import geography, spacing
 
@@ -245,21 +247,34 @@ def test_resources_are_at_most_half_the_old_distribution(seed):
 
 
 def test_capital_road_bonus_trade_and_no_income_from_cycles(board):
+    from engine.systems.roads import build as build_road
+
     a = board.nation_cities(1)[0]
     b = found_city(board, RULES, 1, board.grid.idx(10, 10))
     c = board.nation_cities(2)[0]
     before = city_yields(board, RULES, b).production
-    s = command(
-        board, type="build_road", start=board.grid.col_row(a.tile), to=board.grid.col_row(b.tile)
-    ).state
-    assert city_yields(s, RULES, s.cities[b.id]).production > before
-    assert city_network(s, RULES, s.cities[b.id])["production_percent"] == 25
-    p = command(s, type="build_road", start=s.grid.col_row(b.tile), to=s.grid.col_row(c.tile))
-    assert not p.rejected
-    s = p.state
-    assert city_network(s, RULES, s.cities[a.id])["trade_gold"] == 2
-    assert city_network(s, RULES, s.cities[c.id])["trade_gold"] == 2
-    assert city_network(s, RULES, s.cities[b.id])["trade_gold"] == 2
+    ctx = StepContext(board, RULES, [], EventLog(board.turn), RngTree(board.seed, "t", 1))
+    for t in range(board.grid.size):  # 修路要经过的土地都算本国的
+        if board.grid.owner[t] < 0:
+            board.grid.owner[t] = 1
+    assert build_road(ctx, a, b.tile) is None  # 城市从市中心把路修到本国另一座城
+    assert city_yields(board, RULES, b).production > before
+    assert city_network(board, RULES, b)["production_percent"] == 25
+    # 外国城市不是修路的目标：手动铺一段道路连到外国城市，验证贸易收入
+    from engine.systems.roads import edge_key
+
+    g = board.grid
+    path = [b.tile]
+    while path[-1] != c.tile:
+        nxt = min(g.neighbors_of(path[-1]), key=lambda t: (g.distance(t, c.tile), t))
+        path.append(nxt)
+    for x, y in zip(path, path[1:]):
+        board.roads[edge_key(x, y)] = {"nation": 1, "kind": "road", "built_turn": 1, "water": False}
+    board.invalidate_paths()
+    board._network_cache = None
+    assert city_network(board, RULES, a)["trade_gold"] == 2
+    assert city_network(board, RULES, c)["trade_gold"] == 2
+    assert city_network(board, RULES, b)["trade_gold"] == 2
 
 
 @pytest.mark.parametrize("domain,kind", [("land", "infantry"), ("sea", "destroyer")])

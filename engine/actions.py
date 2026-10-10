@@ -56,14 +56,6 @@ class Disembark(_Order):
     to: tuple[int, int] | None = None
 
 
-class LayRoad(_Order):
-    """工兵从所在格往相邻格修一段路（敌国领土里也能修，给前线运兵）。付这一段的造价，用掉本回合行动。"""
-
-    type: Literal["lay_road"] = "lay_road"
-    unit: str
-    to: tuple[int, int]
-
-
 class DemolishRoad(_Order):
     """拆掉连到所在格的本国道路（防御时拖慢来犯之敌）。用掉本回合行动。"""
 
@@ -187,8 +179,11 @@ class RespondOffer(_Order):
 
 
 class BuildRoad(_Order):
+    """城市修路：从市中心修到 to（本城还没连路的住宅区 / 工厂、本国别的城市、本国工兵所在位置），
+    加进这座城的生产队列，用生产力付造价。"""
+
     type: Literal["build_road"] = "build_road"
-    start: tuple[int, int]
+    city: str
     to: tuple[int, int]
 
 
@@ -200,7 +195,6 @@ Order = Annotated[
     | Disembark
     | AssignCorps
     | LeaveCorps
-    | LayRoad
     | DemolishRoad
     | FoundCity
     | BuildFacility
@@ -244,7 +238,6 @@ ORDER_PRIORITY = {
     "fortify": 3,
     "found_city": 4,
     "pillage": 4,
-    "lay_road": 4,
     "demolish_road": 4,
     "disembark": 5,
     "embark": 5,

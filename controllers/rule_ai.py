@@ -54,7 +54,6 @@ from engine.actions import (
     Embark,
     Fortify,
     FoundCity,
-    LayRoad,
     Move,
     Pillage,
     Ungroup,
@@ -2774,40 +2773,21 @@ def _bodyguards(ctx, nid):
 
 
 def _engineer(ctx, unit, plan):
-    """工兵随战线修前线道路：沿进军路线往战线中段走，脚下往前那一段没有路就先修一段（敌国领土里也修），
-    有路就沿路往前赶。修到战线附近就待命。国库太紧时不修。"""
-    from engine.systems.roads import edge_key, lay_problem
-
+    """工兵前出到战线：往战线中段走，到了就待命——城市会从市中心把道路修到工兵所在的位置
+    （工兵自己不修路），前线就有路运兵了。"""
     s, g = ctx.state, ctx.state.grid
     target = s.cities.get(plan.get("target_city"))
     goal = plan.get("stage")
     if target is None or goal is None or plan.get("sea") or target.nation == unit.nation:
         return False
     if g.distance(unit.tile, goal) <= 2:
-        _hold(ctx, unit, f"前线道路已修到 {target.name} 方向的战线")
+        _hold(ctx, unit, f"在 {target.name} 方向的战线等城市把路修过来")
         return True
-    field = flow(ctx, unit, goal)
-    here = field.get(unit.tile, 1 << 30)
-    steps = [b for b in g.neighbors_of(unit.tile) if field.get(b, 1 << 30) < here]
-    nxt = min(steps, key=lambda b: (field[b], b), default=None)
-    if (
-        nxt is not None
-        and edge_key(unit.tile, nxt) not in s.roads
-        and s.nations[unit.nation].gold >= ROAD_RESERVE
-        and lay_problem(s, ctx.rules, unit, nxt) is None
-        and emit(
-            ctx,
-            unit,
-            LayRoad(
-                issuer=ref("nation", unit.nation), unit=ref("unit", unit.id), to=g.col_row(nxt)
-            ),
-            f"修通往 {target.name} 前线的道路",
-        )
+    if march(
+        ctx, unit, goal, f"前出到 {target.name} 方向的战线，引导城市修前线道路", stop_within=2
     ):
         return True
-    if march(ctx, unit, goal, f"沿前线道路赶往 {target.name} 方向", stop_within=2):
-        return True
-    _hold(ctx, unit, "前线道路修不过去，原地待命")
+    _hold(ctx, unit, "去战线的路被堵住，原地待命")
     return True
 
 

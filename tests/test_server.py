@@ -193,26 +193,33 @@ def test_road_preview_and_construction_endpoint():
 
     snap = client.post("/api/games", json=SMALL).json()
     gid = snap["id"]
-    city = snap["cities"][0]
     s = GAMES.get(gid).state
-    dest = next(
+    mine = [c for c in snap["cities"] if c["nation"] == snap["cities"][0]["nation"]]
+    city = mine[0]
+    # 本国另一座城还没有：在辖区边上放一个工兵当目标（城市可以把路修到工兵所在位置）
+    from engine.state import Unit
+
+    nid = int(city["nation"].split(":")[1])
+    spot = next(
         t
-        for t in s.grid.neighbors_of(city["tile"])
-        if not s.grid.is_water[t]
-        and int(s.grid.owner[t]) == s.cities[int(city["id"].split(":")[1])].nation
+        for t in s.grid.within(city["tile"], 2)
+        if s.grid.distance(t, city["tile"]) == 2
+        and not s.grid.is_water[t]
+        and int(s.grid.owner[t]) == nid
+        and not s.units_at(t)
+        and s.grid.terrain[t] != list(GAMES.get(gid).rules.terrain).index("mountains")
     )
-    request = {
-        "issuer": city["nation"],
-        "start": list(s.grid.col_row(city["tile"])),
-        "to": list(s.grid.col_row(dest)),
-    }
+    s.add_unit(Unit(s.new_id(), "engineer", nid, spot, "surface"))
+    request = {"city": city["id"], "to": list(s.grid.col_row(spot))}
     plan = client.post(f"/api/games/{gid}/road-plan", json=request).json()
-    assert plan["affordable"] and plan["segments"] and plan["cost"] > 0
+    assert plan["segments"] and plan["cost"] > 0, plan
     built = client.post(
-        f"/api/games/{gid}/actions", json={"orders": [{"type": "build_road", **request}]}
+        f"/api/games/{gid}/actions",
+        json={"orders": [{"type": "build_road", "issuer": city["nation"], **request}]},
     ).json()
-    assert not built["rejected"] and built["roads"]["count"] and built["turn"] == 1
-    assert any(e["type"] == "road_built" for e in built["events"])
+    assert not built["rejected"] and any(e["type"] == "road_planned" for e in built["events"])
+    queued = next(c for c in built["cities"] if c["id"] == city["id"])
+    assert queued["queue"][-1] == f"road:{spot}"
 
 
 def test_compact_encoding_round_trip():
