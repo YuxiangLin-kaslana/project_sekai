@@ -264,3 +264,15 @@ def test_warship_takes_an_undefended_port_with_its_walls_down(board):
     out = act(board, order(ship, "attack", to=[COAST - 1, 3]))
     assert not out.rejected and out.state.cities[c.id].nation == 1
     assert out.state.units[ship.id].tile == c.tile
+
+
+def test_settlers_can_sail_on_their_own(board):
+    from engine.systems.movement import movement_map
+
+    settler = add(board, "settler", 1, COAST - 1, 3)
+    best, _ = movement_map(board, RULES, settler)
+    assert board.grid.idx(COAST, 3) in best  # 开拓者可以下海
+    out = act(board, order(settler, "move", to=[COAST + 1, 3]))
+    assert not out.rejected
+    foot = add(board, "infantry", 1, COAST - 1, 4)
+    assert act(board, order(foot, "move", to=[COAST, 4])).rejected  # 陆军还是要坐船

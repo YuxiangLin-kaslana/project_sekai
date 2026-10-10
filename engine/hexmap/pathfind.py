@@ -15,12 +15,14 @@ def move_costs(grid: HexGrid, rules: Ruleset, domain: str) -> np.ndarray:
     """每格的进入消耗 int32[N]，0 = 不可通行。
 
     陆军：陆地按地形 move_cost，水域不可进；舰船：水域按地形 move_cost（冰封海面不可进）；
-    航空：处处为 1（作战半径另算）。
+    两栖（amphibious，开拓者）：陆地、水域都能走，各按地形 move_cost；航空：处处为 1（作战半径另算）。
     """
     if domain == "air":
         return np.ones(grid.size, dtype=np.int32)
     table = np.array([t.move_cost or 0 for t in rules.terrain.values()], dtype=np.int32)
     cost = table[grid.terrain]
+    if domain == "amphibious":
+        return cost.astype(np.int32)
     on_domain = grid.is_water if domain == "sea" else ~grid.is_water
     return np.where(on_domain, cost, 0).astype(np.int32)
 

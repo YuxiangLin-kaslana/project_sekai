@@ -41,7 +41,7 @@ settler:
   cost: 120
   population: 1
   gold: 30
-  tags: [found_city]
+  tags: [found_city, amphibious]   # amphibious：可以下海移动
   icon: settler
 
 engineer:

@@ -17,45 +17,41 @@ def game():
     )
 
 
-def test_new_games_start_in_the_prewar_era_with_locked_items():
+def test_new_games_start_in_the_prewar_era_and_nothing_is_locked():
     s = game()
     nid = min(s.nations)
     assert s.nations[nid].techs == techs.start_techs(RULES) == ["conscription"]
     assert techs.era(s, RULES, nid) == "prewar"
     city = s.nation_cities(nid)[0]
-    assert "装甲战" in production_problem(s, RULES, city, "unit:armor")
-    assert production_problem(s, RULES, city, "unit:infantry") is None  # 开局科技解锁的
-    assert techs.locked(s, RULES, nid, "factory") is not None  # 工厂要“工业化”
+    assert production_problem(s, RULES, city, "unit:infantry") is None
+    assert all(techs.locked(s, RULES, nid, item) is None for item in RULES.units)  # 科技只给加成
 
 
-def test_research_completes_unlocks_and_moves_on():
+def test_research_completes_and_moves_on():
     s = game()
     nid = min(s.nations)
-    order = {"type": "set_research", "issuer": f"nation:{nid}", "tech": "industrialization"}
+    order = {"type": "set_research", "issuer": f"nation:{nid}", "tech": "infantry_tactics"}
     s = step(s, parse_orders([order]), RULES, immediate=True).state
-    assert s.nations[nid].research == "industrialization"
+    assert s.nations[nid].research == "infantry_tactics"
     bad = {"type": "set_research", "issuer": f"nation:{nid}", "tech": "armored_warfare"}
     assert step(s, parse_orders([bad]), RULES, immediate=True).rejected  # 前置没完成
-    s.nations[nid].research_progress = RULES.techs["industrialization"].cost - 1
+    s.nations[nid].research_progress = RULES.techs["infantry_tactics"].cost - 1
     r = step(s, [], RULES)
-    assert "industrialization" in r.state.nations[nid].techs
+    assert "infantry_tactics" in r.state.nations[nid].techs
     assert any(e["type"] == "tech_researched" for e in r.events)
-    assert r.state.nations[nid].research not in (None, "industrialization")  # 自动挑下一项
-    assert techs.locked(r.state, RULES, nid, "factory") is None
+    assert r.state.nations[nid].research not in (None, "infantry_tactics")  # 自动挑下一项
 
 
-def test_tech_effects_strength_and_unit_cost():
+def test_tech_strength_bonuses():
     s = game()
     nid = min(s.nations)
     city = s.nation_cities(nid)[0]
-    base = item_cost(RULES, "unit:infantry", s, city)
-    s.nations[nid].techs += ["mobilization", "industrialization", "mass_production"]
-    assert item_cost(RULES, "unit:infantry", s, city) == base * 85 // 100
     from engine.state import Unit
 
     tank = s.add_unit(Unit(s.new_id(), "armor", nid, city.tile, "surface", hp=200))
     assert techs.strength_bonuses(s, RULES, tank, RULES.units["armor"]) == []
-    s.nations[nid].techs.append("heavy_armor")
+    s.nations[nid].techs += ["armored_warfare", "heavy_armor"]
     assert techs.strength_bonuses(s, RULES, tank, RULES.units["armor"]) == [
-        ("重型坦克：重型坦克", 20)
+        ("装甲战：装甲战", 15),
+        ("重型坦克：重型坦克", 20),
     ]

@@ -123,7 +123,7 @@ def edge_table(state, rules, domain: str, nation: int) -> np.ndarray:
                 cost[c.tile] = 1
     safe = np.maximum(g.neighbors, 0)
     table = cost[safe].astype(np.int16) * MOVE_STEPS
-    if domain == "land":
+    if domain in ("land", "amphibious"):
         for d in range(6):
             river = ((g.river_edges & (1 << d)) != 0) | (
                 (g.river_edges[safe[:, d]] & (1 << ((d + 3) % 6))) != 0
@@ -138,9 +138,14 @@ def edge_table(state, rules, domain: str, nation: int) -> np.ndarray:
     return table
 
 
+def move_domain(ut) -> str:
+    """通行方式：两栖单位（amphibious 标签，开拓者）陆地、水面都能走；其余按军种。"""
+    return "amphibious" if "amphibious" in ut.tags else ut.domain
+
+
 def edge_cost(state, rules, unit, cost, overrides, a, b):
     ut = rules.units[unit.type]
-    if ut.domain == "land":
+    if move_domain(ut) in ("land", "amphibious"):
         road = state.roads.get((min(a, b), max(a, b)))
         if road is not None:
             return 1  # 道路每段 1/MOVE_STEPS 点移动力（桥面、隧道也一样）
@@ -154,11 +159,11 @@ def edge_cost(state, rules, unit, cost, overrides, a, b):
 def _planner(state, rules, unit, cost=None):
     ut = rules.units[unit.type]
     if cost is None:
-        cost = move_costs(state.grid, rules, ut.domain)
+        cost = move_costs(state.grid, rules, move_domain(ut))
     overrides = port_overrides(state, ut, unit.nation)
     blocked = blocked_tiles(state, rules, unit, ut)
     # 和 edge_cost 同一套规则，预先把地形消耗、河流转成 Python 列表（寻路每条边都要算一次）
-    land = ut.domain == "land"
+    land = move_domain(ut) in ("land", "amphibious")
     costs = cost.tolist()
     roads = state.roads
     rivers = state.grid.river_edges.tolist()
@@ -204,7 +209,7 @@ def local_step_problem(ctx, unit, a, b, final=True):
     if (
         ut.domain != "air"
         and edge_cost(
-            s, rules, unit, ctx.costs(ut.domain), port_overrides(s, ut, unit.nation), a, b
+            s, rules, unit, ctx.costs(move_domain(ut)), port_overrides(s, ut, unit.nation), a, b
         )
         <= 0
     ):
@@ -282,7 +287,7 @@ def route_for(state, rules, unit, dest) -> list[int] | None:
     if blocked:
         mask[np.fromiter(blocked, dtype=np.int64)] = True
     path = kernels.astar(
-        edge_table(state, rules, ut.domain, unit.nation),
+        edge_table(state, rules, move_domain(ut), unit.nation),
         g.neighbors,
         mask,
         int(unit.tile),
@@ -317,7 +322,7 @@ def move_target_problem(ctx: StepContext, unit: Unit, tile: int) -> str | None:
         return "那是和平国家的领土，边境关闭，不能进入（要先宣战或结盟）"
     if tile in blocked_tiles(state, rules, unit, ut) or not has_room(state, rules, unit, tile):
         return "目的地有敌军或容量不足"
-    if ut.domain == "land" and ctx.costs("land")[tile] <= 0:
+    if move_domain(ut) == "land" and ctx.costs("land")[tile] <= 0:
         if not any(tile in edge for edge in state.roads):
             return "这里无法步行抵达，需要桥梁或隧道"
     if (
@@ -357,7 +362,7 @@ def resolve(ctx: StepContext) -> None:
             ctx.log.add("move_blocked", unit=ref("unit", unit.id), reason="路线受阻或沿途容量不足")
             continue
         ut = rules.units[unit.type]
-        costs, overrides = ctx.costs(ut.domain), port_overrides(state, ut, unit.nation)
+        costs, overrides = ctx.costs(move_domain(ut)), port_overrides(state, ut, unit.nation)
         budget = min(u.moves_left * MOVE_STEPS + u.road_credit for u in members)
         full = min(unit_moves(state.grid, rules.units[u.type]) * MOVE_STEPS for u in members)
         # 先按移动力走出本回合的一段（可以穿过本方已满的格子），再退回到最后一个能停下的格子

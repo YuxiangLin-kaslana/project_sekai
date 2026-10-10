@@ -452,7 +452,7 @@ def intend_attack(ctx, actor, tile, info, target, reason, *, priority=1):
 def flow(ctx, unit, goal):
     """以 goal 为终点的反向最短路距离场（同国同通行方式共享，按回合缓存）。"""
     s, rules = ctx.state, ctx.rules
-    domain = rules.units[unit.type].domain
+    domain = movement.move_domain(rules.units[unit.type])
     key = (unit.nation, domain, goal)
     # 缓存冷热只改变耗时；每回合可新建的距离场数量与缓存命中率无关。
     allowed = getattr(ctx, "flow_keys", set())
@@ -629,7 +629,7 @@ def march(ctx, unit, goal, reason, *, disperse=False, stop_within=0, avoid=None)
         path, seen = [unit.tile], {unit.tile}
         left = unit.moves_left * MOVE_STEPS + unit.road_credit
         full = movement.unit_moves(g, ut) * MOVE_STEPS
-        cost_table = ctx.costs(ut.domain)
+        cost_table = ctx.costs(movement.move_domain(ut))
         ports = movement.port_overrides(s, ut, unit.nation)
         if not distance and not disperse:
             # 本回合的共享距离场名额用完了：改用单位自己的 A* 路线（绕水绕山），只走本回合走得到的一段

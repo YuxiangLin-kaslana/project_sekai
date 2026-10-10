@@ -1,6 +1,6 @@
-# 二战剧本的科技树（草案，1936–1945，三个时代）。科研值每回合投进当前研究，研完解锁 unlocks 里的
-# 兵种、建筑、区域；没被任何科技解锁的东西开局就能造。start: true 的科技开局就有。
-# strength：兵种战斗力加成（units 或整个军种 domains）；unit_cost：全国造兵花费 %；science：全国科研 +%。
+# 二战剧本的科技树（1936–1945，三个时代）。科研值每回合投进当前研究，研完给对应兵种战斗力加成
+# （strength：units 或整个军种 domains，百分比）。科技不解锁东西：所有兵种、建筑、区域开局就能造。
+# start: true 的科技开局就有。
 
 # ---- 1936 战前 ----
 conscription:
@@ -8,136 +8,113 @@ conscription:
   era: prewar
   cost: 1
   start: true
-  unlocks: [infantry, settler, engineer, recon, artillery]
-  description: 步兵、炮兵、侦察部队、开拓者和工兵。
+  description: 开局科技。
 
-motorization:
-  name: 摩托化
+infantry_tactics:
+  name: 步兵战术
   era: prewar
   cost: 40
-  requires: [conscription]
-  unlocks: [motorized]
-  description: 摩托化步兵。
+  strength:
+    - { label: 步兵战术, units: [infantry, motorized], strength: 10 }
+  description: 步兵、摩托化步兵战斗力 +10%。
 
-industrialization:
-  name: 工业化
-  era: prewar
-  cost: 40
-  unlocks: [factory, workshop]
-  description: 工厂区域和工场。
-
-radio:
-  name: 无线电
+field_artillery:
+  name: 野战炮兵
   era: prewar
   cost: 45
-  unlocks: [research, school]
-  description: 科研中心和学校。
+  strength:
+    - { label: 野战炮兵, units: [artillery], strength: 10 }
+  description: 炮兵战斗力 +10%。
 
 naval_engineering:
   name: 造舰工程
   era: prewar
   cost: 50
-  unlocks: [destroyer, transport]
-  description: 驱逐舰队和运输船。
-
-anti_aircraft:
-  name: 防空火炮
-  era: prewar
-  cost: 50
-  unlocks: [anti_air]
-  description: 高射炮营。
+  strength:
+    - { label: 造舰工程, domains: [sea], strength: 10 }
+  description: 所有舰船战斗力 +10%。
 
 aviation:
   name: 早期航空
   era: prewar
-  cost: 60
-  requires: [motorization]
-  unlocks: [airfield, fighter]
-  description: 机场和战斗机联队。
+  cost: 55
+  strength:
+    - { label: 早期航空, domains: [air], strength: 10 }
+  description: 所有飞机战斗力 +10%。
 
-petrochemistry:
-  name: 石油化工
+anti_aircraft:
+  name: 防空火炮
+  era: prewar
+  cost: 45
+  strength:
+    - { label: 防空火炮, units: [anti_air], strength: 15 }
+  description: 高射炮战斗力 +15%。
+
+motorization:
+  name: 摩托化
   era: prewar
   cost: 60
-  requires: [industrialization]
-  unlocks: [oil_well]
-  description: 油田（陆上、海上）。
-
-mobilization:
-  name: 总动员
-  era: prewar
-  cost: 70
-  requires: [conscription]
-  unlocks: [military_base, barracks, general]
-  description: 军事基地、兵营和将领。
+  requires: [infantry_tactics]
+  strength:
+    - { label: 摩托化, units: [motorized, recon], strength: 15 }
+  description: 摩托化步兵、侦察部队战斗力 +15%。
 
 # ---- 1940 战争中期 ----
 armored_warfare:
   name: 装甲战
   era: midwar
   cost: 130
-  requires: [motorization, petrochemistry]
-  unlocks: [armor]
-  description: 装甲师（坦克）。
+  requires: [motorization]
+  strength:
+    - { label: 装甲战, units: [armor], strength: 15 }
+  description: 坦克战斗力 +15%。
+
+combined_arms:
+  name: 合成兵种
+  era: midwar
+  cost: 140
+  requires: [infantry_tactics, field_artillery]
+  strength:
+    - { label: 合成兵种, domains: [land], strength: 10 }
+  description: 所有陆军战斗力 +10%。
 
 strategic_bombing:
   name: 战略轰炸
   era: midwar
   cost: 140
   requires: [aviation]
-  unlocks: [bomber]
-  description: 轰炸机联队。
+  strength:
+    - { label: 战略轰炸, units: [bomber], strength: 20 }
+  description: 轰炸机战斗力 +20%。
+
+fighter_doctrine:
+  name: 制空战术
+  era: midwar
+  cost: 130
+  requires: [aviation]
+  strength:
+    - { label: 制空战术, units: [fighter], strength: 20 }
+  description: 战斗机战斗力 +20%。
 
 cruisers:
-  name: 巡洋舰
+  name: 重巡洋舰
   era: midwar
   cost: 120
   requires: [naval_engineering]
-  unlocks: [cruiser]
-  description: 巡洋舰队。
-
-naval_command:
-  name: 海军指挥
-  era: midwar
-  cost: 110
-  requires: [naval_engineering]
-  unlocks: [admiral]
-  description: 海军将领（舰队）。
-
-carriers:
-  name: 航空母舰
-  era: midwar
-  cost: 170
-  requires: [cruisers, aviation]
-  unlocks: [carrier]
-  description: 航空母舰编队。
-
-fortification:
-  name: 筑垒
-  era: midwar
-  cost: 100
-  requires: [mobilization]
-  unlocks: [walls]
-  description: 城防工事。
+  strength:
+    - { label: 重巡洋舰, units: [cruiser, destroyer], strength: 15 }
+  description: 巡洋舰、驱逐舰战斗力 +15%。
 
 radar:
   name: 雷达
   era: midwar
   cost: 130
-  requires: [radio, anti_aircraft]
+  requires: [anti_aircraft]
   strength:
     - { label: 雷达预警, units: [anti_air, fighter], strength: 15 }
   description: 高射炮、战斗机战斗力 +15%。
 
 # ---- 1943 战争后期 ----
-battleships:
-  name: 战列舰
-  era: latewar
-  cost: 220
-  requires: [cruisers]
-  unlocks: [battleship]
-  description: 战列舰队。
-
 heavy_armor:
   name: 重型坦克
   era: latewar
@@ -147,22 +124,23 @@ heavy_armor:
     - { label: 重型坦克, units: [armor], strength: 20 }
   description: 坦克战斗力 +20%。
 
+battleships:
+  name: 超级战列舰
+  era: latewar
+  cost: 220
+  requires: [cruisers]
+  strength:
+    - { label: 超级战列舰, units: [battleship, carrier], strength: 20 }
+  description: 战列舰、航母战斗力 +20%。
+
 jet_engine:
   name: 喷气发动机
   era: latewar
   cost: 260
-  requires: [strategic_bombing, radar]
+  requires: [strategic_bombing, fighter_doctrine]
   strength:
     - { label: 喷气发动机, domains: [air], strength: 20 }
   description: 所有飞机战斗力 +20%。
-
-mass_production:
-  name: 大规模生产
-  era: latewar
-  cost: 220
-  requires: [industrialization, mobilization]
-  unit_cost: 85
-  description: 全国造兵花费 −15%。
 
 proximity_fuze:
   name: 近炸引信
@@ -173,10 +151,11 @@ proximity_fuze:
     - { label: 近炸引信, units: [anti_air, destroyer, cruiser, battleship], strength: 20 }
   description: 高射炮和战舰战斗力 +20%。
 
-computing:
-  name: 电子计算
+elite_divisions:
+  name: 精锐师
   era: latewar
   cost: 260
-  requires: [radar]
-  science: 25
-  description: 全国科研 +25%。
+  requires: [combined_arms]
+  strength:
+    - { label: 精锐师, units: [infantry, motorized, artillery, recon], strength: 15 }
+  description: 步兵、摩托化、炮兵、侦察部队战斗力 +15%。
