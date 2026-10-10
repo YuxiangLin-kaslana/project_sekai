@@ -98,6 +98,13 @@ def resolve(ctx):
             c.construction = None
             continue
         s.grid.facility[p.tile] = rules.facility_index(p.facility)
+        if b.expand:
+            # 住宅区：以自身为中心把城市辖区往外扩
+            from engine.systems.cities import expand_territory
+
+            claimed = expand_territory(s, c, p.tile, b.expand)
+            if claimed:
+                ctx.log.add("borders_grew", city=ref("city", c.id), tiles=claimed)
         ctx.log.add(
             "facility_built",
             facility=p.facility,

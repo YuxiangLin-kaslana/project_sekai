@@ -143,19 +143,24 @@ def test_region_city_count_is_a_hard_limit_for_all_nations(board):
     assert result.rejected and result.state_hash == before
 
 
-def test_city_population_has_no_ceiling_but_territory_radius_is_capped(board):
-    from engine.systems.settlement import map_scale
+def test_population_needs_housing_and_units_use_it_up_for_good(board):
+    from engine.systems.cities import housing, pop_cap
 
     c = board.nation_cities(1)[0]
-    c.population = 60
-    c.food = food_to_grow(60) + 120
-    result = step(board, [], RULES)
-    city = result.state.cities[c.id]
-    assert city.population == 61
-    assert city.radius == round(RULES.cities.territory_cap * map_scale(board.grid))
-    enemy = board.nation_cities(2)[0]
-    assert result.state.grid.owner[enemy.tile] == 2
-    assert result.state.grid.city_of[enemy.tile] == enemy.id
+    cap = pop_cap(board, RULES, c)
+    assert (
+        cap
+        == housing(board, RULES, c)
+        == RULES.cities.center_housing + sum(RULES.buildings[b].housing for b in c.buildings)
+    )
+    c.population = cap
+    c.food = food_to_grow(cap) + 50
+    grown = step(board, [], RULES).state.cities[c.id]
+    assert grown.population == cap  # 住房满了不增长
+    c.population, c.drafted = cap - 1, 1  # 征召过一个兵：上限永久少一个
+    assert pop_cap(board, RULES, c) == cap - 1
+    still = step(board, [], RULES).state.cities[c.id]
+    assert still.population == cap - 1
 
 
 def test_large_maps_scale_cities_and_keep_city_quotas_comparable():
@@ -179,7 +184,7 @@ def test_large_maps_scale_cities_and_keep_city_quotas_comparable():
     assert sum(geography(large, RULES)["capacity"]) > sum(geography(small, RULES)["capacity"]) * 2
 
 
-def test_environment_changes_city_density_and_development_yields():
+def test_environment_changes_city_density_and_improvements_follow_terrain():
     def make(role):
         g = HexGrid.empty(24, 24, wrap_x=False)
         g.terrain[:] = RULES.terrain_index(role)
@@ -188,13 +193,13 @@ def test_environment_changes_city_density_and_development_yields():
     good, bad = make("grassland"), make("desert")
     assert spacing(good, RULES, 100) < spacing(bad, RULES, 100)
     assert sum(geography(good, RULES)["capacity"]) > sum(geography(bad, RULES)["capacity"])
-    factory = RULES.buildings["factory"]
-    assert (
-        tile_yields(RULES, good.grid, 100, factory).production
-        >= 3 * tile_yields(RULES, bad.grid, 100, factory).production
-    )
+    farm = RULES.buildings["farm"]
+    plains = make("plains")
+    # 农田按改良前的地形：平原 +3、草原 +1
+    assert tile_yields(RULES, plains.grid, 100, farm).food == 3
+    assert tile_yields(RULES, good.grid, 100, farm).food == 1
     bad.grid.resource[100] = RULES.resource_index("iron")
-    assert tile_yields(RULES, bad.grid, 100, RULES.buildings["mine"]).production >= 4
+    assert tile_yields(RULES, bad.grid, 100, RULES.buildings["mine"]).production == 4
 
 
 def test_resource_deposits_require_working_extractors(board):
@@ -203,8 +208,9 @@ def test_resource_deposits_require_working_extractors(board):
     board.grid.resource[t] = RULES.resource_index("iron")
     assert "iron" not in nation_resources(board, RULES, 1)
     board.grid.facility[t] = RULES.facility_index("mine")
-    assert "iron" in nation_resources(board, RULES, 1)
-    assert RULES.resources["iron"].yields.production == 1
+    assert "iron" in nation_resources(board, RULES, 1)  # 首都有人口在矿区劳作
+    assert RULES.resources["iron"].yields.production == 4  # 工业资源 +4 生产力
+    assert RULES.resources["wheat"].yields.food == 4  # 农业资源 +4 粮食
     for rid in ("tungsten", "rare_earths"):
         board.grid.resource[t] = RULES.resource_index(rid)
         assert rid in nation_resources(board, RULES, 1)

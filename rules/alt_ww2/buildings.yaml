@@ -1,16 +1,23 @@
-# 建筑。placement: center = 市中心建筑（城市生产队列建造，一次付清 cost 生产力）；
-#       placement: tile = 城外设施（施工 build_turns 回合，cost 生产力分期从本城产出里付，付不起就停工）。
-# 格子只有建了设施、并且有人口在上面劳作才有产出 / 生效：设施格产出 = 地形 + 资源 + 设施 yields，
-# 每处设施需要 workers 人口；人口不够时按产出高低挑着运作，没人的设施（包括军事基地、机场）不生效。
-# gold_assist：城市开了“金币补足建设”时能否用金币补生产力（默认能；兵营、城防、军事基地、机场不能）。
-# stacking：该格堆叠上限加成；modifiers：修正器（见架构设计 5.3）。数值为初始草案。
+# 二战剧本的城市建设（engine/systems/cities.py）。三类：
+#
+# placement: center   市中心建筑：城市生产队列建造，一次付清 cost 生产力；housing 加住房。
+# placement: district 区域：占辖区里的一格，城市组织施工（build_turns 回合，cost 生产力分期付）。
+#   unique：每城最多一个；exclusive：同一组里每城只能有一个（商业中心、港口二选一）。
+#   yields：建好就有的产出；road_yields / road_housing：有道路连到市中心再加的产出 / 住房。
+#   jobs：岗位数（0–3），每个岗位放 1 个人口，固定加 job_yields；expand：以自身为中心把辖区往外扩几格。
+#   enables：能造的兵种类别（ships 舰船 / aircraft 飞机）。
+# placement: tile     改良设施：农田、伐木场、采石场和各种资源采集区，1 个岗位，有人劳作才有产出。
+#   terrain_yields：按改良前的地形给的产出（没写的地形用 yields）；采集区另加资源本身的产出。
+#
+# 人口：每个人口每回合吃 1 粮食、耗 0.5 生产力、占 1 个住房；市中心给 3 住房、3 粮食、3 生产力（ruleset.yaml）。
+# gold_assist：城市开了“金币补足建设”时能否用金币补生产力（军事建筑不行）。
 
-# ---- 市中心 ----
+# ---- 市中心建筑（每个 +1 住房）----
 palace:
   name: 首都府
   placement: center
   buildable: false
-  yields: { production: 2, gold: 3, science: 2 }
+  yields: { gold: 3, science: 2 }
   modifiers:
     - { target: city, stat: defense, op: add, value: 50 }
   icon: palace
@@ -20,42 +27,38 @@ granary:
   placement: center
   cost: 60
   upkeep: 1
-  yields: { food: 2 }
+  housing: 1
+  yields: { food: 1 }
   modifiers:
     - { target: city, stat: food_storage, op: mul, value: 125 }
   icon: granary
+
+school:
+  name: 学校
+  placement: center
+  cost: 80
+  upkeep: 1
+  housing: 1
+  yields: { science: 1 }
+  icon: school
 
 workshop:
   name: 工场
   placement: center
   cost: 80
   upkeep: 1
-  yields: { production: 2 }
+  housing: 1
+  yields: { production: 1 }
   icon: workshop
-
-market:
-  name: 市场
-  placement: center
-  cost: 90
-  yields: { gold: 2 }
-  modifiers:
-    - { target: city, stat: gold, op: mul, value: 125 }
-  icon: market
-
-school:
-  name: 学校
-  placement: center
-  cost: 90
-  upkeep: 1
-  yields: { science: 3 }
-  icon: school
 
 barracks:
   name: 兵营
   placement: center
-  cost: 120
+  cost: 100
   upkeep: 1
+  housing: 1
   modifiers:
+    - { target: city, stat: unit_cost, op: mul, value: 90 }      # 单位生产花费 −10%
     - { target: city, stat: unit_experience, op: add, value: 15 }
   gold_assist: false
   icon: barracks
@@ -70,106 +73,195 @@ walls:
   gold_assist: false
   icon: walls
 
-# ---- 城外设施 ----
+# ---- 区域：可以建很多个 ----
+residential:
+  name: 住宅区
+  placement: district
+  cost: 50
+  build_turns: 3
+  jobs: 0
+  housing: 2
+  road_housing: 2            # 有道路连到市中心再 +2 住房
+  expand: 2                  # 以自身为中心把城市辖区往外扩 2 格
+  allowed_terrain: [plains, grassland, desert, tundra, hills, forest, rainforest, marsh, snow]
+  icon: residential
+
+factory:
+  name: 工厂
+  placement: district
+  cost: 80
+  build_turns: 4
+  upkeep: 1
+  jobs: 3
+  job_yields: { production: 2 }
+  yields: { production: 2 }
+  road_yields: { production: 2 }   # 有道路连到市中心再 +2 生产力
+  allowed_terrain: [plains, grassland, desert, tundra, hills, snow]
+  icon: factory
+
+# ---- 区域：每城最多一个 ----
+commercial:
+  name: 商业中心
+  placement: district
+  unique: true
+  exclusive: harbor          # 商业中心和港口二选一
+  cost: 80
+  build_turns: 4
+  jobs: 3
+  job_yields: { gold: 2 }
+  yields: { gold: 3 }
+  allowed_terrain: [plains, grassland, desert, tundra, hills]
+  icon: market
+
+port:
+  name: 港口
+  placement: district
+  unique: true
+  exclusive: harbor
+  coastal: true
+  cost: 90
+  build_turns: 4
+  jobs: 3
+  job_yields: { gold: 2 }
+  yields: { gold: 3 }
+  enables: [ships]           # 有港口的城市才能造舰船
+  stacking: { military: 0 }
+  icon: port
+
+airfield:
+  name: 机场
+  placement: district
+  unique: true
+  cost: 100
+  build_turns: 4
+  upkeep: 1
+  jobs: 0
+  allowed_terrain: [plains, grassland, desert, tundra]
+  air_base: true
+  enables: [aircraft]        # 有机场的城市才能造飞机
+  stacking: { air: 3 }
+  gold_assist: false
+  icon: airfield
+
+military_base:
+  name: 军事基地
+  placement: district
+  unique: true
+  cost: 120
+  build_turns: 4
+  upkeep: 1
+  jobs: 0
+  stacking: { military: 0 }
+  allowed_terrain: [plains, grassland, desert, tundra, hills]
+  modifiers:
+    - { target: city, stat: unit_cost, op: mul, value: 70 }      # 造兵省 30% 生产力（也就快 30%）
+    - { target: tile, stat: defense, op: add, value: 25 }
+  gold_assist: false
+  icon: base
+
+research:
+  name: 科研中心
+  placement: district
+  unique: true
+  cost: 90
+  build_turns: 4
+  upkeep: 1
+  jobs: 3
+  job_yields: { science: 2 }
+  yields: { science: 3 }
+  allowed_terrain: [plains, grassland, desert, tundra, hills, forest]
+  icon: research
+
+# ---- 改良设施（1 个岗位，有人劳作才有产出）----
 farm:
   name: 农田
   placement: tile
   cost: 20
-  build_turns: 3
-  workers: 1
-  allowed_terrain: [plains, grassland, tundra, marsh]
+  build_turns: 2
+  jobs: 1
+  allowed_terrain: [plains, grassland, forest, rainforest]
   allowed_resources: [wheat, cattle]
+  extracts: [wheat, cattle]
+  terrain_yields:            # 按改良前的地形
+    plains: { food: 3 }
+    rainforest: { food: 2 }
+    grassland: { food: 1 }
+    forest: { food: 1 }
   yields: { food: 1 }
   icon: farm
-
-mine:
-  name: 矿山
-  placement: tile
-  cost: 30
-  build_turns: 4
-  workers: 1
-  allowed_terrain: [hills, volcano]
-  allowed_resources: [iron, coal, aluminum, gems, tungsten, rare_earths]
-  extracts: [iron, coal, aluminum, gems, tungsten, rare_earths]
-  yields: { production: 1 }
-  icon: mine
 
 lumber_mill:
   name: 伐木场
   placement: tile
   cost: 20
-  build_turns: 3
-  workers: 1
+  build_turns: 2
+  jobs: 1
   allowed_terrain: [forest, rainforest]
-  yields: { production: 1 }
+  terrain_yields:
+    forest: { production: 3 }
+    rainforest: { production: 2 }
   icon: lumber
+
+quarry:
+  name: 采石场
+  placement: tile
+  cost: 25
+  build_turns: 3
+  jobs: 1
+  allowed_terrain: [hills, mountains, desert, tundra, snow, volcano]
+  yields: { production: 2 }
+  icon: quarry
+
+# ---- 资源采集区：产出就是资源本身（工业资源 +4 生产力、农业资源 +4 粮食）；正在开采的战略资源解锁兵种 ----
+mine:
+  name: 矿区
+  placement: tile
+  cost: 30
+  build_turns: 3
+  jobs: 1
+  requires_resources: [iron, coal, aluminum, gems, tungsten, rare_earths]
+  extracts: [iron, coal, aluminum, gems, tungsten, rare_earths]
+  icon: mine
+
+oil_well:
+  name: 油田
+  placement: tile
+  cost: 50
+  build_turns: 4
+  jobs: 1
+  on_water: true             # 海上石油也能开采
+  requires_resources: [oil]
+  extracts: [oil]
+  icon: oil
+
+fishing:
+  name: 渔场
+  placement: tile
+  cost: 25
+  build_turns: 2
+  jobs: 1
+  on_water: true
+  requires_resources: [fish]
+  extracts: [fish]
+  icon: fishing
 
 plantation:
   name: 种植园
   placement: tile
   cost: 30
   build_turns: 3
-  workers: 1
+  jobs: 1
   requires_resources: [silk, spices, wine, rubber]
   extracts: [silk, spices, wine, rubber]
   yields: { gold: 1 }
   icon: plantation
 
-oil_well:
-  name: 油井
+pasture:
+  name: 牧场
   placement: tile
-  cost: 50
-  build_turns: 5
-  workers: 1
-  requires_resources: [oil]
-  extracts: [oil]
-  yields: { production: 3, gold: 1 }
-  icon: oil
-
-factory:
-  name: 工厂
-  placement: tile
-  cost: 80
-  build_turns: 6
-  workers: 2
-  allowed_terrain: [plains, grassland, desert, tundra]
-  upkeep: 2
-  yields: { production: 3 }
-  icon: factory
-
-military_base:
-  name: 军事基地
-  placement: tile
-  workers: 1
-  cost: 150
-  build_turns: 4
-  upkeep: 1
-  stacking: { military: 0 }
-  modifiers:
-    - { target: tile, stat: defense, op: add, value: 25 }
-  gold_assist: false
-  icon: base
-
-airfield:
-  name: 机场
-  placement: tile
-  workers: 1
-  cost: 150
-  build_turns: 4
-  upkeep: 1
-  allowed_terrain: [plains, grassland, desert, tundra]
-  air_base: true
-  stacking: { air: 3 }
-  gold_assist: false
-  icon: airfield
-
-port:
-  name: 港口
-  placement: tile
-  cost: 60
-  build_turns: 4
-  workers: 1
-  coastal: true
-  yields: { food: 1, gold: 2 }
-  stacking: { military: 0 }
-  icon: port
+  cost: 25
+  build_turns: 2
+  jobs: 1
+  requires_resources: [horses]
+  extracts: [horses]
+  icon: pasture

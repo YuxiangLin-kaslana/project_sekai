@@ -30,7 +30,17 @@ from engine.rules.schema import Ruleset
 from engine.state import MOVE_STEPS
 from engine.step import step
 from engine.systems.air import PATROL_TURNS
-from engine.systems.cities import city_stat, city_yields, food_to_grow, nation_resources
+from engine.systems.cities import (
+    assign_jobs,
+    city_sites,
+    city_stat,
+    city_yields,
+    connected,
+    food_to_grow,
+    housing,
+    nation_resources,
+    pop_cap,
+)
 from engine.systems.combat import attack_range, lock_reason, strength
 from engine.systems.diplomacy import DEFAULT as DIPLOMACY_DEFAULT
 from engine.systems.economy import unit_upkeep, upkeep
@@ -182,7 +192,16 @@ def rules_json(rules: Ruleset) -> dict:
                 "buildable": b.buildable,
                 "upkeep": b.upkeep,
                 "yields": b.yields.model_dump(),
-                "workers": b.workers,
+                "jobs": b.jobs,
+                "job_yields": b.job_yields.model_dump(),
+                "housing": b.housing,
+                "road_housing": b.road_housing,
+                "road_yields": b.road_yields.model_dump(),
+                "unique": b.unique,
+                "exclusive": b.exclusive,
+                "expand": b.expand,
+                "enables": b.enables,
+                "terrain_yields": {k: v.model_dump() for k, v in b.terrain_yields.items()},
                 "icon": b.icon,
             }
             for b in rules.buildings.values()
@@ -329,6 +348,16 @@ def _snapshot(game: Game, rules: Ruleset) -> dict:
                 "tile": c.tile,
                 "population": c.population,
                 "capital": c.capital,
+                # 新城市经济：住房、人口上限（住房 − 被征召走的人口）、岗位、区域是否连上路
+                "housing": housing(s, rules, c),
+                "pop_cap": pop_cap(s, rules, c),
+                "drafted": c.drafted,
+                "jobs": {str(t): n for t, n in sorted(assign_jobs(s, rules, c).items())},
+                "linked": sorted(
+                    t
+                    for t, b in city_sites(s, rules, c)
+                    if b.placement == "district" and t in connected(s, c)
+                ),
                 "radius": c.radius,
                 "buildings": c.buildings,
                 "queue": c.queue,

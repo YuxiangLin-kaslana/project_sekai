@@ -101,6 +101,7 @@ class City:
     stability_reasons: list[str] = field(default_factory=list)  # 上回合让稳定度下降的原因
     management: dict = field(default_factory=dict)
     production_reason: str = ""
+    drafted: int = 0  # 被征召走的人口：每造一个单位永久占一个人口上限（单位死了也不还）
 
 
 @dataclass(slots=True)

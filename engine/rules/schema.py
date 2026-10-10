@@ -141,6 +141,7 @@ class UnitType(_Strict):
     damage_vs_city: int = Field(100, ge=0, le=500)  # 打城市（城防）的伤害（百分比）
     torpedo: int = Field(0, ge=0)  # 鱼雷：只打舰船，射程 range（近距离），伤害高
     deck_gun: int = Field(0, ge=0)  # 驱逐舰甲板炮：没有敌舰时打岸上部队 / 城市（射程 range）
+    fuel: bool = False  # 靠石油燃料（坦克、飞机）：本国没有石油供应时战斗力 −30%
     flak: int = Field(0, ge=0)  # 舰艇自带防空火力：敌机飞进 / 飞出 flak_range 圈时各开火一次
     flak_range: int = Field(2, ge=1)
     carry: int = Field(0, ge=0)  # 舰船能载运几支陆军（登船 / 下船）
@@ -181,18 +182,32 @@ class UnitType(_Strict):
 
 
 class BuildingType(_Strict):
-    """建筑。placement = center：市中心建筑，由城市生产队列建造；
-    placement = tile：城外设施，由国家直接组织辖区施工（兼容旧工兵指令），开发后才有产出。"""
+    """城市建设（剧本的 buildings.yaml）。placement：
+    center   市中心建筑：城市生产队列建造，一次付清；
+    district 区域：占辖区里一格，城市组织施工；有岗位（0–3），每个岗位固定加 job_yields；
+    tile     改良设施（农田、伐木场、采石场、资源采集区）：1 个岗位，有人劳作才有产出。"""
 
     id: str
     name: str
-    placement: Literal["center", "tile"]
+    placement: Literal["center", "district", "tile"]
     cost: int = Field(0, ge=0)  # 生产力。市中心建筑一次付清；城外设施在 build_turns 回合内分期付
     build_turns: int = Field(3, ge=1)  # 城外设施的施工回合数（每回合付清一期才算推进一回合）
     buildable: bool = True  # False = 只能由开局或事件获得（如首都府）
     upkeep: int = Field(0, ge=0)
     yields: Yields = Yields()  # 市中心：加到城市产出；城外：加在地形 + 资源产出之上
-    workers: int = Field(1, ge=0)  # 运作需要的人口：城外设施没人劳作就不生效
+    jobs: int = Field(
+        1, ge=0, le=3
+    )  # 岗位数：改良设施 1（有人才有产出）；区域 0–3（每人 +job_yields）
+    job_yields: Yields = Yields()  # 区域每个岗位的产出
+    housing: int = Field(0, ge=0)  # 住房（市中心建筑、住宅区）
+    road_housing: int = Field(0, ge=0)  # 有道路连到市中心再加的住房
+    road_yields: Yields = Yields()  # 有道路连到市中心再加的产出
+    unique: bool = False  # 每城最多一个
+    exclusive: str | None = None  # 同组（如商业中心 / 港口）每城只能有一个
+    expand: int = Field(0, ge=0, le=6)  # 建成后以自身为中心把城市辖区往外扩这么多格
+    terrain_yields: dict[str, Yields] = {}  # 按改良前的地形给的产出（没写的地形用 yields）
+    on_water: bool = False  # 能建在水面上（渔场、海上油田）
+    enables: list[str] = []  # 城市有了它才能造的兵种类别：ships / aircraft
     gold_assist: bool = True  # 能否用金币补生产力（城市开了金币补足建设时）；军事建筑不行
     extracts: list[str] = []  # 运作时开采的资源；仅占领矿藏不提供战略资源
     allowed_terrain: list[str] = []  # 城外设施能建在哪些地形（空 = 任何陆地）
@@ -241,9 +256,18 @@ class CityConfig(_Strict):
     dense_distance: int = Field(3, ge=2)
     sparse_distance: int = Field(7, ge=3)
     regional_capacity: bool = True
+    center_housing: int = Field(3, ge=0)  # 市中心本身给的住房
     capital_road_bonus: int = Field(25, ge=0, le=100)
     foreign_trade_gold: int = Field(2, ge=0)
     max_trade_partners: int = Field(3, ge=0)
+
+
+class IndustryConfig(_Strict):
+    """工业加成：本国同时有 requires 里的资源供应时，这些区域（buildings）的生产力 +percent%。"""
+
+    requires: list[str] = []
+    buildings: list[str] = []
+    percent: int = Field(0, ge=0, le=200)
 
 
 class StackingConfig(_Strict):
@@ -390,6 +414,7 @@ class Ruleset(_Strict):
     buildings: dict[str, BuildingType] = {}
     nations: dict[str, NationTemplate] = {}
     names: dict[str, NamePool] = {}  # 名字库：系列 → 国名、城市名、人名
+    industry: IndustryConfig = IndustryConfig()
     worldgen: WorldGenConfig
     cities: CityConfig = CityConfig()
     stacking: StackingConfig = StackingConfig()
@@ -450,10 +475,11 @@ class Ruleset(_Strict):
                 b.allowed_resources + b.requires_resources + b.extracts,
                 self.resources,
             )
-            if b.placement == "tile":
+            known("地形", f"{owner} 的 terrain_yields", list(b.terrain_yields), self.terrain)
+            if b.placement != "center" and not b.on_water:
                 water = [t for t in b.allowed_terrain if self.terrain[t].water]
                 if water:
-                    raise ValueError(f"{owner}：城外设施只能建在陆地上，{water} 是水域")
+                    raise ValueError(f"{owner}：只能建在陆地上（没有 on_water），{water} 是水域")
         start = self.start
         known("单位", "start", start.units + start.coastal_units + start.air_units, self.units)
         known("建筑", "start", start.buildings, self.buildings)
@@ -495,11 +521,11 @@ class Ruleset(_Strict):
     def biome_index(self, role: str) -> int:
         return self.terrain_index(getattr(self.worldgen.biomes, role))
 
-    # ---- 设施：数字 ID 从 1 开始（0 = 未开发），按声明顺序，只算城外设施 ----
+    # ---- 格子上的建设（区域 + 改良设施）：数字 ID 从 1 开始（0 = 未开发），按声明顺序 ----
 
     @property
     def facility_ids(self) -> list[str]:
-        return [b.id for b in self.buildings.values() if b.placement == "tile"]
+        return [b.id for b in self.buildings.values() if b.placement != "center"]
 
     def facility_index(self, building_id: str) -> int:
         return self.facility_ids.index(building_id) + 1

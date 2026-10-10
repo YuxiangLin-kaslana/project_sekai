@@ -59,8 +59,8 @@ def _place(
 
 
 def _develop(state: GameState, rules: Ruleset, city_id: int, count: int) -> None:
-    """在首都辖区里预先建好 count 处设施：只挑不要维护费的，按产出从高到低，
-    先每种设施最多一处（一般是一片农田 + 一处矿山或伐木场），不够再重复。"""
+    """在首都辖区里预先建好 count 处改良设施：按产出从高到低，先每种最多一处
+    （一般是一片农田 + 一处伐木场或采石场），不够再重复。"""
     city = state.cities[city_id]
     g = state.grid
     best: list[tuple[int, int, str]] = []
@@ -68,7 +68,7 @@ def _develop(state: GameState, rules: Ruleset, city_id: int, count: int) -> None
         options = [
             (yield_value(tile_yields(rules, g, t, rules.buildings[b])), b)
             for b in facility_options(state, rules, city.nation, t)
-            if rules.buildings[b].workers > 0 and rules.buildings[b].upkeep == 0
+            if rules.buildings[b].placement == "tile" and rules.buildings[b].upkeep == 0
         ]
         if options:
             value, b = max(options, key=lambda vb: (vb[0], vb[1]))

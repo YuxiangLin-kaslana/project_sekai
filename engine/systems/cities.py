@@ -12,7 +12,7 @@ from engine.hexmap.grid import HexGrid
 from engine.rules.schema import BuildingType, Ruleset, Yields
 from engine.state import City, GameState
 
-FOOD_PER_POP = 2  # 每人口每回合吃掉的粮食
+FOOD_PER_POP = 1  # 每人口每回合吃掉的粮食
 
 
 def food_to_grow(population: int) -> int:
@@ -105,6 +105,22 @@ def claim_territory(grid: HexGrid, city: City, coastal: int | None = None) -> li
     return claimed
 
 
+def expand_territory(state: GameState, city: City, center: int, radius: int) -> list[int]:
+    """以 center 为中心把城市辖区往外扩 radius 格（住宅区）：只划无主的格子，近岸海面也算。"""
+    g = state.grid
+    claimed = []
+    for t in g.within(center, radius):
+        if int(g.owner[t]) < 0:
+            g.owner[t] = city.nation
+            g.city_of[t] = city.id
+            claimed.append(int(t))
+    if claimed:
+        state._territory_cache = None
+        state._settlement_usage = None
+        state._closed_cache.clear()
+    return claimed
+
+
 def found_city(
     state: GameState, rules: Ruleset, nation: int, tile: int, *, capital: bool = False
 ) -> City:
@@ -147,23 +163,50 @@ def coastal(grid: HexGrid, tile: int) -> bool:
     return any(n >= 0 and grid.is_water[n] for n in grid.neighbors[tile])
 
 
+def city_of_tile(state: GameState, tile: int) -> City | None:
+    cid = int(state.grid.city_of[tile])
+    return state.cities.get(cid) if cid >= 0 else None
+
+
+def city_sites(state: GameState, rules: Ruleset, city: City) -> list[tuple[int, BuildingType]]:
+    """这座城辖区里建好的区域和改良设施（被炸坏的不算），按格子编号。"""
+    g = state.grid
+    out = []
+    for t in city_tiles(state, city):
+        b = rules.facility_at(int(g.facility[t]))
+        if b is not None and t not in state.damaged:
+            out.append((t, b))
+    return out
+
+
+def _has(state, rules, city, pred) -> bool:
+    """城里有没有满足 pred 的区域（建好的或正在施工的）。"""
+    g = state.grid
+    for t in city_tiles(state, city):
+        b = rules.facility_at(int(g.facility[t]))
+        if b is not None and pred(b):
+            return True
+    p = city.construction
+    return p is not None and not p.repair and pred(rules.buildings[p.facility])
+
+
 def facility_problem(
     state: GameState, rules: Ruleset, nation: int, tile: int, b: BuildingType
 ) -> str | None:
-    """不能在 tile 上建设施 b 的原因；可以建返回 None。"""
+    """不能在 tile 上建区域 / 改良设施 b 的原因；可以建返回 None。"""
     g = state.grid
-    if b.placement != "tile":
+    if b.placement == "center":
         return f"{b.name}是市中心建筑，不能建在格子上"
     if not b.buildable:
         return f"{b.name}不能建造"
-    if g.is_water[tile]:
-        return "设施只能建在陆地上"
+    if g.is_water[tile] and not b.on_water:
+        return f"{b.name}只能建在陆地上"
     if int(g.owner[tile]) != nation:
-        return "只能在本国领土内建设施"
+        return "只能在本国领土内建设"
     if state.city_at(tile) is not None:
-        return "市中心格不能建设施"
+        return "市中心格不能再建别的"
     if g.facility[tile]:
-        return "这一格已经有设施了"
+        return "这一格已经有建设了"
     if any(u.nation != nation for u in state.units_at(tile, "surface")):
         return "地块有外国部队，暂时无法施工"  # 头顶飞过的飞机不挡施工
     terrain = rules.terrain_at(int(g.terrain[tile]))
@@ -182,6 +225,19 @@ def facility_problem(
         return f"{terrain.name}无法施工"
     if b.coastal and not coastal(g, tile):
         return f"{b.name}必须临水"
+    city = city_of_tile(state, tile)
+    if b.placement == "district" and city is not None:
+        if b.unique and _has(state, rules, city, lambda x: x.id == b.id):
+            return f"{city.name}已经有{b.name}了（每城一个）"
+        if b.exclusive and _has(
+            state, rules, city, lambda x: x.exclusive == b.exclusive and x.id != b.id
+        ):
+            other = next(
+                x.name
+                for x in rules.buildings.values()
+                if x.exclusive == b.exclusive and x.id != b.id
+            )
+            return f"{city.name}已经有{other}了（{b.name}和{other}二选一）"
     return None
 
 
@@ -189,32 +245,18 @@ def facility_options(state: GameState, rules: Ruleset, nation: int, tile: int) -
     return [
         b.id
         for b in rules.buildings.values()
-        if b.placement == "tile" and facility_problem(state, rules, nation, tile, b) is None
+        if b.placement != "center" and facility_problem(state, rules, nation, tile, b) is None
     ]
 
 
 def tile_yields(rules: Ruleset, grid: HexGrid, tile: int, facility: BuildingType) -> Yields:
-    from engine.systems.settlement import FERTILITY
-
+    """改良设施有人劳作时的产出：按改良前的地形（terrain_yields，没写的用 yields），
+    采集区另加资源本身的产出（粮食资源在农田、牧场上也加）。"""
     terrain = rules.terrain_at(int(grid.terrain[tile]))
-    y = terrain.yields + facility.yields
-    fertility = FERTILITY.get(terrain.id, 0)
-    if facility.id == "farm":
-        y = y + Yields(food=int(fertility >= 60) + int(grid.river_edges[tile] > 0))
-    if facility.id in {"factory", "plantation", "lumber_mill"}:
-        factor = 50 if fertility < 28 else 150 if fertility >= 60 else 100
-        y = Yields(
-            food=y.food,
-            production=y.production * factor // 100,
-            gold=y.gold * factor // 100,
-            science=y.science,
-        )
+    y = facility.terrain_yields.get(terrain.id, facility.yields)
     res = rules.resource_at(int(grid.resource[tile]))
-    if res and (res.kind == "food" or res.id in facility.extracts):
+    if res and (res.id in facility.extracts or (res.kind == "food" and facility.id == "farm")):
         y = y + res.yields
-    # 矿产不受贫瘠环境折损，所有匹配的矿山统一提高开采收益。
-    if res and res.id in facility.extracts and facility.id == "mine":
-        y = y + Yields(production=2)
     return y
 
 
@@ -225,6 +267,138 @@ def city_tiles(state: GameState, city: City) -> list[int]:
     return state.territory_index().get(city.id, [])
 
 
+def connected(state: GameState, city: City) -> frozenset[int]:
+    """道路连到这座城市中心的格子（沿道路从市中心走得到的）。道路变了就重算（缓存跟着通行费用表作废）。"""
+    key = ("connected", city.id, city.tile)
+    hit = state._edge_cache.get(key)
+    if hit is not None:
+        return hit
+    adj = state._edge_cache.get("road_adj")
+    if adj is None:
+        adj = {}
+        for a, b in state.roads:
+            adj.setdefault(a, []).append(b)
+            adj.setdefault(b, []).append(a)
+        state._edge_cache["road_adj"] = adj
+    seen, todo = {city.tile}, [city.tile]
+    while todo:
+        t = todo.pop()
+        for n in adj.get(t, ()):
+            if n not in seen:
+                seen.add(n)
+                todo.append(n)
+    out = frozenset(seen)
+    state._edge_cache[key] = out
+    return out
+
+
+def housing(state: GameState, rules: Ruleset, city: City, planned=None) -> int:
+    """住房：市中心 + 市中心建筑 + 住宅区（有道路连到市中心再加）。"""
+    total = rules.cities.center_housing + sum(rules.buildings[b].housing for b in city.buildings)
+    linked = connected(state, city)
+    sites = city_sites(state, rules, city) + ([planned] if planned else [])
+    for t, b in sites:
+        if b.placement == "district" and (b.housing or b.road_housing):
+            total += b.housing + (b.road_housing if t in linked else 0)
+    return total
+
+
+def pop_cap(state: GameState, rules: Ruleset, city: City) -> int:
+    """人口上限：住房减去被征召走的人口（每造一个单位永久占一个，单位死了也不还）。"""
+    return max(1, housing(state, rules, city) - city.drafted)
+
+
+def _site_values(state, rules, city, sites):
+    """每处建设：（建好就有的产出，每个岗位的产出，岗位数）。"""
+    linked = connected(state, city)
+    out = {}
+    for t, b in sites:
+        if b.placement == "tile":
+            out[t] = (Yields(), _facility_yield(state, rules, t, b), 1)
+        else:
+            base = b.yields + (b.road_yields if t in linked else Yields())
+            out[t] = (base, b.job_yields, b.jobs if yield_value(b.job_yields) else 0)
+    return out
+
+
+def assign_jobs(
+    state: GameState, rules: Ruleset, city: City, planned: tuple[int, BuildingType] | None = None
+) -> dict[int, int]:
+    """人口上岗：{格子: 人数}。改良设施 1 个岗位，区域 0–3 个。托管的城市先保口粮和少量增长余粮、
+    再保维持人口要的生产力，剩下的按国家方针分；手动管理的城市按产出高低。"""
+    nation = state.nations[city.nation]
+    cache_key = (
+        "jobs",
+        city.id,
+        city.nation,
+        city.population,
+        city.managed,
+        nation.city_management,
+        nation.policy,
+        tuple(city.buildings),
+    )
+    if state._economy_cache_enabled and planned is None and cache_key in state._worked_cache:
+        return dict(state._worked_cache[cache_key])
+    sites = city_sites(state, rules, city) + ([planned] if planned else [])
+    values = _site_values(state, rules, city, sites)
+    slots = []  # (格子, 一个岗位的产出)
+    for t, (_, per, jobs) in values.items():
+        slots += [(t, per)] * jobs
+    managed = city.managed and nation.city_management
+    if managed:
+        from controllers.city_manager import POLICIES
+
+        weights = surplus_weights(POLICIES[nation.policy]["weights"])
+    else:
+        weights = (3, 2, 1, 1)
+
+    def score(y):
+        return sum(
+            w * getattr(y, k)
+            for w, k in zip(weights, ("food", "production", "gold", "science"), strict=True)
+        )
+
+    left = city.population
+    worked: dict[int, int] = {}
+    taken = [False] * len(slots)
+
+    def take(i):
+        nonlocal left
+        taken[i] = True
+        worked[slots[i][0]] = worked.get(slots[i][0], 0) + 1
+        left -= 1
+
+    base = rules.cities.center_yields + sum(
+        (rules.buildings[b].yields for b in city.buildings), Yields()
+    )
+    base = base + sum((v[0] for v in values.values()), Yields())
+    if managed:
+        # 先满足口粮和少量增长余粮
+        food, target = base.food, FOOD_PER_POP * city.population + growth_surplus(city.population)
+        for i in sorted(range(len(slots)), key=lambda i: (-slots[i][1].food, slots[i][0])):
+            if food >= target or left <= 0 or not slots[i][1].food:
+                break
+            take(i)
+            food += slots[i][1].food
+        # 再保证生产力够付维持人口的消耗（多留 2 点）
+        prod = base.production + sum(slots[i][1].production for i in range(len(slots)) if taken[i])
+        need = population_upkeep(rules, city) + 2
+        for i in sorted(range(len(slots)), key=lambda i: (-slots[i][1].production, slots[i][0])):
+            if prod >= need or left <= 0 or not slots[i][1].production:
+                break
+            if not taken[i]:
+                take(i)
+                prod += slots[i][1].production
+    for i in sorted(range(len(slots)), key=lambda i: (-score(slots[i][1]), slots[i][0])):
+        if left <= 0:
+            break
+        if not taken[i]:
+            take(i)
+    if state._economy_cache_enabled and planned is None:
+        state._worked_cache[cache_key] = dict(worked)
+    return worked
+
+
 def worked_facilities(
     state: GameState,
     rules: Ruleset,
@@ -232,124 +406,10 @@ def worked_facilities(
     planned: tuple[int, BuildingType] | None = None,
     values: dict[int, Yields] | None = None,
 ) -> list[int]:
-    """在运作的设施格：不需要人口的全部运作；需要人口的按产出从高到低，直到人口用完。"""
-    nation = state.nations[city.nation]
-    # 非粮食市中心建筑不会改变劳动力分配，预测建设可复用这份结果。
-    cache_key = (
-        city.id,
-        city.nation,
-        city.population,
-        city.managed,
-        nation.city_management,
-        nation.policy,
-        sum(rules.buildings[b].yields.food for b in city.buildings),
-        _city_multiplier(rules, city, "food"),
-    )
-    if state._economy_cache_enabled and planned is None and cache_key in state._worked_cache:
-        cached = state._worked_cache[cache_key]
-        if values is not None:
-            values.update(cached)
-        return list(cached)
-    g = state.grid
-    base_key = ("base", *cache_key)
-    base = state._worked_cache.get(base_key) if planned and state._economy_cache_enabled else None
-    if base is None:
-        free, staffed = [], []
-        for t in city_tiles(state, city):
-            b = rules.facility_at(int(g.facility[t]))
-            if b is None or t in state.damaged:
-                continue  # 被炸坏的设施修好之前不运作
-            (staffed if b.workers else free).append((t, b))
-        if planned and state._economy_cache_enabled:
-            # 城市托管评估候选设施时，同一座城要算几十遍：现有设施格只收集一次（缓存随产出缓存一起失效）
-            state._worked_cache[base_key] = (tuple(free), tuple(staffed))
-    else:
-        free, staffed = list(base[0]), list(base[1])
-    if planned:
-        (staffed if planned[1].workers else free).append(planned)
-    if values is None:
-        values = {}
-    values.update({t: _facility_yield(state, rules, t, b) for t, b in [*free, *staffed]})
-    managed = city.managed and state.nations[city.nation].city_management
-    if managed:
-        from controllers.city_manager import POLICIES
-
-        # 口粮和增长余粮由下面单独配；剩下的劳力按余粮降权后的方针权重分
-        weights = surplus_weights(POLICIES[state.nations[city.nation].policy]["weights"])
-        staffed.sort(
-            key=lambda tb: (
-                -sum(
-                    w * getattr(values[tb[0]], k)
-                    for w, k in zip(weights, ("food", "production", "gold", "science"), strict=True)
-                ),
-                tb[0],
-            )
-        )
-    else:
-        staffed.sort(
-            key=lambda tb: (
-                -yield_value(_facility_yield(state, rules, tb[0], tb[1], base=True)),
-                tb[0],
-            )
-        )
-    worked = [t for t, _ in free]
-    workers = city.population
-    if managed:
-        # 先满足本城口粮和少量增长余粮，再按国家方针分配剩余人口。
-        base_food = (
-            rules.cities.center_yields.food
-            + sum(rules.buildings[b].yields.food for b in city.buildings)
-            + sum(values[t].food for t, _ in free)
-        )
-        target = (
-            (FOOD_PER_POP * city.population + growth_surplus(city.population)) * 100
-            + _city_multiplier(rules, city, "food")
-            - 1
-        ) // _city_multiplier(rules, city, "food")
-        food_order = sorted(
-            staffed,
-            key=lambda tb: (-values[tb[0]].food / tb[1].workers, tb[0]),
-        )
-        for t, b in food_order:
-            if base_food >= target:
-                break
-            y = values[t]
-            if b.workers <= workers and y.food:
-                worked.append(t)
-                workers -= b.workers
-                base_food += y.food
-    if managed:
-        # 再保证生产力够付维持人口的消耗（多留 2 点），否则人口越多生产力越少
-        base_prod = (
-            rules.cities.center_yields.production
-            + sum(rules.buildings[b].yields.production for b in city.buildings)
-            + sum(values[t].production for t in worked)
-        )
-        need = population_upkeep(rules, city) + 2
-        taken = set(worked)
-        for t, b in sorted(
-            staffed, key=lambda tb: (-values[tb[0]].production / tb[1].workers, tb[0])
-        ):
-            if base_prod >= need or workers <= 0:
-                break
-            y = values[t]
-            if t not in taken and b.workers <= workers and y.production:
-                worked.append(t)
-                taken.add(t)
-                workers -= b.workers
-                base_prod += y.production
-    worked_set = set(worked)
-    for t, b in staffed:
-        if workers <= 0:
-            break
-        if t not in worked_set and b.workers <= workers:
-            worked.append(t)
-            worked_set.add(t)
-            workers -= b.workers
-    result = sorted(worked)
-    if state._economy_cache_enabled and planned is None:
-        state._worked_cache[cache_key] = {t: values[t] for t in result}
-    return result
+    """在运作的建设格：区域建好就运作（岗位另算）；改良设施有人劳作才运作。"""
+    jobs = assign_jobs(state, rules, city, planned)
+    sites = city_sites(state, rules, city) + ([planned] if planned else [])
+    return sorted(t for t, b in sites if b.placement == "district" or jobs.get(t))
 
 
 def _city_multiplier(rules: Ruleset, city: City, stat: str) -> int:
@@ -364,22 +424,17 @@ def _city_multiplier(rules: Ruleset, city: City, stat: str) -> int:
 def _facility_yield(
     state: GameState, rules: Ruleset, tile: int, facility: BuildingType, *, base=False
 ) -> Yields:
+    """改良设施有人劳作时的产出（含设施等级加成：每升一级主产出 +1）。"""
     from engine.systems.progression import level
 
     bonus = 0 if base else level(state.facility_xp.get(tile, 0), "facility") - 1
     g = state.grid
-    key = (
-        int(g.terrain[tile]),
-        int(g.resource[tile]),
-        facility.id,
-        bool(g.river_edges[tile]),
-        bonus,
-    )
+    key = (int(g.terrain[tile]), int(g.resource[tile]), facility.id, bonus)
     if key in state._facility_value_cache:
         return state._facility_value_cache[key]
     y = tile_yields(rules, state.grid, tile, facility)
     primary = max(("food", "production", "gold", "science"), key=lambda k: getattr(y, k))
-    result = y + Yields(**{primary: bonus})
+    result = y + Yields(**{primary: bonus}) if yield_value(y) else y
     if len(state._facility_value_cache) >= 4096:
         del state._facility_value_cache[next(iter(state._facility_value_cache))]
     state._facility_value_cache[key] = result
@@ -389,6 +444,8 @@ def _facility_yield(
 def city_yields(
     state: GameState, rules: Ruleset, city: City, planned: tuple[int, BuildingType] | None = None
 ) -> Yields:
+    """城市每回合的产出：市中心 + 市中心建筑 + 区域（建好就有的、道路连通加的）+ 上岗人口的产出，
+    乘城市修正和道路网加成，再扣维持人口的生产力（粮食在增长结算里按人口扣）。"""
     from engine.systems.progression import level
 
     nation = state.nations[city.nation]
@@ -405,18 +462,31 @@ def city_yields(
     if state._economy_cache_enabled and planned is None and cache_key in state._yield_cache:
         return state._yield_cache[cache_key]
 
-    g = state.grid
     total = rules.cities.center_yields
     bonus = level(city.xp, "city") - 1
     total = total + Yields(production=bonus, gold=bonus)
     for bid in city.buildings:
         total = total + rules.buildings[bid].yields
-    values = {}
-    for t in worked_facilities(state, rules, city, planned, values):
-        facility = (
-            planned[1] if planned and t == planned[0] else rules.facility_at(int(g.facility[t]))
-        )
-        total = total + (values[t] if t in values else _facility_yield(state, rules, t, facility))
+    sites = city_sites(state, rules, city) + ([planned] if planned else [])
+    values = _site_values(state, rules, city, sites)
+    jobs = assign_jobs(state, rules, city, planned)
+    ind = rules.industry
+    boosted = (
+        ind.percent
+        and ind.requires
+        and set(ind.requires) <= nation_supply(state, rules, city.nation)
+    )
+    kinds = dict(sites)
+    for t, (base, per, _) in values.items():
+        site = base
+        for _ in range(jobs.get(t, 0)):
+            site = site + per
+        if boosted and kinds[t].id in ind.buildings and site.production:
+            # 工业加成（煤 + 铁）：工厂产值 +15%
+            site = site.model_copy(
+                update={"production": site.production * (100 + ind.percent) // 100}
+            )
+        total = total + site
     from engine.systems.networks import city_network
 
     net = city_network(state, rules, city)
@@ -432,7 +502,6 @@ def city_yields(
         gold=total.gold * _city_multiplier(rules, city, "gold") // 100 + net["trade_gold"],
         science=total.science * _city_multiplier(rules, city, "science") // 100,
     )
-    # 维持人口要消耗生产力（粮食在增长结算里按 FOOD_PER_POP 扣）：这里给出的是扣完之后的净生产力
     upkeep = population_upkeep(rules, city)
     if upkeep:
         result = result.model_copy(update={"production": max(0, result.production - upkeep)})
@@ -442,19 +511,37 @@ def city_yields(
 
 
 def population_upkeep(rules: Ruleset, city: City) -> int:
-    """维持人口每回合消耗的生产力。"""
+    """维持人口每回合消耗的生产力（每人 production_per_pop%，二战剧本 0.5）。"""
     return city.population * rules.cities.production_per_pop // 100
 
 
 def facility_active(state: GameState, rules: Ruleset, tile: int) -> bool:
-    """城外设施有人劳作才生效（产出、机场起降、防御等）；不需要人口的设施总是生效。"""
+    """建设生效（产出、机场起降、防御）：被炸坏的不算；区域建好就生效；改良设施要有人劳作。"""
     b = rules.facility_at(int(state.grid.facility[tile]))
     if b is None or tile in state.damaged:
         return False  # 被炸坏了：修好之前不能用（机场不能起降）
-    if not b.workers:
+    if b.placement == "district":
         return True
-    city = state.cities.get(int(state.grid.city_of[tile]))
-    return city is not None and tile in worked_facilities(state, rules, city)
+    city = city_of_tile(state, tile)
+    return city is not None and assign_jobs(state, rules, city).get(tile, 0) > 0
+
+
+def city_enables(state: GameState, rules: Ruleset, city: City) -> set[str]:
+    """城市能造的兵种类别（有港口能造舰船、有机场能造飞机）：建好的区域的 enables。"""
+    out = set()
+    for _, b in city_sites(state, rules, city):
+        out.update(b.enables)
+    return out
+
+
+def unit_cost_percent(state: GameState, rules: Ruleset, city: City) -> int:
+    """造兵花费的百分比：兵营 −10%、军事基地 −30%（市中心建筑和区域的 unit_cost 修正器相乘）。"""
+    pct = _city_multiplier(rules, city, "unit_cost")
+    for _, b in city_sites(state, rules, city):
+        for m in b.modifiers:
+            if m.target == "city" and m.stat == "unit_cost" and m.op == "mul":
+                pct = pct * m.value // 100
+    return pct
 
 
 def city_stat(rules: Ruleset, city: City, stat: str, base: int = 0) -> int:
@@ -501,8 +588,10 @@ def production_problem(
         u = rules.units.get(key)
         if u is None:
             return f"没有这种单位：{key}"
-        if u.domain == "sea" and not coastal(state.grid, city.tile):
-            return f"{city.name}不临水，不能造舰船"
+        if u.domain == "sea" and "ships" not in city_enables(state, rules, city):
+            return f"{city.name}没有港口，不能造舰船"
+        if u.domain == "air" and "aircraft" not in city_enables(state, rules, city):
+            return f"{city.name}没有机场，不能造飞机"
         if have is None:
             have = nation_resources(state, rules, city.nation)
         missing = [rules.resources[r].name for r in u.requires_resources if r not in have]
@@ -514,7 +603,7 @@ def production_problem(
         if b is None:
             return f"没有这种建筑：{key}"
         if b.placement != "center":
-            return f"{b.name}是城外设施，由国家组织辖区开发"
+            return f"{b.name}要建在辖区的格子上（城市组织施工）"
         if not b.buildable:
             return f"{b.name}不能建造"
         if key in city.buildings:
@@ -523,6 +612,12 @@ def production_problem(
     return f"生产项目格式应为 unit:<id> 或 building:<id>，而不是 {item!r}"
 
 
-def item_cost(rules: Ruleset, item: str) -> int:
+def item_cost(rules: Ruleset, item: str, state: GameState | None = None, city=None) -> int:
+    """生产项目的造价；给了城市时，单位按兵营、军事基地打折。"""
     kind, _, key = item.partition(":")
-    return rules.units[key].cost if kind == "unit" else rules.buildings[key].cost
+    if kind != "unit":
+        return rules.buildings[key].cost
+    cost = rules.units[key].cost
+    if state is not None and city is not None:
+        cost = max(1, cost * unit_cost_percent(state, rules, city) // 100)
+    return cost

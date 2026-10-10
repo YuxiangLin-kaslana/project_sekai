@@ -1,7 +1,7 @@
 # 单位。数值为初始草案（企划书 6.3 的 MVP 单位类别），具体平衡等批量对局后再调。
 #   layer: surface 地表 | air 空域；domain: land 陆军 | sea 舰船 | air 航空；category: military | civilian
 #   strength 近战战斗力；ranged_strength / range 远程战斗力与射程（航空单位的 range 是作战半径）
-#   moves 每回合移动力；sight 视野；cost 生产力；population 带走的人口；gold 一次性金钱；
+#   moves 每回合移动力；sight 视野；cost 生产力；population 带走的人口（都是 1：每个单位永久占城市一个人口上限）；gold 一次性金钱；
 #   upkeep 每回合金钱维护费；hp 生命上限（默认 100）
 #   short 单位牌上的简称；icon 单位牌上的兵种符号（前端内置，北约军标风格）
 #   damage_vs_units / damage_vs_city 打部队 / 打城市的伤害倍率（百分比，默认 100）：炮兵削城防强、打部队弱
@@ -136,10 +136,11 @@ armor:
   population: 1
   gold: 60
   upkeep: 3
-  requires_resources: [iron]   # 有石油另有燃料加成
+  requires_resources: [oil]    # 有石油才能造坦克；没有石油，已造好的坦克战斗力 −30%
   tags: [armored]
   modifiers:
     - { stat: strength, op: mul, value: 125, when: { defending: false } }   # 坦克进攻 +25%
+  fuel: true
   icon: armor
 
 # 海军将领统御舰队：身边的舰船（战舰、航母、运输船）编入“第 N 舰队”，规则同陆军军团（星级、加成、上限）。
@@ -210,7 +211,7 @@ battleship:
   damage_vs_city: 200   # 重炮削城防
   moves: 7
   cost: 390
-  population: 2
+  population: 1
   gold: 100
   upkeep: 4
   carry: 3
@@ -242,7 +243,7 @@ carrier:
   moves: 9
   sight: 4
   cost: 360
-  population: 2
+  population: 1
   gold: 120
   upkeep: 4
   air_capacity: 3
@@ -265,6 +266,8 @@ fighter:
   gold: 50
   upkeep: 2
   tags: [air_superiority]
+  requires_resources: [aluminum]   # 有铝才能造飞机；没有石油，飞机战斗力 −30%
+  fuel: true
   icon: fighter
 
 bomber:
@@ -282,4 +285,6 @@ bomber:
   gold: 70
   upkeep: 3
   tags: [siege, suppress]
+  requires_resources: [aluminum]   # 有铝才能造飞机；没有石油，飞机战斗力 −30%
+  fuel: true
   icon: bomber

@@ -10,7 +10,7 @@ iron:
   terrains: [hills, plains, tundra]
   frequency: 8
   reference_frequency: 4
-  yields: { production: 1 }
+  yields: { production: 4 }   # 工业资源：采集区 +4 生产力
   color: "#5b5f66"
 
 coal:
@@ -19,18 +19,16 @@ coal:
   terrains: [hills, forest, plains]
   frequency: 7
   reference_frequency: 3
-  yields: { production: 1 }
+  yields: { production: 4 }   # 工业资源：采集区 +4 生产力
   color: "#222222"
 
 oil:
   name: 石油
   kind: strategic
   terrains: [desert, tundra, marsh, coast]
-  frequency: 0.7
+  frequency: 1.05            # 石油多 50%
   reference_frequency: 3
-  yields: { production: 1 }
-  combat:
-    - { label: 燃料充足, units: [motorized, armor], domains: [sea, air], strength: 10 }
+  yields: { production: 4 }   # 工业资源：采集区 +4 生产力
   color: "#1a1a2e"
 
 rubber:
@@ -39,7 +37,7 @@ rubber:
   terrains: [rainforest, marsh]
   frequency: 1.3
   reference_frequency: 5
-  yields: { production: 1 }
+  yields: { production: 4 }   # 工业资源：采集区 +4 生产力
   color: "#8a6d3b"
 
 aluminum:
@@ -47,9 +45,7 @@ aluminum:
   kind: strategic
   terrains: [hills, plains, desert]
   frequency: 2
-  yields: { production: 1 }
-  combat:
-    - { label: 铝制机体, domains: [air], strength: 15 }
+  yields: { production: 4 }   # 工业资源：采集区 +4 生产力
   color: "#c0c6cc"
 
 horses:
@@ -57,7 +53,7 @@ horses:
   kind: strategic
   terrains: [plains, grassland]
   frequency: 2
-  yields: { food: 1 }
+  yields: { food: 4 }         # 农业资源：改良 +4 粮食
   color: "#a0522d"
 
 # ---- 奢侈资源 ----
@@ -100,7 +96,7 @@ wheat:
   kind: food
   terrains: [plains, grassland]
   frequency: 4
-  yields: { food: 2 }
+  yields: { food: 4 }         # 农业资源：改良 +4 粮食
   color: "#f2c94c"
 
 cattle:
@@ -108,7 +104,7 @@ cattle:
   kind: food
   terrains: [grassland, plains]
   frequency: 3
-  yields: { food: 1, production: 1 }
+  yields: { food: 4 }         # 农业资源：改良 +4 粮食
   color: "#f2f2f2"
 
 fish:
@@ -116,7 +112,7 @@ fish:
   kind: food
   terrains: [coast, lake]
   frequency: 5
-  yields: { food: 2 }
+  yields: { food: 4 }         # 农业资源：改良 +4 粮食
   color: "#ff8c69"
 
 # 极稀有矿产；旧分布不包含这两种。
@@ -126,7 +122,7 @@ tungsten:
   terrains: [hills, snow, tundra]
   frequency: 0.18
   reference_frequency: 0
-  yields: { production: 2 }
+  yields: { production: 4 }   # 工业资源：采集区 +4 生产力
   combat:
     - { label: 钨芯穿甲弹, domains: [land], strength: 10 }
   color: "#9bb9c1"
@@ -137,7 +133,7 @@ rare_earths:
   terrains: [hills, plains, desert]
   frequency: 0.12
   reference_frequency: 0
-  yields: { production: 2 }
+  yields: { production: 4 }   # 工业资源：采集区 +4 生产力
   combat:
     - { label: 雷达与电子设备, units: [anti_air, fighter], strength: 10 }
   color: "#bd91db"

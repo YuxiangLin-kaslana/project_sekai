@@ -244,15 +244,14 @@ def test_ships_sail_much_faster_than_armies():
         assert RULES.units[kind].moves >= 2 * land
 
 
-def test_lone_admiral_at_sea_is_captured_by_an_adjacent_warship(board):
+def test_lone_admiral_at_sea_can_be_sunk(board):
     from engine.systems import generals
 
     boss = add(board, "admiral", 2, 8, 3)
     generals.appoint(board, RULES, boss)
-    ship = add(board, "cruiser", 1, 7, 3)
+    ship = add(board, "cruiser", 1, 6, 3)
     out = act(board, order(ship, "attack", to=[8, 3]))
-    assert not out.rejected and out.state.units[boss.id].nation == 1
-    assert out.state.units[ship.id].tile == boss.tile
+    assert not out.rejected and boss.id not in out.state.units  # 不再俘虏：打中就消灭
 
 
 def test_warship_takes_an_undefended_port_with_its_walls_down(board):

@@ -40,6 +40,7 @@ _CONFIG_SECTIONS = (
     "stability",
     "pillage",
     "start",
+    "industry",
 )  # 继承时按字段合并
 
 

@@ -249,7 +249,7 @@ def test_air_strikes_and_city_defense_cannot_repeat(board):
     assert action(shot.state, raw).rejected
 
 
-def test_capture_with_aircraft_and_noncombatants_on_base(board):
+def test_capture_destroys_planes_and_civilians_on_the_base(board):
     a = add(board, "infantry", 1, 3, 3)
     c = City(board.new_id(), "B城", 2, board.grid.idx(4, 3), 2, hp=1)
     board.cities[c.id] = c
@@ -260,22 +260,21 @@ def test_capture_with_aircraft_and_noncombatants_on_base(board):
     result = action(board, order(a, "attack", to=[4, 3]))
     assert not result.rejected and result.state.cities[c.id].nation == 1
     assert plane.id not in result.state.units  # 停在城里的敌机投降（消灭）
-    assert result.state.units[noncombatant.id].nation == 1  # 平民被俘，归占领方
-    assert any(e["type"] == "unit_captured" for e in result.events)
+    assert noncombatant.id not in result.state.units  # 不再俘虏：城里的平民一起消灭
     assert result.state.units[a.id].tile == c.tile
 
 
-def test_lone_civilians_and_generals_can_be_captured(board):
+def test_civilians_and_generals_are_attacked_not_captured(board):
     a = add(board, "infantry", 1, 3, 3)
     settler = add(board, "settler", 2, 4, 3)
     out = action(board, order(a, "attack", to=[4, 3]))
-    assert not out.rejected and out.state.units[settler.id].nation == 1
-    assert out.state.units[a.id].tile == settler.tile
-    b = add(board, "infantry", 1, 3, 5)
-    boss = add(board, "general", 2, 4, 5)
+    assert not out.rejected and settler.id not in out.state.units  # 打中就消灭
+    assert out.state.units[a.id].tile == settler.tile  # 近战开进去
+    gun = add(board, "artillery", 1, 3, 6)
+    boss = add(board, "general", 2, 5, 6)
     boss.rank = 3
-    out = action(board, order(b, "attack", to=[4, 5]))
-    assert out.state.units[boss.id].nation == 1  # 将领也算平民：被俘，归占领方
+    out = action(board, order(gun, "attack", to=[5, 6]))
+    assert not out.rejected and boss.id not in out.state.units  # 远程也能打平民、将领
 
 
 def test_group_does_not_overfill_destination(board):
@@ -380,21 +379,18 @@ def test_units_cost_population_and_gold_and_population_costs_production(board):
     assert big <= small
 
 
-def test_airfield_needs_workers(board):
-    from engine.systems.cities import found_city
+def test_airfield_district_works_without_workers_and_enables_aircraft(board):
+    from engine.systems.cities import found_city, production_problem
     from engine.systems.movement import is_air_base
 
     city = found_city(board, RULES, 1, board.grid.idx(6, 3))
+    assert "机场" in production_problem(board, RULES, city, "unit:fighter")
     field = board.grid.idx(7, 3)
     board.grid.facility[field] = RULES.facility_index("airfield")
     city.population = 1
-    farms = [t for t in board.grid.within(city.tile, 2) if t not in (city.tile, field)][:1]
-    for t in farms:
-        board.grid.facility[t] = RULES.facility_index("farm")  # 唯一的人口先去种地
-    assert not is_air_base(board, RULES, 1, field)
-    city.population = 3
-    board._worked_cache.clear()
-    assert is_air_base(board, RULES, 1, field)
+    assert is_air_base(board, RULES, 1, field)  # 区域建好就运作，不用人
+    board.damaged[field] = board.turn
+    assert not is_air_base(board, RULES, 1, field)  # 炸坏了不能用
 
 
 def test_anti_air_guns_only_shoot_aircraft(board):
@@ -507,8 +503,8 @@ def test_flanking_rivers_and_ground_change_melee_attacks(board):
     assert info["modifiers"][-1] == {"side": "defender", "label": "地形：丘陵", "value": 25}
 
 
-def test_strategic_resources_boost_matching_units(board):
-    from engine.systems.combat import preview, strength
+def test_oil_fuels_tanks_and_planes_and_tungsten_still_helps(board):
+    from engine.systems.combat import FUEL_SHORTAGE, strength
 
     g = board.grid
     city = City(50, "矿城", 1, g.idx(2, 5), 6)
@@ -517,18 +513,18 @@ def test_strategic_resources_boost_matching_units(board):
         g.owner[t], g.city_of[t] = 1, 50
     tank = add(board, "armor", 1, 3, 3)
     foot = add(board, "infantry", 1, 2, 3)
-    plain_tank, plain_foot = strength(board, RULES, tank), strength(board, RULES, foot)
-
+    dry_tank, plain_foot = strength(board, RULES, tank), strength(board, RULES, foot)
     mine = next(t for t in g.within(city.tile, 1) if t != city.tile)
     g.resource[mine] = RULES.resource_index("oil")
     g.facility[mine] = RULES.facility_index("oil_well")
     oiled = board.clone()
-    assert strength(oiled, RULES, oiled.units[tank.id]) == plain_tank * 110 // 100
-    assert strength(oiled, RULES, oiled.units[foot.id]) == plain_foot  # 步兵不吃燃料加成
-    add(oiled, "infantry", 2, 4, 3)
-    info, _ = preview(oiled, RULES, oiled.units[tank.id], g.idx(4, 3))
-    assert {"side": "attacker", "label": "石油：燃料充足", "value": 10} in info["modifiers"]
-
+    # 有石油：坦克不再缺燃料（没有石油时 −30%）；步兵不受影响
+    assert strength(oiled, RULES, oiled.units[tank.id]) * (100 - FUEL_SHORTAGE) // 100 in (
+        dry_tank,
+        dry_tank - 1,
+        dry_tank + 1,
+    )
+    assert strength(oiled, RULES, oiled.units[foot.id]) == plain_foot
     g.resource[mine] = RULES.resource_index("tungsten")
     g.facility[mine] = RULES.facility_index("mine")
     tungsten = board.clone()

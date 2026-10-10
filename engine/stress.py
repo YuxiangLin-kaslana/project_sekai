@@ -146,8 +146,9 @@ def populate(
             options[key] = [
                 b.id
                 for b in rules.buildings.values()
-                if b.placement == "tile"
+                if (b.placement == "tile" or (b.placement == "district" and not b.unique))
                 and b.buildable
+                and not b.on_water
                 and (not b.coastal or coast)
                 and (not b.requires_resources or res in b.requires_resources)
                 and (

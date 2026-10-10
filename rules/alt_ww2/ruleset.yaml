@@ -12,11 +12,17 @@ cities:
   min_distance: 6         # 两座城市之间至少隔 6 格（按地图尺度放大）
   dense_distance: 6       # 富饶地区也至少隔 6 格（原来 3 格，城市挤在一起）
   sparse_distance: 7      # 贫瘠地区隔 7 格
-  center_yields: { food: 4, production: 2, gold: 2, science: 1 }   # 市中心本身的产出（含城郊）
+  center_yields: { food: 3, production: 3, gold: 2, science: 1 }   # 市中心本身：3 粮食、3 生产力（另有少量税收和科研）
+  center_housing: 3        # 市中心给 3 住房；人口上限 = 住房 − 被征召走的人口
   population: 1           # 新城人口
   capital_population: 2   # 开局首都人口
-  production_per_pop: 25  # 维持人口：每个人口每回合吃 2 粮、耗 0.25 生产力（这里按百分之一点写）
+  production_per_pop: 50  # 维持人口：每个人口每回合吃 1 粮食、耗 0.5 生产力（这里按百分之一点写）
   gold_per_production: 2  # 城市开启"金币补足建设"时，基础设施（城外设施、市中心建筑）缺的生产力按 2 金 1 点补
+
+industry:                 # 有煤又有铁（都在开采）：全国工厂产值 +15%
+  requires: [coal, iron]
+  buildings: [factory]
+  percent: 15
 
 stacking:                 # 企划书 5.2（初始草案）
   limits: { military: 2, civilian: 2, air: 3 }      # 每格（每个国家）：地表军事 / 地表平民 / 空域

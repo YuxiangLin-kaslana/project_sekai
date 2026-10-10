@@ -33,6 +33,7 @@ from engine.systems.cities import city_stat, nation_supply
 from engine.systems.context import StepContext
 from engine.systems.progression import gain, level, unit_strength
 
+FUEL_SHORTAGE = 30  # 没有石油：坦克、飞机（fuel 单位）战斗力 −30%
 FLAK_FACTOR = 30  # 一门高射炮对来袭飞机的火力：FLAK_FACTOR × 防空火力 ÷ 飞机战斗力（6–40）
 FLAK_CAP = 70  # 飞一段航线最多被防空火力打掉这么多生命
 
@@ -259,8 +260,13 @@ def strength(
             _note(notes, source + ("防守" if w.defending else ""), m.value - 100)
         value = value + m.value if m.op == "add" else value * m.value // 100
     if ut.category == "military":
-        # 战略资源加成：燃料、钨芯弹、铝制机体……（规则在 resources.yaml 的 combat）
-        for rid in sorted(nation_supply(state, rules, actor.nation)):
+        supply = nation_supply(state, rules, actor.nation)
+        if ut.fuel and "oil" not in supply:
+            # 坦克、飞机靠燃料：本国没有石油供应，战斗力 −FUEL_SHORTAGE%
+            _note(notes, "缺石油燃料", -FUEL_SHORTAGE)
+            value = value * (100 - FUEL_SHORTAGE) // 100
+        # 战略资源加成：钨芯弹、雷达……（规则在 resources.yaml 的 combat）
+        for rid in sorted(supply):
             res = rules.resources[rid]
             for bonus in res.combat:
                 if actor.type in bonus.units or ut.domain in bonus.domains:
@@ -419,27 +425,15 @@ def target_at(state, rules, actor, tile):
     city = state.city_at(tile)
     if city is not None and _war(state, city.nation, actor.nation):
         return city
-    if isinstance(actor, Unit) and attack_kind(rules, actor) == "melee":
-        # 格子里只剩外国平民（开拓者、工兵、将领）：陆军开进去俘虏
+    if isinstance(actor, Unit):
+        # 格子里只剩敌方平民（开拓者、工兵、将领、海军将领）：所有单位都能攻击，打中就消灭（不俘虏）；
+        # 近战只能打同一军种的（陆军打陆上的、舰船打海上的）
         ut = rules.units[actor.type]
         civilians = [
             u
             for u in state.units_at(tile, "surface")
-            if _war(state, u.nation, actor.nation) and rules.units[u.type].domain == ut.domain
-        ]
-        if civilians and ut.domain == "land":
-            return min(civilians, key=lambda u: u.id)
-    if (
-        isinstance(actor, Unit)
-        and rules.units[actor.type].domain == "sea"
-        and "unarmed" not in rules.units[actor.type].tags
-        and "carrier" not in rules.units[actor.type].tags
-    ):
-        # 海上只剩敌方海军将领（旗舰没有护航）：战舰贴上去俘虏
-        civilians = [
-            u
-            for u in state.units_at(tile, "surface")
-            if _war(state, u.nation, actor.nation) and rules.units[u.type].domain == "sea"
+            if _war(state, u.nation, actor.nation)
+            and (attack_kind(rules, actor) != "melee" or rules.units[u.type].domain == ut.domain)
         ]
         if civilians:
             return min(civilians, key=lambda u: u.id)
@@ -489,18 +483,18 @@ def preview(state, rules, actor, tile) -> tuple[dict | None, str | None]:
     if target is None:
         return None, "这里没有可攻击的敌方军事单位或城市"
     if isinstance(target, Unit) and rules.units[target.type].category != "military":
-        from engine.systems.stacking import has_room
+        # 平民（含将领）没有战斗力：打中就消灭
+        if kind == "melee":
+            from engine.systems.stacking import has_room
 
-        if not has_room(state, rules, tile, "military", actor.nation):
-            return None, "那一格本方已满，开不进去俘虏"
-        if state.grid.distance(actor.tile, tile) > 1:
-            return None, "要贴上去（相邻）才能俘虏"
+            if not has_room(state, rules, tile, rules.units[actor.type].stack_class, actor.nation):
+                return None, "那一格本方已满，开不进去"
         return {
             "tile": tile,
             "target": ref("unit", target.id),
-            "kind": "capture",
-            "seize": True,
-            "damage": 0,
+            "kind": kind,
+            "kill": True,
+            "damage": target.hp,
             "retaliation": 0,
             "flak": 0,
             "suppress": False,
@@ -693,9 +687,6 @@ def _capture(ctx, city, unit):
     # Aircraft on a captured base and noncombatants surrender with the city.
     for parked in list(s.units_at(city.tile)):
         if parked.nation == previous:
-            if rules.units[parked.type].category != "military":
-                seize(ctx, parked, unit.nation)  # 城里的平民（含将领）被俘
-                continue
             ctx.log.add(
                 "unit_destroyed",
                 unit=ref("unit", parked.id),
@@ -733,36 +724,6 @@ def _lost_aboard(ctx, ship) -> None:
             nation=ref("nation", rider.nation),
             reason="随船沉没",
         )
-
-
-def seize(ctx, unit, nation) -> None:
-    """俘虏：平民（开拓者、工兵、将领）归 nation；军事单位不投降，就地消灭。
-    被俘的将领原来的军团解散，到新国家另编一个军团番号。"""
-    s, rules = ctx.state, ctx.rules
-    if rules.units[unit.type].category == "military":
-        _destroy(ctx, unit, unit.tile, "投降")
-        return
-    old = unit.nation
-    if unit.rank:
-        for member in s.units.values():
-            if member.corps == unit.id:
-                member.corps = None
-        captor = s.nations[nation]
-        captor.corps_count += 1
-        unit.title = (
-            f"第{captor.corps_count}{'舰队' if rules.units[unit.type].domain == 'sea' else '军团'}"
-        )
-    unit.nation = nation
-    unit.formation = unit.destination = unit.task = unit.corps = None
-    unit.managed, unit.ai_goal, unit.fortified = True, "", False
-    ctx.log.add(
-        "unit_captured",
-        unit=ref("unit", unit.id),
-        unit_type=unit.type,
-        tile=unit.tile,
-        nation=ref("nation", nation),
-        previous=ref("nation", old),
-    )
 
 
 def _destroy(ctx, unit, tile, reason=None):
@@ -879,7 +840,7 @@ def _settle(ctx: StepContext, tile: int) -> None:
         _capture(ctx, city, winner)
     for stranded in list(s.units_at(tile, "surface")):
         if stranded.nation != winner.nation and not _military(rules, stranded):
-            seize(ctx, stranded, winner.nation)  # 留在格里的敌方平民被俘
+            _destroy(ctx, stranded, tile, "被消灭")  # 留在格里的敌方平民（含将领）被消灭
 
 
 def _resolve(ctx: StepContext) -> None:
@@ -939,22 +900,6 @@ def _resolve(ctx: StepContext) -> None:
             # 战舰开进港口占领城防已空的城市
             city = s.city_at(tile)
             _capture(ctx, city, actor)
-            s.move_unit(actor, tile)
-            actor.attacked_turn = s.turn
-            actor.moves_left, actor.road_credit, actor.destination, actor.fortified = (
-                0,
-                0,
-                None,
-                False,
-            )
-            ctx.log.add("unit_moved", unit=ref("unit", actor.id), path=[start, tile])
-            continue
-        if info.get("seize"):
-            # 俘虏平民：开进去，格子里的外国平民归本国（将领宁死不降）
-            start = actor.tile
-            for v in sorted(s.units_at(tile, "surface"), key=lambda u: u.id):
-                if v.nation != actor.nation:
-                    seize(ctx, v, actor.nation)
             s.move_unit(actor, tile)
             actor.attacked_turn = s.turn
             actor.moves_left, actor.road_credit, actor.destination, actor.fortified = (
@@ -1049,6 +994,6 @@ def _resolve(ctx: StepContext) -> None:
                 elif city is None:
                     for stranded in list(s.units_at(tile, actor.layer)):
                         if stranded.nation != actor.nation:
-                            seize(ctx, stranded, actor.nation)
+                            _destroy(ctx, stranded, tile, "被消灭")
                 s.move_unit(actor, tile)
                 ctx.log.add("unit_moved", unit=ref("unit", actor.id), path=[start, tile])

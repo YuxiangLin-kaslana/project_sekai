@@ -15,16 +15,15 @@ from engine.systems.cities import (
     FOOD_PER_POP,
     city_stat,
     city_yields,
-    claim_territory,
     food_to_grow,
     item_cost,
+    pop_cap,
     production_problem,
 )
 from engine.systems.context import StepContext
 from engine.systems.stacking import has_room
 
 IDLE_RATE = 3  # 闲置城市每 3 点生产力换 1 金
-GROWTH_PER_RADIUS = 3  # 人口每多这么多，辖区半径 +1（到 cities.territory_cap 为止）
 
 
 def _construction(ctx: StepContext) -> None:
@@ -80,7 +79,7 @@ def _produce(ctx: StepContext, city: City) -> None:
     if not city.queue:
         return
     item = city.queue[0]
-    cost = item_cost(rules, item)
+    cost = item_cost(rules, item, state, city)
     if city.production < cost:
         return
     problem = production_problem(state, rules, city, item)
@@ -109,6 +108,7 @@ def _produce(ctx: StepContext, city: City) -> None:
             )
             return
         city.population -= ut.population
+        city.drafted += ut.population  # 永久占用人口上限（单位死了也不还）
         state.nations[city.nation].gold -= ut.gold
         unit = state.add_unit(
             Unit(
@@ -156,6 +156,7 @@ def _produce(ctx: StepContext, city: City) -> None:
 
 
 def _grow(ctx: StepContext, city: City, food: int) -> None:
+    """粮食结余攒进存粮，够了就长一口人——但要有空余住房（人口上限 = 住房 − 被征召的人口）。"""
     city.food += food - FOOD_PER_POP * city.population
     storage = 100
     for bid in city.buildings:
@@ -163,24 +164,14 @@ def _grow(ctx: StepContext, city: City, food: int) -> None:
             if m.target == "city" and m.stat == "food_storage" and m.op == "mul":
                 storage = storage * m.value // 100
     need = food_to_grow(city.population)
-    if city.food >= need:
+    cap = pop_cap(ctx.state, ctx.rules, city)
+    if city.population >= cap:
+        city.food = min(city.food, need)  # 住房满了：存粮攒到够长一口人为止，等有了住房再长
+    elif city.food >= need:
         city.population += 1
         city.food = (city.food - need) * (storage - 100) // 100  # 粮仓留下一部分存粮
         ctx.log.add("city_grew", city=ref("city", city.id), population=city.population)
-        from engine.systems.settlement import city_scale
-
-        cfg, scale = ctx.rules.cities, city_scale(ctx.state.grid)
-        radius = min(
-            round((cfg.radius + (city.population - 1) // GROWTH_PER_RADIUS) * scale),
-            round(cfg.territory_cap * scale),  # 辖区半径有上限（按地图大小缩放）
-        )
-        if radius > city.radius:
-            city.radius = radius
-            claimed = claim_territory(ctx.state.grid, city, round(cfg.coastal_waters * scale))
-            if claimed:
-                ctx.state._territory_cache = None
-                ctx.log.add("borders_grew", city=ref("city", city.id), tiles=claimed)
-    elif city.food < 0:
+    if city.food < 0:
         city.food = 0
         if city.population > 1:
             city.population -= 1
