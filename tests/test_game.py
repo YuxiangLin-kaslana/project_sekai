@@ -84,10 +84,12 @@ def test_start_facilities_are_developed(state):
     g = state.grid
     for n in state.nations.values():
         city = state.cities[n.capital]
-        built = [int(f) for f in g.facility[g.city_of == city.id] if f]
-        assert 1 <= len(built) <= RULES.start.facilities
-        for f in built:
-            assert RULES.facility_at(f).upkeep == 0
+        built = [RULES.facility_at(int(f)) for f in g.facility[g.city_of == city.id] if f]
+        improvements = [b for b in built if b.placement == "tile"]
+        assert 1 <= len(improvements) <= RULES.start.facilities
+        assert all(b.upkeep == 0 for b in improvements)
+        # 首都自带的区域（二战剧本：机场）
+        assert {b.id for b in built if b.placement == "district"} == set(RULES.start.districts)
 
 
 # ---------------------------------------------------------------- 回合与确定性

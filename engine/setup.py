@@ -18,6 +18,7 @@ from engine.systems.cities import (
     city_tiles,
     coastal,
     facility_options,
+    facility_problem,
     found_city,
     tile_yields,
     yield_value,
@@ -127,6 +128,16 @@ def new_game(world: World, rules: Ruleset, tuning: dict | None = None) -> GameSt
         city = found_city(state, rules, nid, tile, capital=True)
         city.buildings = list(start.buildings)
         _develop(state, rules, city.id, start.facilities)
+        for did in start.districts:
+            # 首都自带的区域（二战剧本：机场）：离首都最近、能建的格子
+            b = rules.buildings[did]
+            spots = sorted(
+                (grid.distance(t, city.tile), t)
+                for t in city_tiles(state, city)
+                if facility_problem(state, rules, nid, t, b) is None
+            )
+            if spots:
+                grid.facility[spots[0][1]] = rules.facility_index(did)
         kinds = list(start.units) + list(start.air_units)
         if coastal(grid, tile):
             kinds += start.coastal_units

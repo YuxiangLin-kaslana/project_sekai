@@ -1,7 +1,10 @@
 from fastapi.testclient import TestClient
 
+from engine.rules.loader import load_ruleset
 from server.app import app
 from server.game import unpack
+
+RULES = load_ruleset("alt_ww2")
 
 client = TestClient(app)
 
@@ -41,7 +44,8 @@ def test_city_management_and_direct_construction_api():
     ).json()
     assert not action["rejected"] and action["turn"] == snap["turn"]
     c = next(c for c in action["cities"] if c["id"] == city["id"])
-    assert c["construction"]["turns_left"] == 3 and not c["managed"]
+    assert c["construction"]["turns_left"] == RULES.buildings["farm"].build_turns
+    assert not c["managed"]
     # 工期 3 回合起，造价按期从本城生产力里付，付清才竣工
     for _ in range(30):
         action = client.post(path + "/turn", json={"autoplay": False}).json()

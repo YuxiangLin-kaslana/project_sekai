@@ -12,13 +12,17 @@ from engine.actions import CityOrder, DevelopCity, GoldAssist
 from engine.ids import ref
 from engine.systems.cities import (
     FOOD_PER_POP,
+    city_sites,
     city_tiles,
     city_yields,
     coastal,
+    connected,
     facility_options,
+    facility_problem,
     food_to_grow,
     growth_surplus,
     nation_resources,
+    pop_cap,
     production_problem,
     surplus_weights,
 )
@@ -101,6 +105,8 @@ class Budget:
         default_factory=dict
     )  # 各兵种的实战效率（同样投入打出的伤害），相对全国平均值
     posture: str = ""
+    settler_want: int = 0  # 还缺几支开拓者（城址数 − 在路上和在造的开拓者）
+    expanding: bool = False  # 扩张期、还有空地可以建城：先造开拓者、扩领土，放缓内部建设和造兵
     airfield: dict | None = None  # 国家要修的前线机场（rule_ai._airfield_plan）：格子、哪座城修
     want_admiral: int = (
         0  # 没人统率的战舰比海军将领的统御空位多出多少（多于 ADMIRAL_MIN 就造海军将领）
@@ -154,6 +160,20 @@ def budget_for(state, rules, nation, cities):
         target += min(2 * len(cities), (nation.gold - reserve * RICH_RESERVE_MULTIPLE) // 150)
     # 战争：按战略算出的攻城兵力缺口补军备（远程火力削城防，近战清守军和占领）
     strategy = nation.strategy or {}
+    # 扩张：城址数减去在路上、在造的开拓者
+    sites = strategy.get("settlements") or []
+    settlers_now = sum(
+        1
+        for u in state.units.values()
+        if u.nation == nation.id and "found_city" in rules.units[u.type].tags
+    ) + sum(
+        1
+        for c in cities
+        for item in c.queue
+        if item.startswith("unit:") and "found_city" in rules.units[item[5:]].tags
+    )
+    settler_want = max(0, len(sites) - settlers_now)
+    expanding = bool(sites) and strategy.get("posture", "扩张") == "扩张"
     want_siege = want_melee = want_lift = 0
     if strategy.get("mode") in WAR_MODES:
         queued = [
@@ -340,6 +360,8 @@ def budget_for(state, rules, nation, cities):
         strategy.get("posture", ""),
         want_admiral=want_admiral,
         airfield=strategy.get("airfield"),
+        settler_want=settler_want,
+        expanding=expanding,
     )
 
 
@@ -518,6 +540,11 @@ def decide_city(state, rules, city, budget):
                 if m.target == "city" and m.stat == "unit_experience" and budget.demand:
                     score += 24 if nation.policy == "military" else 8
                     reason = "军备仍有缺口，提升新编部队经验"
+            if b.housing and city.population >= pop_cap(state, rules, city) - 1:
+                score += 50  # 住房快满了：加住房的市中心建筑（粮仓、学校、工场、兵营各 +1）
+                reason = "住房快满了，人口长不上去：建能加住房的市中心建筑"
+            if budget.expanding and not (hungry and d.food > 0):
+                score *= 0.5  # 扩张期：先造开拓者、扩领土，放缓内部建设
             if score > 0:
                 candidates.append((score, "building:" + b.id, reason))
         # 编成全是软性的加减分，没有硬上限：
@@ -636,8 +663,34 @@ def decide_city(state, rules, city, budget):
                 score += max(-45, min(45, 30 * budget.effect[u.id]))
                 if budget.effect[u.id] >= 0.6:
                     reason = "这类部队战损比好（打出的伤害远多于挨的），多造"
+            if budget.expanding and not threatened:
+                score -= 60  # 扩张期、城边没有威胁：先扩张，少造兵（每个兵永久占一个人口）
             if score > 0:  # 打分为负 = 不值得造（比如侦察部队已经很多），不拿便宜兵种凑数
                 candidates.append((score, "unit:" + u.id, reason))
+        if budget.settler_want > 0 and not threatened:
+            # 还有空地可以建城：先造开拓者（扩张期最优先）
+            for u in rules.units.values():
+                if "found_city" not in u.tags:
+                    continue
+                if (
+                    production_problem(state, rules, city, "unit:" + u.id, budget.have)
+                    or _spawn_tile(state, rules, city, u.id) is None
+                    or nation.gold < budget.reserve + u.gold
+                    or city.population - u.population < 1
+                ):
+                    continue
+                score = (180 if budget.expanding else 70) + y.production - 40 / city.population
+                candidates.append(
+                    (
+                        score,
+                        "unit:" + u.id,
+                        f"还有 {budget.settler_want} 处空地可以建城：先造开拓者扩张",
+                    )
+                )
+        road = _road_target(state, rules, city, budget)
+        if road is not None:
+            tile, score, why = road
+            candidates.append((score, f"road:{tile}", why))
         if budget.engineer_want > 0:
             # 工兵：随战线修前线道路（每条陆上战线一个）
             for u in rules.units.values():
@@ -702,6 +755,8 @@ def decide_city(state, rules, city, budget):
                     budget.want_general -= 8  # 一座城在造就够了
             if item.startswith("unit:") and "build_facility" in rules.units[item[5:]].tags:
                 budget.engineer_want -= 1
+            if item.startswith("unit:") and "found_city" in rules.units[item[5:]].tags:
+                budget.settler_want -= 1
             intents.append((CityOrder(issuer=issuer, city=cid, queue=[item]), "production", reason))
             report["reason"] = reason
         else:
@@ -842,8 +897,69 @@ def decide_city(state, rules, city, budget):
     return report, intents
 
 
+def _road_target(state, rules, city, budget):
+    """这座城该修的路：（终点格, 打分, 原因）。先接本城还没连路的住宅区 / 工厂（连上才有加成），
+    再接前线工兵的位置（打仗时），再连最近的本国城市。路线修不了、太贵的跳过。"""
+    from engine.systems.roads import plan
+
+    g = state.grid
+    linked = connected(state, city)
+    y = city_yields(state, rules, city)
+    budget_cost = max(6, y.production * 6)
+    options = []
+    for t, b in city_sites(state, rules, city):
+        if (
+            b.placement == "district"
+            and (b.road_housing or yield_sum(b.road_yields))
+            and t not in linked
+        ):
+            options.append((140, t, f"把{b.name}接上道路（连到市中心才有加成）"))
+    if budget.posture == "战争":
+        for u in state.units.values():
+            if (
+                u.nation == city.nation
+                and "build_facility" in rules.units[u.type].tags
+                and u.layer == "surface"
+                and u.tile not in linked
+                and g.distance(u.tile, city.tile) <= 12
+            ):
+                options.append((50, u.tile, "把道路修到前线工兵的位置，给前线运兵"))
+    others = [
+        c for c in state.nation_cities(city.nation) if c.id != city.id and c.tile not in linked
+    ]
+    if others:
+        near = min(others, key=lambda c: (g.distance(c.tile, city.tile), c.id))
+        # 两座城之间的路只由编号小的那座修（不重复修）
+        if g.distance(near.tile, city.tile) <= 14 and city.id < near.id:
+            options.append((20, near.tile, f"修路连到{near.name}（城市连成路网有贸易和生产加成）"))
+    for score, t, why in sorted(options, key=lambda o: (-o[0], o[1])):
+        p = plan(state, rules, city, t)
+        if "error" not in p and p["cost"] <= budget_cost:
+            return t, score, why
+    return None
+
+
+def yield_sum(y) -> int:
+    return y.food + y.production + y.gold + y.science
+
+
+def _site(state, rules, city, b, score):
+    """在本城辖区里给区域 b 挑一格（能建、打分最高）。"""
+    best = None
+    for t in city_tiles(state, city):
+        if t == city.tile or state.grid.facility[t]:
+            continue
+        if facility_problem(state, rules, city.nation, t, b) is not None:
+            continue
+        v = score(t)
+        if best is None or (v, -t) > (best[0], -best[1]):
+            best = (v, t)
+    return None if best is None else best[1]
+
+
 def _urgent_development(state, rules, city, budget):
-    """优先的城外工程：先修被炸坏的设施（机场最先），再修国家要的前线机场。返回 (设施, 格子, 原因)。"""
+    """优先的城外工程：先修被炸坏的设施（机场最先），再修国家要的前线机场；住房快满了建住宅区
+    （挑能往无主土地扩张的格子）；要海军的沿海城市建港口；打仗时建军事基地。返回 (设施, 格子, 原因)。"""
     g = state.grid
     broken = [
         t
@@ -859,6 +975,49 @@ def _urgent_development(state, rules, city, budget):
     plan = budget.airfield
     if plan and plan.get("city") == city.id and not g.facility[plan["tile"]]:
         return plan["facility"], plan["tile"], plan["reason"]
+    y = city_yields(state, rules, city)
+    net_food = y.food - city.population * FOOD_PER_POP
+    linked = connected(state, city)
+    owned = {s_.id for _, s_ in city_sites(state, rules, city)}
+    houses = [b for b in rules.buildings.values() if b.placement == "district" and b.housing]
+    if houses and city.population >= pop_cap(state, rules, city) - 1 and net_food >= 1:
+        b = houses[0]
+
+        def room(t):
+            # 能往无主土地扩多少格 + 挨着本城路网（好连路）− 离市中心远
+            free = sum(1 for n in g.within(t, b.expand) if int(g.owner[n]) < 0)
+            near_road = any(n in linked for n in g.neighbors_of(t))
+            return 3 * free + (4 if near_road else 0) - g.distance(t, city.tile)
+
+        tile = _site(state, rules, city, b, room)
+        if tile is not None:
+            return b.id, tile, "住房快满了，人口长不上去：建住宅区（往无主的土地扩张辖区）"
+    if budget.naval_want > 0 or budget.want_lift > 0 or budget.carrier_want:
+        ports = [b for b in rules.buildings.values() if "ships" in b.enables]
+        if (
+            ports
+            and coastal(g, city.tile)
+            and not any(
+                x.exclusive == ports[0].exclusive for x in [rules.buildings[i] for i in owned]
+            )
+        ):
+            b = ports[0]
+            tile = _site(state, rules, city, b, lambda t: -g.distance(t, city.tile))
+            if tile is not None:
+                return b.id, tile, "要造舰船：沿海城市先建港口（舰船在港口出生、回血）"
+    if budget.posture == "战争" and y.production >= 6:
+        bases = [
+            b
+            for b in rules.buildings.values()
+            if b.placement == "district"
+            and b.unique
+            and any(m.stat == "unit_cost" for m in b.modifiers)
+        ]
+        if bases and bases[0].id not in owned:
+            b = bases[0]
+            tile = _site(state, rules, city, b, lambda t: -g.distance(t, city.tile))
+            if tile is not None:
+                return b.id, tile, "打仗了：建军事基地（造兵省 30%，自带炮击，进驻的部队防守加成）"
     return None
 
 

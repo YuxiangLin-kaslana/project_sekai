@@ -96,6 +96,7 @@ start:                    # 开局：每个国家一座首都 + 这些单位
   gold: 100
   buildings: [palace]
   facilities: 2           # 首都辖区内预先开发的设施数
+  districts: [airfield]   # 首都自带一座机场
   units: [infantry, infantry, recon, engineer, settler]
   coastal_units: [destroyer]   # 首都临水才给
   air_units: [fighter]

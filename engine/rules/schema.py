@@ -395,6 +395,7 @@ class StartConfig(_Strict):
     gold: int = Field(100, ge=0)
     buildings: list[str] = []  # 首都自带的市中心建筑
     facilities: int = Field(2, ge=0)  # 首都辖区内预先开发几处设施（自动挑产出最好的格子）
+    districts: list[str] = []  # 首都辖区里自带的区域（如机场），挑离首都最近的能建格子
     units: list[str] = []  # 开局单位（放在首都及其周围）
     coastal_units: list[str] = []  # 首都临水时额外给的舰船
     air_units: list[str] = []  # 驻在首都的航空单位

@@ -61,16 +61,16 @@ def test_disabled_by_default_and_immediate_commands_do_not_plan(board):
 
 def test_manual_override_and_resume_preserves_invested_production(board):
     s = enabled(board)
-    s = command(s, {"type": "city_order", "city": "city:10", "queue": ["building:market"]}).state
+    s = command(s, {"type": "city_order", "city": "city:10", "queue": ["building:granary"]}).state
     assert not s.cities[10].managed
     a = step(s, [], RULES).state
-    assert a.cities[10].queue == ["building:market"] and not a.cities[10].construction
+    assert a.cities[10].queue == ["building:granary"] and not a.cities[10].construction
     accrued = a.cities[10].production
     a = command(a, {"type": "city_management", "city": "city:10", "enabled": True}).state
-    assert a.cities[10].production == accrued and a.cities[10].queue == ["building:market"]
+    assert a.cities[10].production == accrued and a.cities[10].queue == ["building:granary"]
     b = step(a, [], RULES).state
     # 生产力可能先付了城外工程款，但已投入的不会丢
-    assert b.cities[10].queue == ["building:market"] and b.cities[10].production >= accrued
+    assert b.cities[10].queue == ["building:granary"] and b.cities[10].production >= accrued
 
 
 def test_national_development_no_civilian_unit_and_exact_duration(board):
@@ -167,22 +167,20 @@ def test_industry_still_assigns_local_food_before_factories(board):
     assert city_yields(s, RULES, c) == before
 
 
-def test_negative_treasury_prefers_zero_upkeep_income_and_no_roads(board):
+def test_negative_treasury_builds_no_units(board):
     s = enabled(board, "military")
     s.nations[1].gold = -20
     for _ in range(8):
         s.add_unit(Unit(s.new_id(), "fighter", 1, s.cities[10].tile, "air"))
     result = step(s, [], RULES)
-    assert result.state.cities[10].queue == ["building:market"]
-    assert not result.state.roads
-    assert result.state.nations[1].management["road_status"] == "waiting"
     assert not any(e["type"] == "unit_created" for e in result.events)
+    assert not any(item.startswith("unit:") for item in result.state.cities[10].queue)
 
 
 def test_military_projects_reserve_one_shared_budget(board):
     s = enabled(board, "military")
     c = s.cities[10]
-    c.buildings = ["palace", "granary", "workshop", "market", "school", "barracks", "walls"]
+    c.buildings = ["palace", "granary", "workshop", "school", "barracks", "walls"]
     for t in available(s):
         s.grid.facility[t] = RULES.facility_index("farm")
     c2 = City(12, "城12", 1, s.grid.idx(8, 11), 3, buildings=list(c.buildings))
@@ -199,7 +197,9 @@ def test_military_projects_reserve_one_shared_budget(board):
         for item in city.queue
         if item.startswith("unit:")
     ]
-    assert q and all(RULES.units[item.split(":")[1]].category == "military" for item in q)
+    assert q and all(RULES.units[item.split(":")[1]].category == "military" for item in q), [
+        (c.queue, c.management.get("reason")) for c in result.state.nation_cities(1)
+    ]
     n = result.state.nations[1]
     assert n.management["committed_upkeep"] >= sum(
         RULES.units[item.split(":")[1]].upkeep for item in q
@@ -244,47 +244,38 @@ def test_100_turns_complete_projects_without_civilians_or_illegal_facilities(boa
         events.update(e["type"] for e in result.events)
         assert s.nations[1].gold >= 0
     assert events["facility_built"] and events["building_completed"] and events["unit_created"]
-    # 道路昂贵：只有一座城时最多修通往外国首都的贸易路，不会给每处设施单独修路
-    assert events["road_built"] <= 1
     assert all(RULES.units[u.type].category == "military" for u in s.units.values())
     # 造兵要带走人口，人口不一定比开局多；但城市不会被抽空
     assert s.cities[10].population >= 1
 
 
-def test_sea_unit_is_produced_on_water_not_city_land(board):
+def test_ships_are_built_only_with_a_port_and_launch_from_it(board):
     s = board
     c = s.cities[10]
-    tile = available(s)[0]
-    # 选真正相邻的岸边水格。
     tile = s.grid.neighbors_of(c.tile)[0]
     s.grid.terrain[tile] = list(RULES.terrain).index("coast")
     s.grid.is_water[tile] = True
     c.queue, c.production = ["unit:destroyer"], RULES.units["destroyer"].cost
+    blocked = step(s, [], RULES)
+    assert not any(u.type == "destroyer" for u in blocked.state.units.values())  # 没有港口
+    port = next(t for t in s.grid.neighbors_of(tile) if not s.grid.is_water[t] and t != c.tile)
+    s.grid.facility[port] = RULES.facility_index("port")
     result = step(s, [], RULES)
     ship = next(u for u in result.state.units.values() if u.type == "destroyer")
-    assert result.state.grid.is_water[ship.tile] and ship.tile != c.tile
+    assert ship.tile == port  # 舰船在港口出生
 
 
-def test_automatic_road_plan_builds_bridge_and_tunnel_across_regions(board):
+def test_manager_connects_districts_to_the_center_by_road(board):
     s = enabled(board)
     g = s.grid
-    for c in s.cities.values():
-        c.managed = False
-    end = g.idx(9, 7)
-    s.cities[12] = City(12, "城12", 1, end, 2, buildings=["palace"])
-    s.cities[12].managed = False
-    g.owner[end], g.city_of[end] = 1, 12
-    s._territory_cache = None
-    for row in range(g.height):
-        coast, mountain = g.idx(7, row), g.idx(8, row)
-        g.terrain[coast], g.is_water[coast] = list(RULES.terrain).index("coast"), True
-        g.terrain[mountain] = list(RULES.terrain).index("mountains")
-    g.area[:], g.area[end] = 0, 1
-    s.nations[1].road_plan = {"start": s.cities[10].tile, "end": end, "reason": "连接城市"}
-    result = step(s, [], RULES)
-    assert {"bridge", "tunnel"} <= {r["kind"] for r in result.state.roads.values()}
-    assert result.state.nations[1].road_plan is None
-    assert result.state.nations[1].gold >= result.state.nations[1].management["reserve"]
+    c = s.cities[10]
+    res = next(t for t in available(s) if g.distance(t, c.tile) == 2)
+    g.facility[res] = RULES.facility_index("residential")
+    s._worked_cache.clear()
+    budget = budget_for(s, RULES, s.nations[1], [c])
+    _, intents = decide_city(s, RULES, c, budget)
+    orders = [o for o, _, _ in intents if o.type == "city_order"]
+    assert orders and orders[0].queue == [f"road:{res}"]  # 住宅区连上路才有加成：先修路
 
 
 def test_new_policy_and_ownership_validated(board):
@@ -302,6 +293,7 @@ def test_prepare_food_facilities_before_population_grows(board):
     s = enabled(board, "growth")
     c = s.cities[10]
     c.population = 2
+    c.buildings += ["granary", "school", "workshop"]  # 住房充足：不急着建住宅区
     c.food = food_to_grow(2) - 2
     for tile in available(s)[:2]:
         s.grid.facility[tile] = RULES.facility_index("farm")
@@ -372,7 +364,7 @@ def test_foreign_aircraft_make_anti_air_worth_building(board):
     s = enabled(board)
     c = s.cities[10]
     c.population, c.food = 6, 100
-    c.buildings += ["granary", "workshop", "market", "school", "barracks", "walls"]
+    c.buildings += ["granary", "workshop", "school", "barracks", "walls"]
     for tile in available(s)[:6]:
         s.grid.facility[tile] = RULES.facility_index("farm")
     budget = budget_for(s, RULES, s.nations[1], [c])
