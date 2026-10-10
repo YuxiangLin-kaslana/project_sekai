@@ -62,7 +62,7 @@ from engine.hexmap import kernels
 from engine.hexmap.grid import _topology
 from engine.ids import parse_ref, ref
 from engine.state import MOVE_STEPS, City, Unit
-from engine.systems import combat, encirclement, movement, naval, stacking
+from engine.systems import combat, encirclement, movement, naval, stacking, zoc
 from engine.systems.cities import (
     FOOD_PER_POP,
     city_yields,
@@ -655,8 +655,8 @@ def march(ctx, unit, goal, reason, *, disperse=False, stop_within=0, avoid=None)
                     break
                 path.append(b)
                 left = max(0, left - cost)
-                if g.distance(b, goal) <= stop_within:
-                    break
+                if g.distance(b, goal) <= stop_within or zoc.stops(s, rules, unit, b):
+                    break  # 到了，或者走进了敌方控制区（必须停下）
         for _ in range(min(16, full) if distance or disperse else 0):
             if left <= 0:
                 break
@@ -695,6 +695,8 @@ def march(ctx, unit, goal, reason, *, disperse=False, stop_within=0, avoid=None)
             left = max(0, left - cost)
             if b == goal or disperse or sidestep or g.distance(b, goal) <= stop_within:
                 break
+            if zoc.stops(s, rules, unit, b):
+                break  # 走进了敌方控制区：必须停下
         while len(path) > 1 and not movement.has_room(s, rules, unit, path[-1]):
             path.pop()
         if len(path) < 2 and not disperse and ut.domain == "land":
@@ -727,8 +729,8 @@ def march(ctx, unit, goal, reason, *, disperse=False, stop_within=0, avoid=None)
                     break
                 path.append(b)
                 left = max(0, left - cost)
-                if g.distance(b, goal) <= stop_within:
-                    break
+                if g.distance(b, goal) <= stop_within or zoc.stops(s, rules, unit, b):
+                    break  # 到了，或者走进了敌方控制区（必须停下）
         # 路上可以穿过本方已满的格子，停下的格子必须有空位
         while len(path) > 1 and not movement.has_room(s, rules, unit, path[-1]):
             path.pop()
@@ -1434,8 +1436,10 @@ def _ground(ctx, tile, enemy_tile):
 
 
 def _flank(ctx, unit):
-    """包抄：附近（FLANK_REACH 格内）有已被本方部队贴住的敌方陆军时，挪到它另一侧还空着的格子，
-    给本回合和下回合的进攻多一面侧击。不去城里的敌军（攻城另有包围圈），已经够多面的不再去。"""
+    """包抄：附近（FLANK_REACH 格内）有已被本方部队贴住的敌方陆军时，绕到它的侧面或背后（看它的朝向：
+    侧击 +30%、背击 +80%），给本回合和下回合的进攻加成。背后优先；不去城里的敌军（城市只有城防值）。"""
+    from engine.systems.zoc import bearing, side
+
     s, rules, g = ctx.state, ctx.rules, ctx.state.grid
     claims = _ai(ctx).setdefault("flank", set())
     best = None
@@ -1445,40 +1449,42 @@ def _flank(ctx, unit):
         foes = [
             v
             for v in s.units_at(t, "surface")
-            if v.nation != unit.nation
+            if at_war(s, v.nation, unit.nation)
             and is_military(rules, v)
             and rules.units[v.type].domain == "land"
         ]
         if not foes:
             continue
         around = ring(ctx, t)
-        ours = [
-            n
+        engaged = any(
+            any(v.nation == unit.nation and is_military(rules, v) for v in s.units_at(n, "surface"))
             for n in around
-            if (t, n) in claims
-            or any(
-                v.nation == unit.nation and is_military(rules, v) for v in s.units_at(n, "surface")
-            )
-        ]
-        if not ours or len(ours) > rules.tactics.flank_max:
+        )
+        if not engaged:
             continue
+        foe = foes[0]
         for n in around:
+            k = side(foe.facing, bearing(g, t, n))
             if (
-                n in ours
+                k < 2
+                or (t, n) in claims
                 or any(v.nation != unit.nation for v in s.units_at(n))
                 or not stacking.has_room(s, rules, n, "military", unit.nation)
             ):
                 continue
-            score = 10 * len(ours) + _ground(ctx, n, t) - 3 * g.distance(unit.tile, n)
+            score = 20 * k + _ground(ctx, n, t) - 3 * g.distance(unit.tile, n)
             if best is None or (score, -n) > best[:2]:
-                best = (score, -n, n, t, foes[0])
+                best = (score, -n, n, t, foe, k)
     if best is None:
         return False
-    _, _, tile, target, foe = best
+    _, _, tile, target, foe, k = best
     name = rules.units[foe.type].name
-    if march(
-        ctx, unit, tile, f"包抄敌方{name}：绕到侧面，配合进攻（侧击每面 +{rules.tactics.flank}%）"
-    ):
+    how = (
+        f"背后（背击 +{rules.tactics.rear}%）"
+        if k == 3
+        else f"侧面（侧击 +{rules.tactics.flank}%）"
+    )
+    if march(ctx, unit, tile, f"包抄敌方{name}：绕到它的{how}，配合进攻"):
         claims.add((target, tile))
         _record_move(ctx, unit, tile, "flank")
         return True

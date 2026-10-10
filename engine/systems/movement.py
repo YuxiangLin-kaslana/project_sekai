@@ -12,6 +12,7 @@ from engine.hexmap.pathfind import move_costs
 from engine.ids import ref
 from engine.rules.schema import Ruleset, UnitType
 from engine.state import MOVE_STEPS, GameState, Unit
+from engine.systems import zoc
 from engine.systems.cities import coastal
 from engine.systems.context import StepContext
 from engine.systems.roads import crosses_river
@@ -244,6 +245,11 @@ def movement_map(state, rules, unit, cost=None) -> tuple[dict[int, int], dict[in
         return best, parents
     heap = [(-budget, unit.tile)]
     shut = closed_for(state, unit)
+    stop = (
+        None
+        if zoc.ignores(rules, unit)
+        else zoc.mask(state, rules, unit.nation, "sea" if ut.domain == "sea" else "land")
+    )
     while heap:
         neg_left, cur = heapq.heappop(heap)
         left = -neg_left
@@ -256,6 +262,8 @@ def movement_map(state, rules, unit, cost=None) -> tuple[dict[int, int], dict[in
             if c <= 0 or (left < c and left < full):
                 continue
             rest = max(0, left - c)
+            if stop is not None and stop[n]:
+                rest = 0  # 走进交战国的控制区：必须停下
             if rest > best.get(n, -1):
                 best[n], parents[n] = rest, cur
                 heapq.heappush(heap, (-rest, n))
@@ -382,6 +390,9 @@ def resolve(ctx: StepContext) -> None:
             budget = max(0, budget - c)
             walked.append(tile)
             left.append(budget)
+            if zoc.stops(state, rules, unit, tile):
+                left[-1] = 0  # 走进交战国的控制区：必须停下
+                break
         while len(walked) > 1 and not has_room(state, rules, unit, walked[-1]):
             walked.pop()
             left.pop()

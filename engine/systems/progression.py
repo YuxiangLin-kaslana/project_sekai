@@ -60,7 +60,10 @@ def resolve(ctx: StepContext) -> None:
         area = int(s.grid.area[c.tile])
         development[area] = development.get(area, 0) + max(1, y.production)
         if c.damaged_turn != s.turn and c.id not in ring.cities:  # 被包围的城市城防不回复
-            c.hp = min(200, c.hp + 8)
+            from engine.systems.combat import city_max_hp
+
+            full = city_max_hp(rules, c)
+            c.hp = min(full, c.hp + max(1, full * rules.cities.defense_regen // 100))
         for t in worked_facilities(s, rules, c):
             xp = s.facility_xp.get(t, 0)
             s.facility_xp[t] = xp + 2

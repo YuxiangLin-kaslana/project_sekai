@@ -122,7 +122,8 @@ def test_stacked_can_attack_but_groups_and_marching_units_cannot(board):
     assert "行军" in action(s, order(a, "attack", to=[4, 3])).rejected[0]["message"]
     s.units[a.id].destination = None
     moved = action(s, order(b, "move", to=[4, 2]), order(b, "attack", to=[4, 3]))
-    assert any("行军" in r["message"] for r in moved.rejected)
+    # (4,2) 挨着敌军：走进控制区就停下、移动力清零，这回合也打不了
+    assert any("行军" in r["message"] or "移动力" in r["message"] for r in moved.rejected)
 
 
 def test_bombardment_hits_every_unit_in_the_hex(board):
@@ -155,22 +156,26 @@ def test_encircled_units_and_cities(board):
 
     victim = add(board, "infantry", 2, 5, 3)
     ring = board.grid.neighbors_of(victim.tile)
-    for t in ring[:-1]:
-        add(board, "infantry", 1, *board.grid.col_row(t))
-    assert victim.id not in encirclement.status(board, RULES).units  # 还有一个缺口
-    add(board, "infantry", 1, *board.grid.col_row(ring[-1]))
+    add(board, "infantry", 1, *board.grid.col_row(ring[0]))
+    assert victim.id not in encirclement.status(board, RULES).units  # 一边有敌军还不算
+    # 对面再来一支：两支部队的控制区把其余四格也封住了（控制区算包围）
+    add(board, "infantry", 1, *board.grid.col_row(ring[3]))
     assert victim.id in encirclement.status(board, RULES).units
-    # 被包围：战斗力打折，驻守也不回血，每回合减员
+    # 本方部队站进控制区里：缺口打开
+    friend = add(board, "infantry", 2, *board.grid.col_row(ring[1]))
+    assert victim.id not in encirclement.status(board, RULES).units
+    board.remove_unit(friend.id)
+    # 被包围：驻守也不回血，每回合减员
     victim.fortified, victim.hp = True, 50
     s = step(board, [], RULES).state
     assert s.units[victim.id].hp == 50 - RULES.encirclement.attrition
-    # 城市四周陆地都被敌军占住：城防不回复
+    # 城市四周都被敌军和控制区封住：城防不回复
     city = found_city(board, RULES, 2, board.grid.idx(9, 5))
-    city.hp = 100
+    city.hp = 50
     for t in board.grid.neighbors_of(city.tile):
         add(board, "infantry", 1, *board.grid.col_row(t))
     assert city.id in encirclement.status(board, RULES).cities
-    assert step(board, [], RULES).state.cities[city.id].hp == 100
+    assert step(board, [], RULES).state.cities[city.id].hp == 50
 
 
 def test_group_range_is_slowest_and_movement_atomic(board):
@@ -313,6 +318,7 @@ def test_ruined_city_requires_capture_and_cannot_award_ranged_xp(board):
 def test_melee_moves_into_the_hex_and_keeps_fighting_there(board):
     a = add(board, "infantry", 1, 3, 3)
     b = add(board, "infantry", 2, 4, 3, hp=100)
+    b.facing = 3  # 面朝进攻方（西）：正面交战
     first = action(board, order(a, "attack", to=[4, 3]))
     assert not first.rejected
     s = first.state
@@ -460,12 +466,12 @@ def test_unit_levels_run_from_0_to_4_and_cap_at_150_percent(board):
     assert level(0, "city") == 1  # 城市 / 设施仍从 1 级起
 
 
-def test_flanking_rivers_and_ground_change_melee_attacks(board):
+def test_facing_rivers_and_ground_change_attacks(board):
     from engine.systems.combat import preview
 
-    g = board.grid
     a = add(board, "infantry", 1, 3, 3)
     d = add(board, "infantry", 2, 4, 3)
+    d.facing = 3  # 守军面朝西（进攻方）：正面
     clean = board.clone()
 
     def hit(s):
@@ -474,24 +480,21 @@ def test_flanking_rivers_and_ground_change_melee_attacks(board):
         return info, {m["label"]: m["value"] for m in info["modifiers"]}
 
     base, mods = hit(clean)
-    assert mods == {"步兵师防守": 25}  # 防守方步兵 +25%；平原没有地形修正
+    assert mods == {"步兵师防守": 25}  # 正面、平原：没有战术修正
 
-    flanked = clean.clone()
-    for t in [n for n in g.neighbors_of(d.tile) if n != a.tile][:2]:
-        flanked.add_unit(Unit(flanked.new_id(), "infantry", 1, t, "surface"))
-    info, mods = hit(flanked)
-    assert mods["侧击（2 面）"] == 2 * RULES.tactics.flank
-    assert info["damage"] > base["damage"] and info["retaliation"] < base["retaliation"]
-    result = action(flanked, order(a, "attack", to=list(g.col_row(d.tile))))
-    assert result.state.units[d.id].hp == FULL - info["damage"]
+    side = clean.clone()
+    side.units[d.id].facing = 1  # 守军面朝东北：攻击从侧面来
+    info, mods = hit(side)
+    assert mods["侧击"] == RULES.tactics.flank and info["damage"] > base["damage"]
+    back = clean.clone()
+    back.units[d.id].facing = 0  # 面朝东：背对进攻方
+    info2, mods = hit(back)
+    assert mods["背击"] == RULES.tactics.rear and info2["damage"] > info["damage"]
 
     river = clean.clone()
     river.grid.add_river(a.tile, river.grid.direction_to(a.tile, d.tile))
     info, mods = hit(river)
-    assert mods["跨河进攻"] == -25 and info["damage"] < base["damage"]
-    river.roads[(min(a.tile, d.tile), max(a.tile, d.tile))] = {"nation": 1}
-    info, mods = hit(river)
-    assert mods["跨河进攻（走桥）"] == -10
+    assert mods["跨河进攻"] == -RULES.tactics.river == -50 and info["damage"] < base["damage"]
 
     marsh = clean.clone()
     marsh.grid.terrain[a.tile] = list(RULES.terrain).index("marsh")
@@ -741,3 +744,92 @@ def test_warships_fire_flak_when_planes_enter_and_leave(board):
     shots = [e for e in out.events if e["type"] == "anti_air_fire"]
     assert shots and {e["phase"] for e in shots} <= {"enter", "leave"}
     assert out.state.units[target.id].hp < RULES.units["infantry"].hp
+
+
+def test_zone_of_control_stops_movement_but_not_tanks(board):
+    from engine.systems.movement import movement_map
+
+    add(board, "infantry", 2, 6, 3)  # 敌军：周围一圈是它的控制区
+    foot = add(board, "infantry", 1, 3, 3)
+    foot.moves_left = 5
+    best, _ = movement_map(board, RULES, foot)
+    zone = board.grid.idx(5, 3)
+    assert zone in best and best[zone] == 0  # 能走进控制区，但进去就停下
+    beyond = board.grid.idx(7, 2)
+    assert beyond not in best or best[beyond] < best.get(board.grid.idx(4, 2), 0)
+    tank = add(board, "armor", 1, 3, 5)
+    tank.moves_left = 5
+    tbest, _ = movement_map(board, RULES, tank)
+    assert tbest.get(board.grid.idx(5, 4), 0) > 0  # 坦克不受控制区影响
+
+
+def test_facing_flank_and_rear_attacks(board):
+    from engine.systems.combat import preview
+
+    target = add(board, "infantry", 2, 5, 3)
+    target.facing = 3  # 面朝西
+    front = add(board, "infantry", 1, 4, 3)  # 从西边打：正面
+    rear = add(board, "infantry", 1, 6, 3)  # 从东边打：背后
+    f, _ = preview(board, RULES, front, target.tile)
+    r, _ = preview(board, RULES, rear, target.tile)
+    labels_f = {m["label"] for m in f["modifiers"]}
+    labels_r = {m["label"]: m["value"] for m in r["modifiers"]}
+    assert "背击" not in labels_f and "侧击" not in labels_f
+    assert labels_r.get("背击") == RULES.tactics.rear
+    assert r["damage"] > f["damage"]
+
+
+def test_city_and_garrison_share_one_defense_bar(board):
+    from engine.systems.cities import found_city
+    from engine.systems.combat import city_defense, city_max_hp, preview
+
+    city = found_city(board, RULES, 2, board.grid.idx(6, 3))
+    guard = add(board, "infantry", 2, 6, 3)
+    assert city_defense(board, RULES, city) == city.hp + guard.hp // 2  # 城市本体 + 守军生命一半
+    assert "守城" in lock_reason(board, RULES, guard)  # 守城的近战部队不能出击
+    gun = add(board, "artillery", 1, 4, 3)
+    melee = add(board, "infantry", 1, 5, 3)
+    g_info, _ = preview(board, RULES, gun, city.tile)
+    m_info, _ = preview(board, RULES, melee, city.tile)
+    assert g_info["target"] == f"city:{city.id}"  # 打城市格只打城防值，打不到单个部队
+    assert any(m["label"] == "城防挡住近战" for m in m_info["modifiers"])
+    # 伤害先打城市本体，再打守军
+    city.hp = 5
+    out = action(board, order(gun, "attack", to=[6, 3]))
+    after = out.state
+    assert after.cities[city.id].hp == 0 and after.units[guard.id].hp < guard.hp
+    # 城防打空后近战开进去：城市易手，城里剩下的部队全部消灭
+    s = after.clone()
+    s.units[guard.id].hp = 0
+    s.remove_unit(guard.id)
+    s.units[melee.id].attacked_turn = -1
+    taken = action(s, order(s.units[melee.id], "attack", to=[6, 3]))
+    assert not taken.rejected and taken.state.cities[city.id].nation == 1
+    assert taken.state.cities[city.id].hp == city_max_hp(RULES, city) // 2
+
+
+def test_city_holds_at_most_four_units(board):
+    from engine.systems.cities import found_city
+    from engine.systems.stacking import has_room
+
+    city = found_city(board, RULES, 1, board.grid.idx(6, 3))
+    for kind in ("infantry", "artillery", "engineer", "recon"):
+        add(board, kind, 1, 6, 3)
+    assert not has_room(board, RULES, city.tile, "military", 1)
+    assert not has_room(board, RULES, city.tile, "civilian", 1)
+
+
+def test_military_base_bombards_and_shelters_its_garrison(board):
+    from engine.systems.combat import strength
+
+    g = board.grid
+    base_tile = g.idx(5, 3)
+    g.owner[base_tile] = 1
+    soldier = add(board, "infantry", 1, 5, 3)
+    plain = strength(board, RULES, soldier, defending=True)
+    g.facility[base_tile] = RULES.facility_index("military_base")
+    assert strength(board, RULES, soldier, defending=True) > plain  # 进驻军事基地：防守加成
+    foe = add(board, "infantry", 2, 7, 3)
+    out = step(board, [], RULES)
+    fire = [e for e in out.events if e["type"] == "base_fire"]
+    assert fire and out.state.units[foe.id].hp < foe.hp  # 自带炮击，打 2 格内的敌军

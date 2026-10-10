@@ -36,6 +36,13 @@ def stack_count(
 def has_room(
     state: GameState, rules: Ruleset, tile: int, cls: StackClass, nation: int | None = None
 ) -> bool:
+    if cls != "air" and state.city_at(tile) is not None:
+        # 城里最多 cities.max_units 个地表单位（军事、平民合计）
+        here = sum(
+            1 for u in state.units_at(tile, "surface") if nation is None or u.nation == nation
+        )
+        if here >= rules.cities.max_units:
+            return False
     return stack_count(state, rules, tile, cls, nation) < stack_limit(state, rules, tile, cls)
 
 

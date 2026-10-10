@@ -208,6 +208,8 @@ class BuildingType(_Strict):
     terrain_yields: dict[str, Yields] = {}  # 按改良前的地形给的产出（没写的地形用 yields）
     on_water: bool = False  # 能建在水面上（渔场、海上油田）
     enables: list[str] = []  # 城市有了它才能造的兵种类别：ships / aircraft
+    bombard: int = Field(0, ge=0)  # 自带炮击（军事基地）：每回合自动打射程内最弱的交战国部队，火力
+    bombard_range: int = Field(2, ge=1, le=6)
     gold_assist: bool = True  # 能否用金币补生产力（城市开了金币补足建设时）；军事建筑不行
     extracts: list[str] = []  # 运作时开采的资源；仅占领矿藏不提供战略资源
     allowed_terrain: list[str] = []  # 城外设施能建在哪些地形（空 = 任何陆地）
@@ -280,6 +282,12 @@ class CityConfig(_Strict):
     sparse_distance: int = Field(7, ge=3)
     regional_capacity: bool = True
     center_housing: int = Field(3, ge=0)  # 市中心本身给的住房
+    defense_base: int = Field(100, ge=1)  # 城防值（城市本体）的基础上限；城防建筑另加
+    melee_reduction: int = Field(70, ge=0, le=100)  # 城防让近战攻城的伤害 −这么多 %
+    defense_regen: int = Field(
+        5, ge=0, le=100
+    )  # 没被包围、本回合没挨打：城防每回合恢复上限的这么多 %
+    max_units: int = Field(4, ge=1)  # 城里最多这么多个地表单位
     capital_road_bonus: int = Field(25, ge=0, le=100)
     foreign_trade_gold: int = Field(2, ge=0)
     max_trade_partners: int = Field(3, ge=0)
@@ -303,9 +311,10 @@ class StackingConfig(_Strict):
 class EncirclementConfig(_Strict):
     """包围（= 断补给，见 engine/systems/encirclement.py）。"""
 
-    penalty: int = Field(25, ge=0, le=90)  # 被包围的部队战斗力 −这么多 %
+    penalty: int = Field(50, ge=0, le=90)  # 被包围的部队攻击力 −这么多 %
     attrition: int = Field(6, ge=0, le=100)  # 被包围的部队每回合减员（生命）
-    city_penalty: int = Field(25, ge=0, le=90)  # 被包围的城市防御战斗力 −这么多 %
+    city_penalty: int = Field(50, ge=0, le=90)  # 被包围的城市攻击力 −这么多 %
+    damage_taken: int = Field(200, ge=100, le=500)  # 被包围的部队 / 城市受到的伤害（百分比）
 
 
 class ArmyConfig(_Strict):
@@ -327,10 +336,9 @@ class GeneralConfig(_Strict):
 class TacticsConfig(_Strict):
     """战术修正（百分比，见 engine/systems/combat.py 的 attack_modifiers）。"""
 
-    flank: int = Field(10, ge=0, le=50)  # 侧击：目标格四周每多一面有本方陆军，近战进攻 +这么多 %
-    flank_max: int = Field(3, ge=0, le=6)  # 最多算几面
-    river: int = Field(25, ge=0, le=90)  # 跨河近战进攻 −这么多 %
-    bridge: int = Field(10, ge=0, le=90)  # 走桥（河上有道路）跨河进攻只 −这么多 %
+    flank: int = Field(30, ge=0, le=200)  # 侧击：从目标侧面打，+这么多 %（看目标的朝向）
+    rear: int = Field(80, ge=0, le=300)  # 背击：从目标背后打，+这么多 %
+    river: int = Field(50, ge=0, le=90)  # 隔着河进攻 −这么多 %（飞机不受影响）
 
 
 class StabilityConfig(_Strict):

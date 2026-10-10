@@ -153,9 +153,11 @@ military_base:
   jobs: 0
   stacking: { military: 0 }
   allowed_terrain: [plains, grassland, desert, tundra, hills]
+  bombard: 18                # 自带炮击：每回合自动打 2 格内最弱的交战国部队
+  bombard_range: 2
   modifiers:
     - { target: city, stat: unit_cost, op: mul, value: 70 }      # 造兵省 30% 生产力（也就快 30%）
-    - { target: tile, stat: defense, op: add, value: 25 }
+    - { target: tile, stat: defense, op: add, value: 35 }        # 进驻的部队防守 +35%
   gold_assist: false
   icon: base
 

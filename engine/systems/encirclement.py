@@ -55,12 +55,18 @@ def surrounded(state, rules, nation, tile, domain="land", occ=None, extra=()) ->
     ring = [n for n in g.neighbors_of(tile) if standable[g.terrain[n]]]
     if not ring:
         return False
+    from engine.systems.zoc import mask
+
+    zone = mask(state, rules, nation, "sea" if domain == "sea" else "land")
     for n in ring:
         city = state.city_at(n)
         if city is not None and at_war(state, city.nation, nation):
             continue
-        if n in extra or any(at_war(state, o, nation) for o in occ.get(n, ())):
+        here = occ.get(n, ())
+        if n in extra or any(at_war(state, o, nation) for o in here):
             continue
+        if zone[n] and nation not in here:
+            continue  # 敌方控制区、又没有本方部队站着：也算被围住
         return False
     return True
 

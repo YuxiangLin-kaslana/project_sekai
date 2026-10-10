@@ -89,10 +89,14 @@ def test_wounded_units_rest_and_groups_dissolve(board):
         result.state.units[a.id].hp == 20 + RULES.units["infantry"].hp * RULES.healing.city // 100
     )  # 首都里休整
     assert result.state.units[b.id].formation is None and result.state.units[c.id].formation is None
-    # 同格最多 4 支，不在编队里就能各自交战，不用为了攻击专门分散
+    # 编队解散后各自行动；还留在首都里的近战部队守城，不能出击
     s = result.state
     still = [x for x in (b, c) if s.units[x.id].tile == a.tile]
-    assert all(lock_reason(s, RULES, s.units[x.id]) in (None, "本回合已经攻击") for x in still)
+    assert all(
+        lock_reason(s, RULES, s.units[x.id]) in (None, "本回合已经攻击")
+        or "守城" in lock_reason(s, RULES, s.units[x.id])
+        for x in still
+    )
 
 
 def test_ai_captures_ruined_enemy_city_and_keeps_a_guard(board):
@@ -530,7 +534,7 @@ def test_ring_troops_storm_the_walls_when_no_guns_are_firing(board):
     from engine.systems.context import StepContext
 
     enemy = board.nation_cities(2)[0]
-    enemy.hp = 60  # 城防已经不高
+    enemy.hp = 10  # 城防已经很低（近战攻城伤害 −70%，城防高时强攻代价太大）
     troop = add(board, "infantry", 1, board.grid.col_row(board.grid.neighbors_of(enemy.tile)[0]))
     ctx = StepContext(board, RULES, [], EventLog(board.turn), RngTree(board.seed, "t", 1))
     assert rule_ai._storm(ctx, troop, enemy)  # 没有炮兵在轰：近战直接强攻城墙

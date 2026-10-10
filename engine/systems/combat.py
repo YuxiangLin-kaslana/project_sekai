@@ -25,6 +25,8 @@ from __future__ import annotations
 
 from collections import Counter
 
+import numpy as np
+
 from engine.actions import CityAttack
 from engine.ids import parse_ref, ref
 from engine.state import MOVE_STEPS, City, Unit
@@ -36,6 +38,48 @@ from engine.systems.progression import gain, level, unit_strength
 FUEL_SHORTAGE = 30  # 没有石油：坦克、飞机（fuel 单位）战斗力 −30%
 FLAK_FACTOR = 30  # 一门高射炮对来袭飞机的火力：FLAK_FACTOR × 防空火力 ÷ 飞机战斗力（6–40）
 FLAK_CAP = 70  # 飞一段航线最多被防空火力打掉这么多生命
+
+
+# ---------------------------------------------------------------- 城防（城市和守城部队共用一个血条）
+
+
+def city_max_hp(rules, city) -> int:
+    """城市本体的城防上限：基础值 + 城防建筑（城防工事、首都府）。"""
+    return rules.cities.defense_base + city_stat(rules, city, "defense", 0)
+
+
+def garrison(state, rules, city) -> list:
+    """守城的近战部队：城里本国的陆上近战军事单位。它们的生命按一半计入城防值，不能出城攻击。"""
+    return [
+        u
+        for u in state.units_at(city.tile, "surface")
+        if u.nation == city.nation
+        and rules.units[u.type].category == "military"
+        and rules.units[u.type].domain == "land"
+        and attack_kind(rules, u) == "melee"
+    ]
+
+
+def city_defense(state, rules, city) -> int:
+    """城防值：城市本体 + 守城近战部队的生命（各按一半）。打到 0 才能占领。"""
+    return max(0, city.hp) + sum(u.hp // 2 for u in garrison(state, rules, city))
+
+
+def damage_city(ctx, city, amount: int) -> None:
+    """城防挨打：先打城市本体，打空了再打守城部队（城防值 1 点 = 部队 2 点生命，生命多的先挨）。"""
+    s, rules = ctx.state, ctx.rules
+    take = min(city.hp, amount)
+    city.hp -= take
+    left = amount - take
+    for u in sorted(garrison(s, rules, city), key=lambda u: (-u.hp, u.id)):
+        if left <= 0:
+            break
+        hit = min(u.hp, left * 2)
+        u.hp -= hit
+        u.damaged_turn = s.turn
+        left -= (hit + 1) // 2
+        if u.hp <= 0:
+            _destroy(ctx, u, u.tile, "守城阵亡")
 
 
 def _war(state, a, b) -> bool:
@@ -92,6 +136,14 @@ def lock_reason(state, rules, actor) -> str | None:
         return f"{ut.name}没有攻击手段"
     if actor.formation is not None:
         return "编队不能攻击，请先解散编队"
+    home = state.city_at(actor.tile)
+    if (
+        home is not None
+        and home.nation == actor.nation
+        and ut.domain == "land"
+        and attack_kind(rules, actor) == "melee"
+    ):
+        return "守城的近战部队不能出击（城里只有远程部队能攻击；要进攻先出城）"
     if actor.destination is not None:
         return "行军中不能交战，先停下（驻守）"
     if ut.domain == "air":
@@ -219,13 +271,12 @@ def strength(
     against：对手国家，算兵力悬殊的士气。"""
     ring = encirclement.status(state, rules)
     if isinstance(actor, City):
-        defense = city_stat(rules, actor, "defense", 100)
-        _note(notes, "城防建筑", defense - 100)
-        value = (12 + actor.population * 2) * defense // 100
+        # 城市的战斗力随城防值（城市本体 + 守城部队）升高
+        value = 8 + city_defense(state, rules, actor) // 5
         bonus = 8 * (level(actor.xp, "city") - 1)
         _note(notes, f"城市 Lv.{level(actor.xp, 'city')}", bonus)
         value = max(1, value * (100 + bonus) // 100)
-        if actor.id in ring.cities:
+        if actor.id in ring.cities and not defending:
             _note(notes, "被包围", -rules.encirclement.city_penalty)
             value = value * (100 - rules.encirclement.city_penalty) // 100
         return max(1, _morale(state, rules, actor, against, value, notes))
@@ -296,16 +347,33 @@ def strength(
     if defending:
         _note(notes, f"地形：{terrain.name}", terrain.defense)
         _note(notes, "驻守", 25 if actor.fortified else 0)
-        value = value * max(25, 100 + terrain.defense + (25 if actor.fortified else 0)) // 100
-    if actor.id in ring.units:
+        site = 0
+        fac = rules.facility_at(int(state.grid.facility[actor.tile]))
+        if (
+            fac is not None
+            and int(state.grid.owner[actor.tile]) == actor.nation
+            and actor.tile not in state.damaged
+        ):
+            # 进驻本国的军事基地等设施：防守加成（设施的 tile defense 修正器）
+            site = sum(
+                m.value
+                for m in fac.modifiers
+                if m.target == "tile" and m.stat == "defense" and m.op == "add"
+            )
+            _note(notes, fac.name, site)
+        value = (
+            value * max(25, 100 + terrain.defense + site + (25 if actor.fortified else 0)) // 100
+        )
+    if actor.id in ring.units and not defending:
+        # 被包围：攻击力只剩一半（挨打时受到的伤害翻倍，见 preview）
         _note(notes, "被包围", -rules.encirclement.penalty)
         value = value * (100 - rules.encirclement.penalty) // 100
     return max(1, _morale(state, rules, actor, against, value, notes))
 
 
-def attack_modifiers(state, rules, actor, tile, kind) -> list[tuple[str, int]]:
-    """进攻方的战术修正 [(说明, 百分比)]：出击地形（所有地面 / 舰船进攻），近战另算侧击和跨河。
-    tile 是目标格；同格交战时 actor 就在 tile 里（四周六面都算侧击，没有跨河）。"""
+def attack_modifiers(state, rules, actor, tile, kind, target=None) -> list[tuple[str, int]]:
+    """进攻方的战术修正 [(说明, 百分比)]：出击地形；打部队时看朝向（侧击 +30%、背击 +80%）；
+    隔着河进攻 −50%。飞机不受这些影响。"""
     if not isinstance(actor, Unit) or actor.layer != "surface" or kind in ("air", "anti_air"):
         return []
     g, cfg = state.grid, rules.tactics
@@ -313,29 +381,17 @@ def attack_modifiers(state, rules, actor, tile, kind) -> list[tuple[str, int]]:
     terrain = rules.terrain_at(int(g.terrain[actor.tile]))
     if terrain.attack:
         out.append((f"从{terrain.name}出击", terrain.attack))
-    if kind != "melee":
-        return out
-    sides = sum(
-        1
-        for n in g.neighbors_of(tile)
-        if n != actor.tile
-        and any(
-            u.nation == actor.nation
-            and u.id != actor.id
-            and rules.units[u.type].category == "military"
-            and rules.units[u.type].domain == "land"
-            for u in state.units_at(n, "surface")
-        )
-    )
-    flank = min(cfg.flank_max, sides)
-    if flank:
-        out.append((f"侧击（{flank} 面）", flank * cfg.flank))
-    if actor.tile != tile:
+    if isinstance(target, Unit) and target.layer == "surface" and actor.tile != target.tile:
+        from engine.systems.zoc import bearing, facing_modifier
+
+        mod = facing_modifier(rules, target.facing, bearing(g, target.tile, actor.tile))
+        if mod is not None:
+            out.append(mod)
+    if actor.tile != tile and tile in g.neighbors_of(actor.tile):
         from engine.systems.roads import crosses_river
 
         if crosses_river(g, actor.tile, tile):
-            bridge = (min(actor.tile, tile), max(actor.tile, tile)) in state.roads
-            out.append(("跨河进攻（走桥）", -cfg.bridge) if bridge else ("跨河进攻", -cfg.river))
+            out.append(("跨河进攻", -cfg.river))
     return out
 
 
@@ -391,14 +447,12 @@ def bomb_facility(ctx, actor, tile) -> None:
 
 def target_at(state, rules, actor, tile):
     city = state.city_at(tile)
-    if (
-        isinstance(actor, Unit)
-        and attack_kind(rules, actor) == "melee"
-        and city is not None
-        and _war(state, city.nation, actor.nation)
-        and city.hp > 0
-    ):
-        return city  # 城防还在：近战只能强攻城墙，进不了城和守军交战
+    if city is not None and _war(state, city.nation, actor.nation):
+        # 城市和守城部队共用一个血条：打城市格只打城防值（高射炮照样打城上空的飞机，
+        # 鱼雷打不了城市）
+        ut = rules.units[actor.type] if isinstance(actor, Unit) else None
+        if ut is None or not (ut.anti_air or (ut.torpedo and not ut.deck_gun)):
+            return city
     enemies = [
         u
         for u in state.units_at(tile)
@@ -512,7 +566,7 @@ def preview(state, rules, actor, tile) -> tuple[dict | None, str | None]:
         }, None
     if (
         isinstance(target, City)
-        and target.hp <= 0
+        and city_defense(state, rules, target) <= 0
         and isinstance(actor, Unit)
         and rules.units[actor.type].domain == "sea"
         and not {"unarmed", "carrier"} & set(rules.units[actor.type].tags)
@@ -536,10 +590,31 @@ def preview(state, rules, actor, tile) -> tuple[dict | None, str | None]:
             "modifiers": [],
             "area": [],
         }, None
-    if isinstance(target, City) and target.hp <= 0 and kind != "melee":
-        return None, "城防已摧毁，需要陆军近战（或贴城的战舰）占领"
     if kind == "melee" and isinstance(target, City) and rules.units[actor.type].domain != "land":
         return None, "舰船不能登陆攻城"
+    if isinstance(target, City) and city_defense(state, rules, target) <= 0:
+        if kind != "melee":
+            return None, "城防已打空，需要陆军近战（或贴城的战舰）占领"
+        from engine.systems.stacking import has_room
+
+        if not has_room(state, rules, tile, rules.units[actor.type].stack_class, actor.nation):
+            return None, "那一格本方已满，开不进去"
+        return {
+            "tile": tile,
+            "target": ref("city", target.id),
+            "kind": "melee",
+            "storm_city": True,  # 城防已空：近战开进去占领，城里剩下的敌方单位全部消灭
+            "capture": True,
+            "damage": 0,
+            "retaliation": 0,
+            "flak": 0,
+            "suppress": False,
+            "flak_from": None,
+            "attacker_strength": strength(state, rules, actor),
+            "defender_strength": 0,
+            "modifiers": [],
+            "area": [],
+        }, None
     if kind == "melee" and isinstance(target, Unit):
         # 近战要开进目标格交战：本方在那一格不能超过堆叠上限
         from engine.systems.stacking import has_room
@@ -575,7 +650,7 @@ def preview(state, rules, actor, tile) -> tuple[dict | None, str | None]:
             a = strength(
                 state, rules, actor, ranged=True, hp=actor.hp - flak, against=target.nation
             )
-    tactical = attack_modifiers(state, rules, actor, tile, kind)
+    tactical = attack_modifiers(state, rules, actor, tile, kind, target)
     a = _apply(a, tactical)
     damage = max(8, min(65, 30 * a // d)) if actor.hp > flak else 0
     # 兵种对部队 / 城市的伤害倍率（炮兵：打部队弱、削城防强），只改伤害，不改战斗力和反击
@@ -586,6 +661,19 @@ def preview(state, rules, actor, tile) -> tuple[dict | None, str | None]:
             *tactical,
             ("攻城火力" if isinstance(target, City) else "对部队火力", scale - 100),
         ]
+    if isinstance(target, City) and kind == "melee":
+        # 城防挡住近战：近战攻城伤害 −70%（炮兵、飞机、舰船不受影响）
+        cut = rules.cities.melee_reduction
+        damage = max(1, damage * (100 - cut) // 100)
+        tactical = [*tactical, ("城防挡住近战", -cut)]
+    ring_now = encirclement.status(state, rules)
+    if (isinstance(target, City) and target.id in ring_now.cities) or (
+        isinstance(target, Unit) and target.id in ring_now.units
+    ):
+        # 被包围的部队 / 城市受到的伤害翻倍
+        mult = rules.encirclement.damage_taken
+        damage = damage * mult // 100
+        tactical = [*tactical, ("目标被包围", mult - 100)]
     # 炮击整格：其余敌军（和城市）各按自己的防御力受伤
     area = []
     if (
@@ -612,11 +700,13 @@ def preview(state, rules, actor, tile) -> tuple[dict | None, str | None]:
             area.append(
                 {
                     "target": ref("city" if isinstance(o, City) else "unit", o.id),
-                    "damage": min(o.hp, hit),
+                    "damage": min(
+                        city_defense(state, rules, o) if isinstance(o, City) else o.hp, hit
+                    ),
                 }
             )
     retaliation = max(6, min(60, 25 * d // a)) if kind == "melee" else 0
-    if target.hp <= 0:
+    if (city_defense(state, rules, target) if isinstance(target, City) else target.hp) <= 0:
         retaliation = 0
     if kind == "air" and isinstance(target, Unit):
         dt = rules.units[target.type]
@@ -629,7 +719,9 @@ def preview(state, rules, actor, tile) -> tuple[dict | None, str | None]:
         "tile": tile,
         "target": ref("city" if isinstance(target, City) else "unit", target.id),
         "kind": kind,
-        "damage": min(target.hp, damage),
+        "damage": min(
+            city_defense(state, rules, target) if isinstance(target, City) else target.hp, damage
+        ),
         "retaliation": min(actor.hp - flak, retaliation),
         "flak": flak,  # 来袭飞机先挨的高射火力（击落时 damage 为 0）
         # 炮击压制：这次攻击会让打中的部队失去驻守加成
@@ -678,7 +770,7 @@ def _capture(ctx, city, unit):
 
     note_capture(s, previous, unit.nation)  # 求和时看僵持
     s._closed_cache.clear()
-    city.nation, city.hp, city.capital = unit.nation, 100, False
+    city.nation, city.hp, city.capital = unit.nation, city_max_hp(rules, city) // 2, False
     city.stability = min(city.stability, rules.stability.captured)  # 新占领地区不稳
     city.queue, city.production, city.attacked_turn = [], 0, s.turn
     city.managed = True
@@ -754,12 +846,53 @@ def resolve(ctx: StepContext) -> None:
     s._encircled_lock = True
     try:
         _resolve(ctx)
+        _base_fire(ctx)
         from engine.systems import air
 
         air.after_combat(ctx)
     finally:
         s._encircled_lock = False
         s._encircled = None
+
+
+def _base_fire(ctx) -> None:
+    """自带炮击的设施（军事基地）：每回合战斗阶段末，自动打射程内生命最少的交战国地表部队。
+    炸坏的、没被本国控制的不开火。"""
+    s, rules, g = ctx.state, ctx.rules, ctx.state.grid
+    kinds = [b for b in rules.buildings.values() if b.bombard]
+    if not kinds:
+        return
+    index = {rules.facility_index(b.id): b for b in kinds}
+    for tile in np.flatnonzero(np.isin(g.facility, list(index))).tolist():
+        owner = int(g.owner[tile])
+        if owner < 0 or tile in s.damaged:
+            continue
+        b = index[int(g.facility[tile])]
+        targets = [
+            u
+            for t in g.within(tile, b.bombard_range)
+            for u in s.units_at(t, "surface")
+            if _war(s, u.nation, owner) and _military(rules, u) and s.city_at(t) is None
+        ]
+        if not targets:
+            continue
+        victim = min(targets, key=lambda u: (u.hp, u.id))
+        d = strength(s, rules, victim, defending=True, against=owner)
+        damage = min(victim.hp, max(8, min(65, 30 * b.bombard // d)))
+        victim.hp -= damage
+        victim.damaged_turn = s.turn
+        ctx.log.add(
+            "base_fire",
+            tile=tile,
+            facility=b.id,
+            nation=ref("nation", owner),
+            target=ref("unit", victim.id),
+            target_tile=victim.tile,
+            damage=damage,
+            target_hp=victim.hp,
+        )
+        if victim.hp <= 0:
+            _destroy(ctx, victim, victim.tile, f"{b.name}炮击")
 
 
 def _military(rules, u):
@@ -902,6 +1035,20 @@ def _resolve(ctx: StepContext) -> None:
                 actor.attacked_turn = s.turn
                 gain(ctx, actor, 4, "unit")
                 continue
+        if info.get("storm_city"):
+            # 城防已空：近战开进去占领，城里剩下的敌方单位全部消灭（_capture）
+            city = s.city_at(tile)
+            _capture(ctx, city, actor)
+            s.move_unit(actor, tile)
+            actor.attacked_turn = s.turn
+            actor.moves_left, actor.road_credit, actor.destination, actor.fortified = (
+                0,
+                0,
+                None,
+                False,
+            )
+            ctx.log.add("unit_moved", unit=ref("unit", actor.id), path=[start, tile])
+            continue
         if info.get("seize_city"):
             # 战舰开进港口占领城防已空的城市
             city = s.city_at(tile)
@@ -917,14 +1064,24 @@ def _resolve(ctx: StepContext) -> None:
             ctx.log.add("unit_moved", unit=ref("unit", actor.id), path=[start, tile])
             continue
         target = target_at(s, rules, actor, tile)
-        target.hp = max(0, target.hp - info["damage"])
+        if isinstance(target, City):
+            damage_city(ctx, target, info["damage"])  # 先打城市本体，再打守城部队
+        else:
+            target.hp = max(0, target.hp - info["damage"])
+        if isinstance(actor, Unit) and actor.tile != tile:
+            from engine.systems.zoc import bearing
+
+            actor.facing = bearing(s.grid, actor.tile, tile)  # 攻击时朝向目标
         splashed = []
         for hit in info["area"]:
             kind_, _, oid = hit["target"].partition(":")
             other = s.cities.get(int(oid)) if kind_ == "city" else s.units.get(int(oid))
             if other is None:
                 continue
-            other.hp = max(0, other.hp - hit["damage"])
+            if isinstance(other, City):
+                damage_city(ctx, other, hit["damage"])
+            else:
+                other.hp = max(0, other.hp - hit["damage"])
             other.damaged_turn = s.turn
             splashed.append(other)
         # 炮击压制：打中的部队（炮击波及的整格都算）失去驻守加成
@@ -960,7 +1117,9 @@ def _resolve(ctx: StepContext) -> None:
         for other in splashed:
             if isinstance(other, Unit) and other.hp <= 0 and other.id in s.units:
                 _destroy(ctx, other, other.tile, "炮击")
-        dead_target = target.hp <= 0
+        dead_target = (
+            city_defense(s, rules, target) if isinstance(target, City) else target.hp
+        ) <= 0
         if dead_target and isinstance(target, Unit):
             ctx.log.add(
                 "unit_destroyed",

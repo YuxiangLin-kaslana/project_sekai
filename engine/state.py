@@ -143,6 +143,7 @@ class Unit:
     name: str = ""  # 将领姓名
     rank: int = 0  # 将领星级（★1…★5，出生时抽签）
     title: str = ""  # 将领统率的军团番号（第 N 军团）
+    facing: int = 0  # 朝向（0 东 1 东北 2 西北 3 西 4 西南 5 东南），见 engine/systems/zoc.py
 
 
 _UNIT_FIELDS = operator.attrgetter(*Unit.__slots__)
@@ -185,8 +186,9 @@ class GameState:
     _edge_cache: dict = field(
         default_factory=dict, repr=False
     )  # 六向通行费用表（道路、城市变了就清）
-    # 路网版本：道路、城市一变（invalidate_paths）就加一。AI 工作进程据此判断自己缓存的距离场还能不能用
     _closed_cache: dict = field(default_factory=dict, repr=False)  # 关闭边境的格子（按回合、国家）
+    _zoc: dict = field(default_factory=dict, repr=False)  # 控制区（engine/systems/zoc.py）
+    # 路网版本：道路、城市一变（invalidate_paths）就加一。AI 工作进程据此判断自己缓存的距离场还能不能用
     _path_epoch: int = field(default_factory=lambda: next(_PATH_EPOCHS), repr=False)
     _worked_cache: dict = field(default_factory=dict, repr=False)
     _yield_cache: dict = field(default_factory=dict, repr=False)
@@ -211,6 +213,8 @@ class GameState:
     def _moved(self) -> None:
         if not self._encircled_lock:
             self._encircled = None
+        if self._zoc:
+            self._zoc = {}  # 控制区跟着单位位置变
 
     # ---- 实体 ----
 
@@ -271,6 +275,10 @@ class GameState:
         stack.remove(unit.id)
         if not stack:
             del self._at[(unit.tile, unit.layer)]
+        if tile != unit.tile:
+            from engine.systems.zoc import bearing
+
+            unit.facing = bearing(self.grid, unit.tile, tile)  # 朝前进的方向
         unit.tile = tile
         self._at.setdefault((tile, unit.layer), []).append(unit.id)
         self._at[(tile, unit.layer)].sort()

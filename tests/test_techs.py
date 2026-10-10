@@ -6,7 +6,7 @@ from engine.rules.loader import load_ruleset
 from engine.setup import new_game
 from engine.step import step
 from engine.systems import techs
-from engine.systems.cities import item_cost, production_problem
+from engine.systems.cities import production_problem
 
 RULES = load_ruleset("alt_ww2")
 

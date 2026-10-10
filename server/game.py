@@ -41,7 +41,14 @@ from engine.systems.cities import (
     nation_resources,
     pop_cap,
 )
-from engine.systems.combat import attack_range, lock_reason, strength
+from engine.systems.combat import (
+    attack_range,
+    city_defense,
+    city_max_hp,
+    garrison,
+    lock_reason,
+    strength,
+)
 from engine.systems.diplomacy import DEFAULT as DIPLOMACY_DEFAULT
 from engine.systems.economy import unit_upkeep, upkeep
 from engine.systems.movement import GameState, air_radius, unit_moves
@@ -408,8 +415,10 @@ def _snapshot(game: Game, rules: Ruleset) -> dict:
                     else None
                 ),
                 "defense": city_stat(rules, c, "defense", CITY_DEFENSE),
-                "hp": c.hp,
-                "max_hp": 200,
+                "hp": c.hp,  # 城市本体的城防
+                "max_hp": city_max_hp(rules, c),
+                "defense_value": city_defense(s, rules, c),  # 城防值 = 本体 + 守城部队生命的一半
+                "garrison": [ref("unit", u.id) for u in garrison(s, rules, c)],
                 "xp": c.xp,
                 "attack_blocked": lock_reason(s, rules, c),
             }

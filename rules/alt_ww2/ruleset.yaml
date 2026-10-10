@@ -35,16 +35,16 @@ stacking:                 # 企划书 5.2（初始草案）
   crowding_from: 2        # 同格军事单位超过 2 个开始拥挤
   crowding_penalty: 10    # 每多 1 个，该格所有单位战斗力 −10%
 
-encirclement:             # 包围 = 断补给：四周能站人的相邻格都被敌方军事单位占住（或是敌国城市）
-  penalty: 40             # 被包围的部队战斗力 −40%，驻守也不回血
+encirclement:             # 包围 = 断补给：四周能站人的相邻格都是敌军、敌国城市，或没有本方部队的敌方控制区
+  penalty: 50             # 被包围的部队攻击力只剩 50%（驻守也不回血）
+  damage_taken: 200       # 被包围的部队 / 城市受到的伤害 ×2
   attrition: 10           # 被包围的部队每回合减员 10 点生命，减到 0 溃散
-  city_penalty: 40        # 被包围的城市（四周陆地都被敌军占住）防御 −40%，城防不回复
+  city_penalty: 50        # 被包围的城市攻击力只剩 50%，城防不回复
 
-tactics:                  # 战术修正（近战进攻方）；地形本身的攻防修正在 terrain.yaml 的 attack / defense
-  flank: 15               # 侧击：目标格四周每多一面有本方陆军（不算进攻方出发的那一格），+15%
-  flank_max: 4            # 最多算 4 面（+60%）；城市也算，围城的包围圈本身就是侧击
-  river: 25               # 隔着河近战进攻 −25%
-  bridge: 10              # 河上有道路（桥）时只 −10%
+tactics:                  # 战术修正（进攻方）；地形本身的攻防修正在 terrain.yaml 的 attack / defense
+  flank: 30               # 侧击：从目标的侧面打 +30%（每个单位有朝向，见 engine/systems/zoc.py）
+  rear: 80                # 背击：从目标背后打 +80%
+  river: 50               # 隔着河进攻 −50%（飞机不受影响）
 
 army:
   upkeep_percent: 150     # 军事单位维护费是单位表数值的 1.5 倍
