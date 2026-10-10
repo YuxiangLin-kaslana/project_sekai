@@ -286,6 +286,8 @@ class CityConfig(_Strict):
     sparse_distance: int = Field(7, ge=3)
     regional_capacity: bool = True
     center_housing: int = Field(3, ge=0)  # 市中心本身给的住房
+    # 人口从 n 长到 n+1 要的存粮：growth[0] + growth[1]·n + n^growth[2]
+    growth: tuple[int, int, float] = (15, 6, 1.8)
     defense_base: int = Field(100, ge=1)  # 城防值（城市本体）的基础上限；城防建筑另加
     melee_reduction: int = Field(70, ge=0, le=100)  # 城防让近战攻城的伤害 −这么多 %
     defense_regen: int = Field(

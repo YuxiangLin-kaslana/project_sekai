@@ -193,3 +193,24 @@ def test_any_land_unit_can_demolish_its_own_roads(board):
     )
     assert not out.rejected and len(out.state.roads) == before - 2  # 连到这一格的两段
     assert any(e["type"] == "road_demolished" for e in out.events)
+
+
+def test_unique_district_under_construction_is_not_its_own_duplicate(board):
+    # 回归：唯一区域施工中，结算时不能把“正在建的这一座”当成已经有了而取消工程
+    c = home(board)
+    g = board.grid
+    raw = {
+        "issuer": "nation:1",
+        "type": "develop_city",
+        "city": f"city:{c.id}",
+        "facility": "military_base",
+        "to": list(g.col_row(g.idx(3, 4))),
+    }
+    s = step(board, parse_orders([raw]), RULES, immediate=True).state
+    assert s.cities[c.id].construction is not None
+    for _ in range(6):
+        p = s.cities[c.id].construction
+        if p is not None:
+            p.paid = p.cost(RULES)  # 工程款付清，只看工期
+        s = step(s, [], RULES).state
+    assert RULES.facility_at(int(s.grid.facility[g.idx(3, 4)])).id == "military_base"

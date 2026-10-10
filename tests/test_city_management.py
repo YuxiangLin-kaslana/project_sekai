@@ -331,7 +331,9 @@ def test_do_not_build_military_sites_for_economic_yields(board):
             getattr(RULES.buildings[o.facility].yields, k)
             for k in ("food", "production", "gold", "science")
         )
-        for o, _, _ in intents
+        and not RULES.buildings[o.facility].housing  # 住宅区加住房，不是军事设施
+        and "外国" not in reason  # 边境城市建军事基地是为了防务，不是为了产出
+        for o, _, reason in intents
     )
 
 

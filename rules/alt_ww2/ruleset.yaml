@@ -14,6 +14,7 @@ cities:
   sparse_distance: 7      # 贫瘠地区隔 7 格
   center_yields: { food: 3, production: 3, gold: 2, science: 1 }   # 市中心本身：3 粮食、3 生产力（另有少量税收和科研）
   center_housing: 3        # 市中心给 3 住房；人口上限 = 住房 − 被征召走的人口
+  growth: [8, 3, 1.3]      # 长一口人要 8 + 3n + n^1.3 存粮（人口就是兵源，比默认曲线平）
   population: 1           # 新城人口
   capital_population: 2   # 开局首都人口
   production_per_pop: 50  # 维持人口：每个人口每回合吃 1 粮食、耗 0.5 生产力（这里按百分之一点写）

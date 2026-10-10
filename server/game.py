@@ -390,7 +390,7 @@ def _snapshot(game: Game, rules: Ruleset) -> dict:
                 "queue": c.queue,
                 "production": c.production,
                 "food": c.food,
-                "food_to_grow": food_to_grow(c.population),
+                "food_to_grow": food_to_grow(c.population, rules),
                 "yields": outputs[cid].model_dump(),
                 "food_balance": outputs[cid].food - c.population * 2,
                 "network": city_network(s, rules, c),

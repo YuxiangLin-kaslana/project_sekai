@@ -117,6 +117,9 @@ FRONT_UNITS = 8  # 每有这么多支野战陆军可以开一条战线
 GUARD_WATCH = 6  # 腹地城市：这么多格内没有外国军队（随地图放大）
 FRONT_MIN = 3  # 还没打起来的战线分到的野战陆军少于这么多就并到别的战线
 OVERWHELM = 1.3  # 兵力是对方这么多倍就不等编制凑满
+GRAB_HP = 25  # 敌城城防值低于它、又没有守军：附近的近战陆军直接冲过去占领
+GRAB_UNITS = 2  # 每座城每回合最多派这么多支去抢
+MELEE_MIN = 2  # 远程火力够了时，战线至少要这么多支近战才出发
 STAND_IN = 2  # 缺 1 支远程火力可以用多出来的这么多支近战顶上（近战能强攻城墙）
 MAX_FRONTS = 3  # 同时最多几条战线
 FRONT_SPREAD = 8  # 新战线的目标离已有战线目标这么近（格，随地图放大）就打折
@@ -2108,9 +2111,10 @@ def plan_front(ctx, nation, p, f, cities, components):
     per_shot = _nominal_damage(rules, siege_type, defense) if siege_type else 8
     need_siege = min(8, max(2, math.ceil(max(target.hp, 40) / SIEGE_TURNS / per_shot)))
     garrison = (f.get("target_info") or {}).get("garrison", 0)
-    # 近战：够占住城四周三分之二的格子（侧击加成很大，围三面就够打），再加清守军的
+    # 近战：城防（含守军）主要靠远程削，近战负责用控制区围城（包围的城攻击减半、受伤加倍）
+    # 和城防打空后开进去占领——够占住城四周一半的格子（控制区能补上中间的空格），守军多再加
     around = len(ring(ctx, target.tile))
-    need_melee = min(8, max(4, math.ceil(around * 2 / 3), 2 + round(garrison / 15)))
+    need_melee = min(6, max(3, math.ceil(around / 2), 2 + round(garrison / 40)))
     # 想要的近战：够把城四周全部围死（包围的城防御 −40%、城防不回复），城市托管按它补兵
     ring_melee = min(8, max(around, need_melee))
     # 海上能不能打到目标城（炮击、航母）：目标城 3 格内有本国舰船开得到的海面
@@ -2203,7 +2207,8 @@ def plan_front(ctx, nation, p, f, cities, components):
     )
     spare = max(0, len(melee_units) - need_melee)
     firepower = len(siege_units) + bombers + spare // STAND_IN
-    ready = firepower >= need_siege and len(melee_units) >= need_melee
+    # 远程火力够了、有 MELEE_MIN 支近战（掩护炮兵、城防打空后开进去占领）就出发，围城的近战路上再补
+    ready = firepower >= need_siege and len(melee_units) >= min(need_melee, MELEE_MIN)
     # 兵力明显占优（战线上的兵力是目标城防 + 守军的 OVERWHELM 倍以上）就开打，不必凑满编制
     ours = sum(
         combat.strength(s, rules, u)
@@ -3139,6 +3144,36 @@ def _engage(ctx, unit):
     return march(ctx, unit, best[1], "敌军挡住去路，上前交战打开通道", stop_within=reach)
 
 
+def _grab_city(ctx, unit):
+    """抢城：两回合路程内有交战国的城市城防快空了（城防值不到 GRAB_HP、没有守军），近战陆军直接冲过去，
+    贴城后由 attack_choice 开进去占领（占领加 200 分）。每座城每回合最多派 GRAB_UNITS 支。"""
+    s, rules, g = ctx.state, ctx.rules, ctx.state.grid
+    if unit.layer != "surface" or rules.units[unit.type].ranged_strength:
+        return False
+    reach = 2 * movement.unit_moves(g, rules.units[unit.type]) + 1
+    comps = geography(s, rules)["land_components"]
+    sent = _ai(ctx).setdefault("grab", Counter())
+    best = None
+    for c in s.cities.values():
+        if c.nation == unit.nation or not at_war(s, c.nation, unit.nation):
+            continue
+        d = g.distance(unit.tile, c.tile)
+        if d > reach or comps[c.tile] != comps[unit.tile] or sent[c.id] >= GRAB_UNITS:
+            continue
+        if combat.garrison(s, rules, c) or combat.city_defense(s, rules, c) >= GRAB_HP:
+            continue
+        key = (d, c.id)
+        if best is None or key < best[0]:
+            best = (key, c)
+    if best is None:
+        return False
+    c = best[1]
+    sent[c.id] += 1
+    if g.distance(unit.tile, c.tile) <= 1:
+        return False  # 已经贴城：交给 attack_choice 开进去
+    return march(ctx, unit, c.tile, f"{c.name} 城防快空、没有守军：冲过去占领", stop_within=1)
+
+
 def _raid_airfield(ctx, unit):
     """奔袭敌方区域：附近（两回合路程内）有敌方可以占领的区域（住宅区、军事基地、机场、港口）或机场，
     守得又不重（周围 2 格敌军不超过 1 支）时，派一支近战部队冲过去。能占领的就站上去占领
@@ -3338,6 +3373,8 @@ def decide_unit(ctx, unit, plan, guards, claimed):
         and not is_air_defense(rules, unit)
         and "scout" not in ut.tags
     )
+    if line and health(rules, unit) >= 40 and _grab_city(ctx, unit):
+        return
     if line and mode != "围城" and health(rules, unit) >= 60 and _raid_airfield(ctx, unit):
         return
     if line and mode != "围城" and health(rules, unit) >= 50 and _flank(ctx, unit):

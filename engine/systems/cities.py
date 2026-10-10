@@ -15,14 +15,15 @@ from engine.state import City, GameState
 FOOD_PER_POP = 1  # 每人口每回合吃掉的粮食
 
 
-def food_to_grow(population: int) -> int:
-    """人口从 n 增长到 n+1 需要的存粮（企划书 6.1）：15 + 6n + n^1.8。"""
-    return 15 + 6 * population + round(population**1.8)
+def food_to_grow(population: int, rules=None) -> int:
+    """人口从 n 增长到 n+1 需要的存粮：a + b·n + n^c（规则集 cities.growth，默认企划书 6.1 的 15 + 6n + n^1.8）。"""
+    a, b, c = rules.cities.growth if rules is not None else (15, 6, 1.8)
+    return a + b * population + round(population**c)
 
 
-def growth_surplus(population: int) -> int:
+def growth_surplus(population: int, rules=None) -> int:
     """托管城市在口粮之外留的余粮：大约 8 回合长一口人。再多的粮食在分配劳力 / 选开发项目时降权。"""
-    return max(2, food_to_grow(population) // 8)
+    return max(2, food_to_grow(population, rules) // 8)
 
 
 def surplus_weights(weights):
@@ -179,15 +180,15 @@ def city_sites(state: GameState, rules: Ruleset, city: City) -> list[tuple[int, 
     return out
 
 
-def _has(state, rules, city, pred) -> bool:
-    """城里有没有满足 pred 的区域（建好的或正在施工的）。"""
+def _has(state, rules, city, pred, skip: int | None = None) -> bool:
+    """城里有没有满足 pred 的区域（建好的或正在施工的；skip 格上正在施工的那项不算——检查它自己时用）。"""
     g = state.grid
     for t in city_tiles(state, city):
         b = rules.facility_at(int(g.facility[t]))
         if b is not None and pred(b):
             return True
     p = city.construction
-    return p is not None and not p.repair and pred(rules.buildings[p.facility])
+    return p is not None and not p.repair and p.tile != skip and pred(rules.buildings[p.facility])
 
 
 def facility_problem(
@@ -232,10 +233,10 @@ def facility_problem(
         return f"{b.name}必须临水"
     city = city_of_tile(state, tile)
     if b.placement == "district" and city is not None:
-        if b.unique and _has(state, rules, city, lambda x: x.id == b.id):
+        if b.unique and _has(state, rules, city, lambda x: x.id == b.id, tile):
             return f"{city.name}已经有{b.name}了（每城一个）"
         if b.exclusive and _has(
-            state, rules, city, lambda x: x.exclusive == b.exclusive and x.id != b.id
+            state, rules, city, lambda x: x.exclusive == b.exclusive and x.id != b.id, tile
         ):
             other = next(
                 x.name
@@ -379,7 +380,10 @@ def assign_jobs(
     base = base + sum((v[0] for v in values.values()), Yields())
     if managed:
         # 先满足口粮和少量增长余粮
-        food, target = base.food, FOOD_PER_POP * city.population + growth_surplus(city.population)
+        food, target = (
+            base.food,
+            FOOD_PER_POP * city.population + growth_surplus(city.population, rules),
+        )
         for i in sorted(range(len(slots)), key=lambda i: (-slots[i][1].food, slots[i][0])):
             if food >= target or left <= 0 or not slots[i][1].food:
                 break

@@ -72,39 +72,45 @@ def choose_starts(grid: HexGrid, rules: Ruleset, n: int) -> tuple[list[int], lis
             )
             * city_scale(grid)
         ).astype(np.int32)
-    order = order[np.array([geo["capacity"][int(geo["zones"][t])] > 0 for t in order])]
-    if not len(order):
-        return [], []
-
-    spacing = max(4, int(math.sqrt(land_count / n) * 0.9))
+    roomy = order[np.array([geo["capacity"][int(geo["zones"][t])] > 0 for t in order])]
     chosen: list[int] = []
-    while spacing >= 3:
-        chosen = []
-        occupied = {}
-        min_dist = np.full(grid.size, 1 << 30, dtype=np.int64)
-        permitted = np.ones(grid.size, dtype=bool)
-        while len(chosen) < n:
-            ok = min_dist[order] >= spacing
-            ok &= permitted[order] & (min_dist[order] >= required[order])
-            ok &= np.array(
-                [
-                    occupied.get(int(geo["zones"][t]), 0) < geo["capacity"][int(geo["zones"][t])]
-                    for t in order
-                ]
-            )
-            pos = int(np.argmax(ok))
-            if not ok[pos]:
+    # 先按承载区名额和城市间距选；国家太多、地图太小放不下时，第二轮不看名额和地形间距（只保留最小间距 3）
+    for strict in (True, False):
+        candidates = roomy if strict else order
+        if not len(candidates):
+            continue
+        spacing = max(4, int(math.sqrt(land_count / n) * 0.9))
+        while spacing >= 3:
+            chosen = []
+            occupied = {}
+            min_dist = np.full(grid.size, 1 << 30, dtype=np.int64)
+            permitted = np.ones(grid.size, dtype=bool)
+            while len(chosen) < n:
+                ok = min_dist[candidates] >= spacing
+                if strict:
+                    ok &= permitted[candidates] & (min_dist[candidates] >= required[candidates])
+                    ok &= np.array(
+                        [
+                            occupied.get(int(geo["zones"][t]), 0)
+                            < geo["capacity"][int(geo["zones"][t])]
+                            for t in candidates
+                        ]
+                    )
+                pos = int(np.argmax(ok))
+                if not ok[pos]:
+                    break
+                c = int(candidates[pos])
+                chosen.append(c)
+                zone = int(geo["zones"][c])
+                occupied[zone] = occupied.get(zone, 0) + 1
+                distances = grid.distance_from(c)
+                min_dist = np.minimum(min_dist, distances)
+                permitted &= distances >= required[c]
+            if len(chosen) == n:
                 break
-            c = int(order[pos])
-            chosen.append(c)
-            zone = int(geo["zones"][c])
-            occupied[zone] = occupied.get(zone, 0) + 1
-            distances = grid.distance_from(c)
-            min_dist = np.minimum(min_dist, distances)
-            permitted &= distances >= required[c]
+            spacing -= 1
         if len(chosen) == n:
             break
-        spacing -= 1
     return chosen, [int(score[c]) for c in chosen]
 
 

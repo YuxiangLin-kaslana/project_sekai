@@ -182,7 +182,7 @@ def _grow(ctx: StepContext, city: City, food: int) -> None:
         for m in ctx.rules.buildings[bid].modifiers:
             if m.target == "city" and m.stat == "food_storage" and m.op == "mul":
                 storage = storage * m.value // 100
-    need = food_to_grow(city.population)
+    need = food_to_grow(city.population, ctx.rules)
     cap = pop_cap(ctx.state, ctx.rules, city)
     if city.population >= cap:
         city.food = min(city.food, need)  # 住房满了：存粮攒到够长一口人为止，等有了住房再长

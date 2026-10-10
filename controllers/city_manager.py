@@ -73,6 +73,9 @@ WAR_MODES = (
 )  # 与 controllers/rule_ai.py 的战争阶段一致
 
 
+KEEP_POP = 4  # 打仗时每座城至少留这么多人劳作，多出来的人口可以征召成部队
+
+
 @dataclass
 class Budget:
     income: int
@@ -199,6 +202,10 @@ def budget_for(state, rules, nation, cities):
         target = min(target, len(cities) + posts + population // 8)
     else:
         target += posts
+    if strategy.get("posture") == "战争":
+        # 兵源就是人口：打仗时每座城留够劳作的人（KEEP_POP 人，大城留三分之一），多出来的人口都可以征召
+        spare = sum(max(0, c.population - max(KEEP_POP, c.population // 3)) for c in cities)
+        target = max(target, len(units) + spare)
     # 将领：没人统率的野战陆军比现有将领（含在造的）的统御空位多出 GENERAL_MIN 支，就该造一个
     want_general = want_admiral = 0
     if strategy.get("posture") == "战争":
@@ -446,7 +453,7 @@ def decide_city(state, rules, city, budget):
     y = city_yields(state, rules, city)
     net_food = y.food - city.population * FOOD_PER_POP
     threatened, defenders = budget.nearby.get(city.id, (0, 0))
-    hungry = net_food < 0 or net_food == 0 and city.food < food_to_grow(city.population) // 4
+    hungry = net_food < 0 or net_food == 0 and city.food < food_to_grow(city.population, rules) // 4
     poor = budget.margin <= 0 or nation.gold < budget.reserve
     weights = POLICIES[nation.policy]["weights"]
     alerts = []
@@ -636,7 +643,7 @@ def decide_city(state, rules, city, budget):
                 reason = f"跨海作战还缺运兵船运力 {budget.want_lift}，优先造运兵舰船"
             if is_line(u) and budget.want_melee > 0:
                 # 战线缺近战（守城、边境哨也占着近战）：不按全国近战 / 远程比例扣分
-                score += 20 + 15 * min(4, budget.want_melee)
+                score += 40 + 20 * min(4, budget.want_melee)
                 reason = f"战线还缺近战 {budget.want_melee} 支，优先补充"
             elif is_line(u):
                 score -= 50 * balance
@@ -794,7 +801,9 @@ def decide_city(state, rules, city, budget):
             return report, intents
         candidates = []
         dev_weights = (
-            surplus_weights(weights) if net_food >= growth_surplus(city.population) else weights
+            surplus_weights(weights)
+            if net_food >= growth_surplus(city.population, rules)
+            else weights
         )
         future_city = replace(city, population=city.population + 1)
         future_yields = city_yields(state, rules, future_city) if net_food > 0 else None
@@ -847,7 +856,8 @@ def decide_city(state, rules, city, budget):
                     not military_site
                     and score <= 0
                     and future_yields is not None
-                    and food_to_grow(city.population) - city.food <= net_food * (b.build_turns + 2)
+                    and food_to_grow(city.population, rules) - city.food
+                    <= net_food * (b.build_turns + 2)
                 ):
                     future_delta = _delta(
                         city_yields(state, rules, future_city, (tile, b)), future_yields
@@ -980,7 +990,7 @@ def _urgent_development(state, rules, city, budget):
     linked = connected(state, city)
     owned = {s_.id for _, s_ in city_sites(state, rules, city)}
     houses = [b for b in rules.buildings.values() if b.placement == "district" and b.housing]
-    if houses and city.population >= pop_cap(state, rules, city) - 1 and net_food >= 1:
+    if houses and city.population >= pop_cap(state, rules, city) - 2 and net_food >= 1:
         b = houses[0]
 
         def room(t):
