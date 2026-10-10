@@ -155,10 +155,36 @@ def sha256(path: Path) -> str:
     return h.hexdigest()
 
 
+def publish_github(version: str, files: list[Path]) -> None:
+    """在 GitHub 发 Release v<版本>，附完整包、更新包和更新清单。"""
+    import os
+
+    notes = (
+        "Windows 64 位完整包：解压后双击“启动游戏.cmd”，游戏在浏览器里打开、本机运行。"
+        "之后每次启动会自动检查更新。\n\n"
+        f"- {files[0].name}：完整包（嵌入式 Python + 依赖 + 游戏）\n"
+        f"- {files[1].name}：只含游戏代码，供自动更新\n- latest.json：更新清单"
+    )
+    subprocess.run(
+        [
+            os.environ.get("GH", "gh"), "release", "create", f"v{version}",
+            "--repo", os.environ.get("SEKAI_REPO", "YuxiangLin-kaslana/project_sekai"),
+            "--target", "main", "--title", f"Project Sekai {version}（Windows）",
+            "--notes", notes, *map(str, files),
+        ],
+        check=True,
+    )  # fmt: skip
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("--version", default=None)
     parser.add_argument("--base-url", default="https://sekai.yuxianglin.xyz")
+    parser.add_argument(
+        "--github",
+        action="store_true",
+        help="打完包同时在 GitHub 发 Release v<版本>（需要 gh 命令行已登录；GH 环境变量可指定 gh 路径）",
+    )
     args = parser.parse_args()
     version = args.version or next_version()
     base = args.base_url.rstrip("/") + "/downloads/windows/"
@@ -220,6 +246,8 @@ small{{color:#a39b86}}</style>
 """,
         encoding="utf-8",
     )
+    if args.github:
+        publish_github(version, [full, app_zip, OUT / "latest.json"])
     print(
         f"完成：{full.name}（{size:.0f} MB）、{app_zip.name}，版本 {version}，运行环境 {runtime_id()}"
     )

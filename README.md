@@ -137,6 +137,8 @@ tests/
   `sekai-app-<版本>.zip`，校验 SHA-256 后替换 `app/`；变了就打开下载页让玩家下新的完整包。
   游戏开着时每两小时再查一次，网页底部提示“重启即可更新”。
 - 版本号按日期自动递增（`2026.10.10.1`、`.2`……）；发版就是重新跑一次打包脚本。
+- 加 `--github` 会同时在 GitHub 发 Release（附完整包、更新包、`latest.json`），需要 `gh` 已登录。
+  Release 页面：https://github.com/YuxiangLin-kaslana/project_sekai/releases
 
 ## 性能与多核
 
