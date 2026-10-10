@@ -1,7 +1,8 @@
 """一回合的结算：step(state, orders, rules) → StepResult。纯函数，不修改输入的 state。
 
 PIPELINE 的顺序固定（架构设计 4.4 的子集，外交、战斗、科技、稳定度以后按序插入）：
-    orders      校验指令；改生产队列、驻守、建城、开始施工、设定移动目的地
+    orders      校验指令；改生产队列、驻守、建城、开始施工、设定移动目的地；外交指令
+    diplomacy   AI 国家的外交：求和、宣战、结盟（engine/systems/diplomacy.py）
     movement    单位沿路径移动（按国家 ID、单位 ID 依次处理）
     encirclement 按移动后的位置判定被包围（= 断补给）的单位和城市
     economy     施工推进 → 各城产出 → 增长 / 饥荒 → 生产队列 → 金钱科研汇总与维护费
@@ -23,6 +24,7 @@ from engine.state import GameState
 from engine.systems import (
     city_management,
     combat,
+    diplomacy,
     economy,
     encirclement,
     movement,
@@ -50,6 +52,7 @@ def _refresh(ctx: StepContext) -> None:
 
 PIPELINE: tuple[tuple[str, Callable[[StepContext], None]], ...] = (
     ("orders", order_system.resolve),
+    ("diplomacy", diplomacy.resolve),
     ("rule_ai", rule_ai.resolve),
     ("movement", movement.resolve),
     ("encirclement", encirclement.resolve),

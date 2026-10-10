@@ -23,6 +23,7 @@ from engine.systems.cities import (
 from engine.systems.context import StepContext
 from engine.systems.stacking import has_room
 
+IDLE_RATE = 3  # 闲置城市每 3 点生产力换 1 金
 GROWTH_PER_RADIUS = 3  # 人口每多这么多，辖区半径 +1（到 cities.territory_cap 为止）
 
 
@@ -278,8 +279,11 @@ def resolve(ctx: StepContext) -> None:
             y = city_yields(state, rules, city)
             _grow(ctx, city, y.food)
             production = max(0, y.production - paid.get(city.id, 0))
-            if city.queue:  # 没有生产项目时生产力不积攒
+            if city.queue:
                 city.production += production
+            else:
+                # 没有生产项目：生产力按 IDLE_RATE 换成金币（民用生产 / 财政），给军费和建设攒钱
+                gold += production // IDLE_RATE
             _assist_building(ctx, city)
             _produce(ctx, city)
             gold += y.gold

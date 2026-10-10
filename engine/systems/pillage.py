@@ -22,6 +22,10 @@ def pillage_target(state, rules, unit) -> tuple[dict | None, str | None]:
     owner = int(g.owner[tile])
     if owner < 0 or owner == unit.nation:
         return None, "只能破坏外国领土上的设施和道路"
+    from engine.systems.diplomacy import at_war
+
+    if not at_war(state, owner, unit.nation):
+        return None, "和这个国家没有交战，不能破坏它的设施"
     if state.city_at(tile) is not None:
         return None, "城市要靠攻占，不能破坏"
     if unit.attacked_turn == state.turn:

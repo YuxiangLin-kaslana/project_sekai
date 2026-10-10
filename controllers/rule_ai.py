@@ -72,6 +72,7 @@ from engine.systems.cities import (
     nation_resources,
     production_problem,
 )
+from engine.systems.diplomacy import at_war
 from engine.systems.orders import automatic
 from engine.systems.settlement import city_scale, geography, map_scale, site_score
 
@@ -113,6 +114,10 @@ ENGAGE_RADIUS = 6  # 去目标的路被敌军挡住时，上前和这么近的�
 EXPANSION_TURNS = 120  # 扩张期最长这么多回合（随地图放大）
 INVADED = 3  # 本国领土上有这么多支外国军队就结束扩张期
 FRONT_UNITS = 8  # 每有这么多支野战陆军可以开一条战线
+GUARD_WATCH = 6  # 腹地城市：这么多格内没有外国军队（随地图放大）
+FRONT_MIN = 3  # 还没打起来的战线分到的野战陆军少于这么多就并到别的战线
+OVERWHELM = 1.3  # 兵力是对方这么多倍就不等编制凑满
+STAND_IN = 2  # 缺 1 支远程火力可以用多出来的这么多支近战顶上（近战能强攻城墙）
 MAX_FRONTS = 3  # 同时最多几条战线
 FRONT_SPREAD = 8  # 新战线的目标离已有战线目标这么近（格，随地图放大）就打折
 LINE_START = 6  # 战线从目标城外这么多步开始往前推（随地图放大）
@@ -288,6 +293,8 @@ def stays(ctx, tile, actor):
         city = s.city_at(tile)
         if city is None and combat.bombable(s, rules, actor, tile):
             return True  # 设施不会跑
+        if city is None and any(u.nation != actor.nation for u in s.units_at(tile)):
+            return True  # 要俘虏的平民（本回合不会跑远：先结算攻击再移动的是别国）
         return city is not None and city.nation != actor.nation
     return any(predicted_tile(ctx, u) == tile for u in enemies)
 
@@ -404,7 +411,7 @@ def _enemy_facilities(ctx, nation):
             if int(t) not in s.damaged
         ]
         ai["facilities_turn"] = s.turn
-    return [(t, a) for t, n, a in ai["facilities"] if n != nation]
+    return [(t, a) for t, n, a in ai["facilities"] if at_war(ctx.state, n, nation)]
 
 
 def _occupied(ctx):
@@ -525,11 +532,14 @@ def _store_flow(s, key, field):
 
 
 def _flow_inputs_blocked(ctx, nation):
-    s, g = ctx.state, ctx.state.grid
+    s = ctx.state
     ckey = (nation, len(s.cities))
     blocked = _ai(ctx).setdefault("foreign_cities", {}).get(ckey)
     if blocked is None:
-        blocked = np.zeros(g.size, dtype=np.bool_)
+        # 外国城市，加上和平国家的领土（关闭边境，见 engine/systems/diplomacy.py）
+        from engine.systems.diplomacy import closed
+
+        blocked = closed(s, nation).copy()
         for c in s.cities.values():
             if c.nation != nation:
                 blocked[c.tile] = True
@@ -903,7 +913,11 @@ def choose_target(
     enemies, far = [], []
     skip = skip or {}
     for c in s.cities.values():
-        if c.nation == nation.id or skip.get(str(c.id), -1) > s.turn or c.tile in taken:
+        if (
+            not at_war(s, c.nation, nation.id)
+            or skip.get(str(c.id), -1) > s.turn
+            or c.tile in taken
+        ):
             continue
         if components[c.tile] not in ours:
             far.append(c)  # 在别的陆地上：要跨海登陆
@@ -1694,7 +1708,7 @@ def plan_fronts(ctx, nation, p, units, cities, components, replan):
     alive = []
     for f in fronts:
         t = s.cities.get(f["target_city"])
-        if t is None or t.nation == nation.id or skip.get(str(t.id), -1) > s.turn:
+        if t is None or not at_war(s, t.nation, nation.id) or skip.get(str(t.id), -1) > s.turn:
             _end_front(ctx, nation, f, t)  # 拿下了 / 城没了 / 暂时放弃
         else:
             alive.append(f)
@@ -1754,6 +1768,24 @@ def plan_fronts(ctx, nation, p, units, cities, components, replan):
                 break
             fronts.append(_new_front(p, new, why))
     _assign_fronts(ctx, nation, fronts, pool, [], components, cities)
+    # 没兵的战线：还没打起来、分到的野战陆军不到 FRONT_MIN 支的结束掉，部队并到别的战线
+    # （不然兵力摊在几条战线上，每条都凑不够，全都停在备战）
+    by_id = {u.id: u for u in pool}
+
+    def troops(f):
+        return sum(1 for uid in f["units"] if uid in by_id and _troop(ctx, by_id[uid]))
+
+    starved = [f for f in fronts if f.get("mode") not in LOCKED and troops(f) < FRONT_MIN]
+    if starved and len(fronts) > 1:
+        if len(starved) == len(fronts):
+            starved.remove(max(starved, key=lambda f: (troops(f), -f["id"])))
+        for f in starved:
+            f["reason"] = "兵力太少，并到别的战线"
+            _end_front(ctx, nation, f, s.cities.get(f["target_city"]))
+            fronts.remove(f)
+        for f in fronts:
+            f["units"] = [uid for uid in f["units"] if uid in by_id]
+        _assign_fronts(ctx, nation, fronts, pool, [], components, cities)
     corps = _corps_fronts(
         ctx, nation, p, units, gens, corps_old, cities, components, replan, fronts
     )
@@ -1777,7 +1809,7 @@ def _corps_fronts(ctx, nation, p, units, gens, old, cities, components, replan, 
         f = old.get(gen.id)
         t = s.cities.get(f["target_city"]) if f else None
         if f is not None and (
-            t is None or t.nation == nation.id or skip.get(str(t.id), -1) > s.turn
+            t is None or not at_war(s, t.nation, nation.id) or skip.get(str(t.id), -1) > s.turn
         ):
             _end_front(ctx, nation, f, t)
             f = t = None
@@ -2141,7 +2173,27 @@ def plan_front(ctx, nation, p, f, cities, components):
             or g.distance(u.tile, target.tile) <= combat.attack_range(rules, u, g)
         )
     )
-    ready = len(siege_units) >= need_siege and len(melee_units) >= need_melee
+    # 远程火力不够时：射程能打到目标的轰炸机算火力，多出来的近战也能顶（每 STAND_IN 支顶 1 支，
+    # 贴城强攻城墙）——不让一整支坦克大军因为缺两门炮停在备战
+    bombers = sum(
+        1
+        for u in military
+        if rules.units[u.type].domain == "air"
+        and rules.units[u.type].ranged_strength
+        and "air_superiority" not in rules.units[u.type].tags
+    )
+    spare = max(0, len(melee_units) - need_melee)
+    firepower = len(siege_units) + bombers + spare // STAND_IN
+    ready = firepower >= need_siege and len(melee_units) >= need_melee
+    # 兵力明显占优（战线上的兵力是目标城防 + 守军的 OVERWHELM 倍以上）就开打，不必凑满编制
+    ours = sum(
+        combat.strength(s, rules, u)
+        for u in military
+        if rules.units[u.type].domain in ("land", "air") and u.layer != "cargo"
+    )
+    theirs = defense + garrison
+    if len(melee_units) >= FRONT_MIN and ours >= OVERWHELM * max(1, theirs):
+        ready = True
     if op is not None:
         ready = ready and op["lift"] >= op["lift_need"]
 
@@ -2231,7 +2283,11 @@ def plan_front(ctx, nation, p, f, cities, components):
                 f"跨海进攻 {target.name}：部队在 {port.name} 登船"
                 f"（已上船 {op['aboard']} / {op['need']}）"
             )
-    elif held and line["d"] <= STAGE_RING[0] and guns_ready >= need_siege:
+    elif (
+        held
+        and line["d"] <= STAGE_RING[0]
+        and guns_ready + bombers + spare // STAND_IN >= need_siege
+    ):
         mode, reason = "围城", f"战线推到 {target.name} 城下，开始围城"
         f["siege_start"] = len(military)
         f["siege_turn"], f["siege_hp"], f["contact_turn"] = s.turn, target.hp, None
@@ -2353,7 +2409,9 @@ def _fleet_plans(ctx, nation, p, units, cities):
             if port is not None:
                 plan = {"kind": "muster", "target": port.tile, "name": f"在 {port.name} 集结"}
         else:
-            foes = [t for t, n in _enemy_ships(ctx) if n != nation.id and int(wc[t]) in seas]
+            foes = [
+                t for t, n in _enemy_ships(ctx) if at_war(s, n, nation.id) and int(wc[t]) in seas
+            ]
             if foes:
                 foe = min(foes, key=lambda t: (g.distance(adm.tile, t), t))
                 plan = {"kind": "hunt", "target": foe, "name": "歼灭敌方舰队"}
@@ -2361,7 +2419,7 @@ def _fleet_plans(ctx, nation, p, units, cities):
                 shore = [
                     c
                     for c in s.cities.values()
-                    if c.nation != nation.id
+                    if at_war(s, c.nation, nation.id)
                     and any(int(wc[w]) in seas for w in g.within(c.tile, 2) if wc[w] >= 0)
                 ]
                 if shore:
@@ -2534,7 +2592,7 @@ def _navy(ctx, unit, plan, target):
     foes = [
         t
         for t, n in _enemy_ships(ctx)
-        if n != unit.nation and g.distance(t, unit.tile) <= hunt and int(wc[t]) in seas
+        if at_war(s, n, unit.nation) and g.distance(t, unit.tile) <= hunt and int(wc[t]) in seas
     ]
     if foes and unit.hp * 100 // ut.hp >= 50:
         foe = min(foes, key=lambda t: (g.distance(t, unit.tile), t))
@@ -3203,7 +3261,8 @@ def decide_unit(ctx, unit, plan, guards, claimed):
         if march(ctx, unit, job[0], job[2]):
             _record_move(ctx, unit, job[0], "encircle")
             return
-    choice = attack_choice(ctx, unit)
+    # 只挑本回合不会离开的目标：会走开的目标打不着，这回合还白白耗在原地；挑不到就照常行军
+    choice = attack_choice(ctx, unit, only_static=True)
     if choice is not None:
         tile, info, victim = choice
         capture = (
@@ -3511,8 +3570,21 @@ def _capture_sweep(ctx):
 # ---------------------------------------------------------------- 回合入口
 
 
+def _interior(ctx, city, nid):
+    """腹地城市：GUARD_WATCH 格内没有外国军队，城周围 3 格也没有外国领土。"""
+    s, rules, g = ctx.state, ctx.rules, ctx.state.grid
+    watch = round(GUARD_WATCH * map_scale(g))
+    for t in g.within(city.tile, watch):
+        if g.distance(t, city.tile) <= 3 and int(g.owner[t]) not in (-1, nid):
+            return False
+        if any(u.nation != nid and is_military(rules, u) for u in s.units_at(t)):
+            return False
+    return True
+
+
 def _guards(ctx, nid, owned):
-    """每城一支守军（近战优先、离得最近）；受威胁的城市（四格内有外国军队）多留，最多三支。"""
+    """守军（近战优先、离得最近）：边境城市和首都留一支，受威胁的城市（四格内有外国军队）多留一支；
+    腹地城市（GUARD_WATCH 格内没有外国军队、也挨不着外国领土）不留，兵力都给前线。"""
     s, rules, g = ctx.state, ctx.rules, ctx.state.grid
     remaining = [
         u
@@ -3532,8 +3604,10 @@ def _guards(ctx, nid, owned):
             for u in s.units_at(t)
             if u.nation != nid and is_military(rules, u)
         )
-        wants.append((c, 1 + min(2, threat // 2)))
-    for extra in range(3):
+        if not c.capital and not threat and _interior(ctx, c, nid):
+            continue  # 腹地城市不留守军
+        wants.append((c, 1 + min(1, threat // 2)))
+    for extra in range(2):
         for c, want in wants:
             if extra >= want or not remaining:
                 continue
@@ -3548,7 +3622,7 @@ def _guards(ctx, nid, owned):
             guards[guard.id] = c.tile
             remaining.remove(guard)
     # 边境哨：守城之后，在敌军最可能来的方向的边境格上放近战部队，防止被偷袭
-    posts = _border_posts(ctx, nid)[: max(1, len(cities) // 2)]  # 最多城市数的一半
+    posts = _border_posts(ctx, nid)[: max(1, len(cities) // 3)]  # 最多城市数的三分之一
     _ai(ctx).setdefault("posts", {})[nid] = len(posts)
     sentries = _ai(ctx).setdefault("sentries", set())
     line = [

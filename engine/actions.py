@@ -171,6 +171,21 @@ class Ungroup(_Order):
     unit: str
 
 
+class Diplomacy(_Order):
+    """外交（engine/systems/diplomacy.py）：宣战、求和、提议结盟、解除同盟，target 是对方国家。"""
+
+    type: Literal["declare_war", "propose_peace", "propose_alliance", "break_alliance"]
+    target: str  # nation:<n>
+
+
+class RespondOffer(_Order):
+    """答复别国给本国的外交提议（求和、结盟）。"""
+
+    type: Literal["respond_offer"] = "respond_offer"
+    offer: int
+    accept: bool
+
+
 class BuildRoad(_Order):
     type: Literal["build_road"] = "build_road"
     start: tuple[int, int]
@@ -200,13 +215,20 @@ Order = Annotated[
     | GoldAssist
     | DevelopCity
     | SetAI
-    | UnitManagement,
+    | UnitManagement
+    | Diplomacy
+    | RespondOffer,
     Field(discriminator="type"),
 ]
 ORDERS = TypeAdapter(list[Order])
 
 # 同一回合内的处理顺序：先改队列和驻守，再建城 / 施工（用的是移动前的位置），最后移动
 ORDER_PRIORITY = {
+    "declare_war": -4,  # 外交最先：宣战当回合就能打
+    "propose_peace": -4,
+    "propose_alliance": -4,
+    "break_alliance": -4,
+    "respond_offer": -4,
     "set_ai": -3,
     "unit_management": -1,
     "set_policy": -2,

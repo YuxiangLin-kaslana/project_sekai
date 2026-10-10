@@ -166,6 +166,9 @@ class GameState:
     # 被炸坏的城外设施：格子 → 炸坏的回合。炸坏的设施不产出、机场不能起降，要城市修复
     damaged: dict[int, int] = field(default_factory=dict)
     region_xp: dict[int, int] = field(default_factory=dict)
+    # 外交（engine/systems/diplomacy.py）：{"a:b": {status, since, truce, progress}}；没有记录的按交战处理
+    relations: dict[str, dict] = field(default_factory=dict)
+    offers: list[dict] = field(default_factory=list)  # 给玩家国家的待处理提议
     roads: dict[tuple[int, int], dict] = field(default_factory=dict)
     # 索引：(格子, 层) → 该处的单位 ID（升序）。只通过 add_unit / move_unit / remove_unit 维护
     _at: dict[tuple[int, str], list[int]] = field(default_factory=dict, repr=False)
@@ -178,6 +181,7 @@ class GameState:
         default_factory=dict, repr=False
     )  # 六向通行费用表（道路、城市变了就清）
     # 路网版本：道路、城市一变（invalidate_paths）就加一。AI 工作进程据此判断自己缓存的距离场还能不能用
+    _closed_cache: dict = field(default_factory=dict, repr=False)  # 关闭边境的格子（按回合、国家）
     _path_epoch: int = field(default_factory=lambda: next(_PATH_EPOCHS), repr=False)
     _worked_cache: dict = field(default_factory=dict, repr=False)
     _yield_cache: dict = field(default_factory=dict, repr=False)
@@ -308,6 +312,8 @@ class GameState:
             facility_xp=dict(self.facility_xp),
             damaged=dict(self.damaged),
             region_xp=dict(self.region_xp),
+            relations={k: dict(v) for k, v in self.relations.items()},
+            offers=[dict(o) for o in self.offers],
             roads=dict(self.roads),  # 道路记录只整条替换 / 删除，不原地改：浅拷贝就够
             _at={k: list(v) for k, v in self._at.items()},
             _settlement_cache=self._settlement_cache,
@@ -336,6 +342,8 @@ class GameState:
                 for _, v in sorted(self.units.items())
             ],
             "facility_xp": sorted(self.facility_xp.items()),
+            "relations": sorted(self.relations.items()),
+            "offers": self.offers,
             "damaged": sorted(self.damaged.items()),
             "region_xp": sorted(self.region_xp.items()),
             "roads": [[a, b, v] for (a, b), v in sorted(self.roads.items())],

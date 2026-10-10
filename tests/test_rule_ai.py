@@ -83,7 +83,9 @@ def test_wounded_units_rest_and_groups_dissolve(board):
     c = add(board, "infantry", 1, (4, 10))
     b.formation = c.formation = b.id
     result = step(board, [], RULES)
-    assert result.state.units[a.id].hp == 20 + RULES.healing.city  # 首都里休整
+    assert (
+        result.state.units[a.id].hp == 20 + RULES.units["infantry"].hp * RULES.healing.city // 100
+    )  # 首都里休整
     assert result.state.units[b.id].formation is None and result.state.units[c.id].formation is None
     # 同格最多 4 支，不在编队里就能各自交战，不用为了攻击专门分散
     s = result.state

@@ -304,6 +304,7 @@ class StabilityConfig(_Strict):
     occupied: int = Field(1, ge=0, le=100)
     encircled: int = Field(3, ge=0, le=100)
     weariness: int = Field(1, ge=0, le=100)
+    weariness_losses: int = Field(3, ge=1, le=100)  # 本回合阵亡这么多支以上才算厌战
     garrison: int = Field(67, ge=0, le=100)  # 有本国驻军时，稳定度的下降减少这么多 %（至少仍掉 1）
 
 
@@ -318,8 +319,8 @@ class PillageConfig(_Strict):
 class HealingConfig(_Strict):
     """回血（engine/systems/progression.py）：本回合挨过打、进攻过、被包围的不回血。"""
 
-    city: int = Field(8, ge=0, le=100)  # 在本国城市里每回合回这么多生命（不用驻守）
-    field: int = Field(5, ge=0, le=100)  # 在郊外驻守每回合回这么多
+    city: int = Field(12, ge=0, le=100)  # 在本国城市里每回合回生命上限的这么多 %（不用驻守）
+    field: int = Field(6, ge=0, le=100)  # 在郊外驻守每回合回生命上限的这么多 %
 
 
 class MoraleConfig(_Strict):

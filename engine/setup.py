@@ -112,6 +112,14 @@ def new_game(world: World, rules: Ruleset, tuning: dict | None = None) -> GameSt
             culture=culture,
         )
 
+    # 外交：开局所有国家互相和平（AI 扩张期结束后自己宣战，见 engine/systems/diplomacy.py）
+    from engine.systems.diplomacy import key
+
+    ids = sorted(state.nations)
+    for i, a in enumerate(ids):
+        for b in ids[i + 1 :]:
+            state.relations[key(a, b)] = {"status": "peace", "since": 0}
+
     start = rules.start
     for nid, tile in zip(sorted(state.nations), world.starts, strict=True):
         city = found_city(state, rules, nid, tile, capital=True)

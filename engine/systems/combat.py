@@ -37,6 +37,13 @@ FLAK_FACTOR = 30  # 一门高射炮对来袭飞机的火力：FLAK_FACTOR × 防
 FLAK_CAP = 70  # 飞一段航线最多被防空火力打掉这么多生命
 
 
+def _war(state, a, b) -> bool:
+    """a、b 两国在交战（外交，engine/systems/diplomacy.py）：只能打交战国。"""
+    from engine.systems.diplomacy import at_war
+
+    return at_war(state, a, b)
+
+
 def attack_range(rules, actor: Unit | City, grid=None) -> int:
     """射程。飞机是作战半径（传 grid 时按开局设置 air_range 缩放；从起飞机场量）。"""
     if isinstance(actor, City):
@@ -347,7 +354,7 @@ def bombable(state, rules, actor, tile) -> bool:
     return (
         bool(g.facility[tile])
         and owner >= 0
-        and owner != actor.nation
+        and _war(state, owner, actor.nation)
         and tile not in state.damaged
         and state.city_at(tile) is None
     )
@@ -376,14 +383,14 @@ def target_at(state, rules, actor, tile):
         isinstance(actor, Unit)
         and attack_kind(rules, actor) == "melee"
         and city is not None
-        and city.nation != actor.nation
+        and _war(state, city.nation, actor.nation)
         and city.hp > 0
     ):
         return city  # 城防还在：近战只能强攻城墙，进不了城和守军交战
     enemies = [
         u
         for u in state.units_at(tile)
-        if u.nation != actor.nation and rules.units[u.type].category == "military"
+        if _war(state, u.nation, actor.nation) and rules.units[u.type].category == "military"
     ]
     if isinstance(actor, Unit) and rules.units[actor.type].torpedo:
         # 鱼雷只打舰船
@@ -410,7 +417,7 @@ def target_at(state, rules, actor, tile):
     if enemies:
         return max(enemies, key=lambda u: (strength(state, rules, u, defending=True), -u.id))
     city = state.city_at(tile)
-    if city is not None and city.nation != actor.nation:
+    if city is not None and _war(state, city.nation, actor.nation):
         return city
     if isinstance(actor, Unit) and attack_kind(rules, actor) == "melee":
         # 格子里只剩外国平民（开拓者、工兵、将领）：陆军开进去俘虏
@@ -418,7 +425,7 @@ def target_at(state, rules, actor, tile):
         civilians = [
             u
             for u in state.units_at(tile, "surface")
-            if u.nation != actor.nation and rules.units[u.type].domain == ut.domain
+            if _war(state, u.nation, actor.nation) and rules.units[u.type].domain == ut.domain
         ]
         if civilians and ut.domain == "land":
             return min(civilians, key=lambda u: u.id)
@@ -432,7 +439,7 @@ def target_at(state, rules, actor, tile):
         civilians = [
             u
             for u in state.units_at(tile, "surface")
-            if u.nation != actor.nation and rules.units[u.type].domain == "sea"
+            if _war(state, u.nation, actor.nation) and rules.units[u.type].domain == "sea"
         ]
         if civilians:
             return min(civilians, key=lambda u: u.id)
@@ -589,12 +596,12 @@ def preview(state, rules, actor, tile) -> tuple[dict | None, str | None]:
         others = [
             u
             for u in state.units_at(tile, target.layer if isinstance(target, Unit) else "surface")
-            if u.nation != actor.nation
+            if _war(state, u.nation, actor.nation)
             and rules.units[u.type].category == "military"
             and u is not target
         ]
         city = state.city_at(tile)
-        if city is not None and city.nation != actor.nation and city is not target:
+        if city is not None and _war(state, city.nation, actor.nation) and city is not target:
             others.append(city)
         for o in sorted(others, key=lambda o: (isinstance(o, City), o.id)):
             hit = max(
@@ -667,6 +674,10 @@ def tactics(state, rules, actor) -> dict:
 def _capture(ctx, city, unit):
     s, rules = ctx.state, ctx.rules
     previous = city.nation
+    from engine.systems.diplomacy import note_capture
+
+    note_capture(s, previous, unit.nation)  # 求和时看僵持
+    s._closed_cache.clear()
     city.nation, city.hp, city.capital = unit.nation, 100, False
     city.stability = min(city.stability, rules.stability.captured)  # 新占领地区不稳
     city.queue, city.production, city.attacked_turn = [], 0, s.turn
@@ -814,7 +825,7 @@ def _skirmish(ctx: StepContext) -> None:
             foes = [
                 v
                 for v in s.units_at(tile, "surface")
-                if v.nation != u.nation and _military(rules, v)
+                if _war(s, v.nation, u.nation) and _military(rules, v)
             ]
             if not foes:
                 break

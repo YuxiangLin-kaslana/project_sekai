@@ -32,6 +32,7 @@ from engine.step import step
 from engine.systems.air import PATROL_TURNS
 from engine.systems.cities import city_stat, city_yields, food_to_grow, nation_resources
 from engine.systems.combat import attack_range, lock_reason, strength
+from engine.systems.diplomacy import DEFAULT as DIPLOMACY_DEFAULT
 from engine.systems.economy import unit_upkeep, upkeep
 from engine.systems.movement import GameState, air_radius, unit_moves
 from engine.systems.networks import city_network
@@ -418,6 +419,30 @@ def _snapshot(game: Game, rules: Ruleset) -> dict:
         "world": game.world,
         "settings": dict(s.grid.tuning),
         "damaged": sorted(s.damaged),  # 被炸坏的设施格
+        # 外交：有记录的国家对（没有记录的按交战）、给玩家国家的待处理提议
+        "diplomacy": {
+            "default": DIPLOMACY_DEFAULT,
+            "relations": [
+                {
+                    "a": ref("nation", int(k.split(":")[0])),
+                    "b": ref("nation", int(k.split(":")[1])),
+                    "status": v["status"],
+                    "since": v.get("since", 0),
+                    "truce": v.get("truce"),
+                }
+                for k, v in sorted(s.relations.items())
+            ],
+            "offers": [
+                {
+                    "id": o["id"],
+                    "from": ref("nation", o["from"]),
+                    "to": ref("nation", o["to"]),
+                    "kind": o["kind"],
+                    "turn": o["turn"],
+                }
+                for o in s.offers
+            ],
+        },
         "turn": s.turn,
         "state_hash": s.state_hash(),
         "nations": nations,

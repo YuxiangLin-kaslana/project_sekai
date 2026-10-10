@@ -19,6 +19,7 @@ from dataclasses import dataclass
 import numpy as np
 
 from engine.ids import ref
+from engine.systems.diplomacy import at_war
 
 
 @dataclass(frozen=True)
@@ -56,9 +57,9 @@ def surrounded(state, rules, nation, tile, domain="land", occ=None, extra=()) ->
         return False
     for n in ring:
         city = state.city_at(n)
-        if city is not None and city.nation != nation:
+        if city is not None and at_war(state, city.nation, nation):
             continue
-        if n in extra or any(o != nation for o in occ.get(n, ())):
+        if n in extra or any(at_war(state, o, nation) for o in occ.get(n, ())):
             continue
         return False
     return True

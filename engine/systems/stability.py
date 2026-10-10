@@ -5,7 +5,7 @@
 - 缺钱：国库为负（付不起维护费）→ 全国城市 −gold
 - 缺生产力：人口维持把生产力吃光（产出为 0 而人口要消耗生产力）→ −production
 - 战争：本回合城防挨打 −attacked；辖区内有外国军队 −occupied；城市被包围 −encircled；
-  本国本回合有部队阵亡，全国城市 −weariness（厌战）。军队破坏辖区设施另扣（pillage.py）。
+  本国本回合阵亡 weariness_losses 支以上，全国城市 −weariness（厌战）。军队破坏辖区设施另扣（pillage.py）。
 - 有本国驻军（城市格上有本国陆军，或辖区内有驻守的本国陆军）：以上下降减少 garrison%，至少仍掉 1
 - 以上都没有：+recover，最多 100
 每回合的原因记在 city.stability_reasons；稳定度跌破 unrest 时记一次“动荡”。
@@ -24,6 +24,7 @@ from engine.state import Nation
 from engine.systems import encirclement
 from engine.systems.cities import FOOD_PER_POP, city_yields, population_upkeep
 from engine.systems.context import StepContext
+from engine.systems.diplomacy import at_war
 from engine.systems.settlement import city_scale
 
 SHORTAGE_NAMES = {"food": "缺粮", "gold": "缺钱", "production": "缺生产力"}
@@ -88,11 +89,13 @@ def war_pressures(ctx: StepContext) -> dict[int, list[str]]:
         reasons = []
         if city.damaged_turn == s.turn:
             reasons.append("attacked")
-        if any(n != city.nation for t in territory.get(city.id, ()) for n in armies.get(t, ())):
+        if any(
+            at_war(s, n, city.nation) for t in territory.get(city.id, ()) for n in armies.get(t, ())
+        ):
             reasons.append("occupied")
         if city.id in ring.cities:
             reasons.append("encircled")
-        if losses[city.nation]:
+        if losses[city.nation] >= rules.stability.weariness_losses:
             reasons.append("weariness")
         out[city.id] = reasons
     return out
@@ -186,6 +189,15 @@ def _independence(ctx: StepContext, city) -> None:
         culture=culture,
     )
     s.nations[nid] = nation
+    # 外交：新政权和原国家交战，和其他国家照原国家的关系（交战的继续交战，其余和平）
+    from engine.systems import diplomacy
+
+    for other in sorted(s.nations):
+        if other == nid:
+            continue
+        st = "war" if other == old or diplomacy.at_war(s, old, other) else "peace"
+        s.relations[diplomacy.key(nid, other)] = {"status": st, "since": s.turn, "progress": s.turn}
+    s._closed_cache.clear()
     for c in group:
         c.nation, c.capital, c.stability = nid, c is city, cfg.independent
         c.managed, c.gold_assist = True, False

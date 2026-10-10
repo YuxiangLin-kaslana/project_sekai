@@ -159,6 +159,16 @@
   .game-brief button { text-align: left; padding: 7px 9px; font-size: 11px; color: var(--muted); }
   .game-brief b { display: block; font-size: 14px; color: var(--text); font-weight: 600; }
   .log.full { max-height: none; margin-top: 8px; }
+  .diplo-row { display: grid; grid-template-columns: 10px 1fr auto; gap: 8px; align-items: center; padding: 6px 4px; border-bottom: 1px solid var(--line); font-size: 13px; }
+  .diplo-row .sub { display: block; color: var(--muted); font-size: 11px; }
+  .diplo-row .acts { display: flex; gap: 4px; }
+  .diplo-row .acts button { padding: 3px 8px; font-size: 12px; }
+  .rel { display: inline-block; margin-left: 6px; padding: 0 6px; border-radius: 8px; font-size: 11px; line-height: 17px; }
+  .rel.war { background: rgba(208, 87, 63, 0.25); color: #f0a08c; }
+  .rel.peace { background: rgba(127, 168, 131, 0.2); color: #a9d0ac; }
+  .rel.alliance { background: rgba(110, 160, 220, 0.25); color: #a9c9f0; }
+  .offer-card { margin-top: 8px; padding: 8px 10px; border: 1px solid rgba(216, 184, 120, 0.5); border-radius: 8px; background: rgba(216, 184, 120, 0.08); font-size: 13px; display: flex; gap: 6px; align-items: center; }
+  .offer-card span { flex: 1; }
   .check-row { display: flex; align-items: center; gap: 8px; margin: 8px 0; font-size: 13px; color: var(--text); }
   .turnbar .quick { padding: 5px 9px; font-size: 12px; color: var(--muted); }
   .turnbar .quick[aria-pressed=true] { color: var(--gold); border-color: rgba(216, 184, 120, 0.65); background: rgba(216, 184, 120, 0.1); }
@@ -519,7 +529,12 @@
           <button type="button" data-sort="pop">人口</button>
         </div>
         <div id="nation-list"></div>
-        <p class="hint">点一个国家：地图跳到它的首都，城市 / 军队分类也切到这个国家。</p>
+        <p class="hint">点一个国家：地图跳到它的首都，城市 / 军队分类和外交视角也切到这个国家。</p>
+        <div class="list-head"><h3>外交</h3><small id="diplo-summary"></small></div>
+        <div class="filter-row"><label class="hint" for="diplo-nation" style="align-self:center">视角</label><select id="diplo-nation" aria-label="外交视角国家"></select></div>
+        <div id="diplo-offers"></div>
+        <div class="list" id="diplo-list"></div>
+        <p class="hint">和平：不能攻击，边境关闭（部队进不了对方领土）；同盟：开放边境，对方被宣战时一起参战；求和、结盟向 AI 国家提出时对方当场答复，向玩家国家提出时等对方处理。和约签订后 15 回合内不能再宣战。</p>
       </section>
 
       <!-- ================= 城市 ================= -->
@@ -885,6 +900,7 @@ const EVENT_KIND = {
   city_founded: 'build', building_completed: 'build', facility_built: 'build', unit_created: 'build',
   level_up: 'build', gold_assist: 'build', facility_repaired: 'build',
   facility_bombed: 'war', unit_captured: 'war', nation_eliminated: 'alert',
+  war_declared: 'alert', peace_signed: 'alert', alliance_formed: 'alert', alliance_broken: 'alert', diplomatic_offer: 'alert',
 };
 function logHtml() {
   return logLines.filter((l) => logKind === "all" || l.head || l.bad || (logKind === "other" ? !l.kind : l.kind === logKind)).map((l) => `<div class="${l.bad ? 'bad' : l.head ? 'head' : l.kind ?? ''}">${esc(l.text)}</div>`).join('');
@@ -931,6 +947,12 @@ const EVENT_TEXT = {
   pillaged: (e) => `${game.nationOf(e.nation)?.name ?? e.nation} 破坏了${e.city ? cityName(e.city) + '的' : ''}${e.target}，掠走 ${e.loot} 金`,
   city_unrest: (e) => `${cityName(e.city)} 陷入动荡：稳定度降到 ${e.stability}${e.reasons?.length ? `（${e.reasons.join('、')}）` : ''}`,
   city_independence: (e) => `${e.cities.map(cityName).join('、')} 脱离${game.nationOf(e.previous)?.name ?? e.previous}，宣布独立，成立${e.name}`,
+  war_declared: (e) => `${game.nationOf(e.nation)?.name ?? e.nation} 向 ${game.nationOf(e.target)?.name ?? e.target} 宣战${e.reason ? `（${e.reason}）` : ''}`,
+  peace_signed: (e) => `${game.nationOf(e.nation)?.name ?? e.nation} 与 ${game.nationOf(e.target)?.name ?? e.target} 签订和约（休战 ${e.truce} 回合）`,
+  alliance_formed: (e) => `${game.nationOf(e.nation)?.name ?? e.nation} 与 ${game.nationOf(e.target)?.name ?? e.target} 结成同盟`,
+  alliance_broken: (e) => `${game.nationOf(e.nation)?.name ?? e.nation} 解除了与 ${game.nationOf(e.target)?.name ?? e.target} 的同盟`,
+  diplomatic_offer: (e) => `${game.nationOf(e.nation)?.name ?? e.nation} 向 ${game.nationOf(e.target)?.name ?? e.target} ${e.kind === 'peace' ? '求和' : '提议结盟'}（等待答复，见“国家”页外交）`,
+  offer_declined: (e) => `${game.nationOf(e.nation)?.name ?? e.nation} 拒绝了 ${game.nationOf(e.target)?.name ?? e.target} 的${e.kind === 'peace' ? '求和' : '结盟提议'}${e.reason ? `：${e.reason}` : ''}`,
   battle_plan: (e) => `${game.nationOf(e.nation)?.name ?? e.nation} 开辟新战线，发动${e.name}：${e.overseas?'跨海登陆后':''}排开战线向${cityName(e.target)}推进，两翼包抄`,
   battle_ended: (e) => `${game.nationOf(e.nation)?.name ?? e.nation} 的${e.name}结束：${e.result}${e.why ? `（${e.why}）` : ''}`,
 };
@@ -970,6 +992,9 @@ function cityAlerts(events) {
     } else if (e.type === 'city_independence') {
       title = '城市独立';
       text = `${e.cities.map(cityName).join('、')} 脱离${game.nationOf(e.previous)?.name ?? e.previous}，成立${e.name}`;
+    } else if (['war_declared', 'peace_signed', 'alliance_formed', 'alliance_broken', 'diplomatic_offer'].includes(e.type)) {
+      title = { war_declared: '宣战', peace_signed: '议和', alliance_formed: '结盟', alliance_broken: '同盟破裂', diplomatic_offer: '外交提议' }[e.type];
+      text = EVENT_TEXT[e.type](e);
     }
     if (!text) continue;
     const card = document.createElement('div');
@@ -1464,6 +1489,68 @@ function renderRuleSummary() {
   ].map(([k, v]) => `<span>${k}</span><b>${esc(v)}</b>`).join("");
 }
 
+// ---------------------------------------------------------------- 外交
+const REL_TEXT = { war: "交战", peace: "和平", alliance: "同盟" };
+function relationOf(a, b) {
+  const d = game.G.snap?.diplomacy;
+  if (!d || a === b) return null;
+  const r = d.relations.find((x) => (x.a === a && x.b === b) || (x.a === b && x.b === a));
+  return r ?? { status: d.default ?? "war", since: 0, truce: null };
+}
+let diploNation = null;
+function renderDiplomacy() {
+  const snap = game.G.snap;
+  const list = $("diplo-list"), offers = $("diplo-offers");
+  list.innerHTML = ""; offers.innerHTML = "";
+  if (!snap?.diplomacy) { $("diplo-summary").textContent = ""; return; }
+  const alive = snap.nations.filter((n) => n.cities);
+  const sel = $("diplo-nation");
+  if (!alive.some((n) => n.id === diploNation)) diploNation = managementNation && alive.some((n) => n.id === managementNation) ? managementNation : alive[0]?.id;
+  sel.innerHTML = alive.map((n) => `<option value="${esc(n.id)}">${esc(n.name)}${n.ai_enabled ? "（AI）" : ""}</option>`).join("");
+  sel.value = diploNation ?? "";
+  const me = game.nationOf(diploNation);
+  if (!me) return;
+  const rels = alive.filter((n) => n.id !== me.id).map((n) => ({ n, r: relationOf(me.id, n.id) }));
+  const count = (st) => rels.filter((x) => x.r.status === st).length;
+  $("diplo-summary").textContent = `交战 ${count("war")} · 同盟 ${count("alliance")} · 和平 ${count("peace")}`;
+  for (const o of snap.diplomacy.offers.filter((o) => o.to === me.id)) {
+    const from = game.nationOf(o.from);
+    const card = document.createElement("div");
+    card.className = "offer-card";
+    card.innerHTML = `<span><b>${esc(from?.name ?? o.from)}</b> ${o.kind === "peace" ? "请求停战议和" : "提议结成同盟"}</span>`;
+    const yes = document.createElement("button"); yes.type = "button"; yes.className = "primary"; yes.textContent = "接受";
+    const no = document.createElement("button"); no.type = "button"; no.textContent = "拒绝";
+    yes.onclick = () => executeCommand({ type: "respond_offer", issuer: me.id, offer: o.id, accept: true });
+    no.onclick = () => executeCommand({ type: "respond_offer", issuer: me.id, offer: o.id, accept: false });
+    card.append(yes, no);
+    offers.appendChild(card);
+  }
+  const order = { war: 0, alliance: 1, peace: 2 };
+  rels.sort((x, y) => order[x.r.status] - order[y.r.status] || y.n.cities - x.n.cities);
+  for (const { n, r } of rels) {
+    const row = document.createElement("div");
+    row.className = "diplo-row";
+    const truce = r.truce && r.truce > snap.turn ? ` · 休战到第 ${r.truce} 回合` : "";
+    const since = r.since ? ` · 第 ${r.since} 回合起` : "";
+    row.innerHTML = `<i class="nation-dot" style="background:${n.color}"></i><div>${esc(n.name)}<span class="rel ${r.status}">${REL_TEXT[r.status]}</span><span class="sub">${n.cities} 城 · ${n.units} 兵${since}${truce}</span></div>`;
+    const acts = document.createElement("div"); acts.className = "acts";
+    const btn = (label, type, title, disabled = false) => {
+      const b = document.createElement("button"); b.type = "button"; b.textContent = label; b.title = title; b.disabled = disabled || commandBusy;
+      b.onclick = () => executeCommand({ type, issuer: me.id, target: n.id });
+      acts.appendChild(b);
+    };
+    if (r.status === "war") btn("求和", "propose_peace", n.ai_enabled ? "对方是 AI：占上风时会拒绝" : "等对方处理");
+    if (r.status === "peace") {
+      const truced = r.truce && r.truce > snap.turn;
+      btn("宣战", "declare_war", truced ? "和约休战期内不能宣战" : "宣战后可以攻击对方、进入对方领土；对方的盟友会参战", truced);
+      btn("结盟", "propose_alliance", "同盟：开放边境，被宣战时互相援助");
+    }
+    if (r.status === "alliance") btn("解除同盟", "break_alliance", "解除后两国恢复和平（有休战期）");
+    row.appendChild(acts);
+    list.appendChild(row);
+  }
+}
+
 function renderNations() {
   const el = $("nation-list");
   el.innerHTML = "";
@@ -1489,9 +1576,10 @@ function renderNations() {
     row.className = "nation-row" + (n.id === managementNation ? " active" : "") + (n.cities ? "" : " gone");
     const restless = unrest.get(n.id) ?? 0;
     row.title = `维护费 ${n.upkeep}/回合 · 科研累计 ${n.science}${restless ? ` · ${restless} 座城市动荡` : ""}`;
-    row.innerHTML = `<i class="nation-dot" style="background:${n.color}"></i><div>${esc(n.name)}${restless ? `<em class="unrest">动荡 ${restless}</em>` : ""}${n.ai_enabled ? '<em class="ai">AI</em>' : ""}</div><span>${fmt(n.gold)}</span><span>${n.cities}</span><span>${n.units}</span>`;
+    row.innerHTML = `<i class="nation-dot" style="background:${n.color}"></i><div>${esc(n.name)}${restless ? `<em class="unrest">动荡 ${restless}</em>` : ""}${n.ai_enabled ? '<em class="ai">AI</em>' : ""}${(() => { const r = diploNation && n.id !== diploNation && n.cities ? relationOf(diploNation, n.id) : null; return r ? `<span class="rel ${r.status}">${REL_TEXT[r.status]}</span>` : ""; })()}</div><span>${fmt(n.gold)}</span><span>${n.cities}</span><span>${n.units}</span>`;
     row.addEventListener("click", () => {
       managementNation=n.id;
+      diploNation=n.id;
       focusNation(n.id);
       const cap = game.G.cities.get(n.capital);
       if (!cap) return;
@@ -1547,7 +1635,7 @@ function renderGame() {
 }
 function renderVisibleTab() {
   const tab = document.querySelector(".tab.on")?.id.slice(4);
-  if (tab === "nations") renderNations();
+  if (tab === "nations") { renderNations(); renderDiplomacy(); }
   if (tab === "cities") { renderCityList(); renderCityManagement(); }
   if (tab === "army") renderArmyList();
   if (tab === "wiki") renderRuleSummary();
@@ -1982,6 +2070,7 @@ segment("log-filter", "kind", (v) => { logKind = v; $("log").innerHTML = logHtml
 $("city-sort").onchange = () => { citySort = $("city-sort").value; renderCityList(); };
 $("city-nation").onchange = () => { listLimits.city = LIST_LIMIT; renderCityList(); };
 $("army-nation").onchange = renderArmyList;
+$("diplo-nation").onchange = () => { diploNation = $("diplo-nation").value; renderDiplomacy(); };
 for (const chip of document.querySelectorAll("#city-flags [data-flag]")) chip.addEventListener("click", () => {
   chip.classList.toggle("on");
   if (chip.classList.contains("on")) cityFlags.add(chip.dataset.flag); else cityFlags.delete(chip.dataset.flag);

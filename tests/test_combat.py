@@ -582,8 +582,8 @@ def test_healing_in_own_city_or_fortified_in_the_field(board):
     resting.fortified = True
     idle = add(board, "infantry", 1, 8, 5, hp=50)  # 郊外没驻守不回血
     s = step(board, [], RULES).state
-    assert s.units[in_city.id].hp == 50 + RULES.healing.city
-    assert s.units[resting.id].hp == 50 + RULES.healing.field
+    assert s.units[in_city.id].hp == 50 + RULES.units["infantry"].hp * RULES.healing.city // 100
+    assert s.units[resting.id].hp == 50 + RULES.units["infantry"].hp * RULES.healing.field // 100
     assert s.units[idle.id].hp == 50
 
 

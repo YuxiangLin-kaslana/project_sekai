@@ -67,6 +67,19 @@ def blocked_tiles(state: GameState, rules: Ruleset, unit: Unit, ut: UnitType) ->
     return blocked
 
 
+def closed_for(state: GameState, unit: Unit):
+    """unit 进不去的格子（和平国家的领土，外交的关闭边境），bool[N]；飞机不受限。
+    部队已经在关闭的领土里（和约签订时还没撤出来）就不限，让它走出来。没有限制返回 None。"""
+    if unit.layer == "air":
+        return None
+    from engine.systems.diplomacy import closed
+
+    mask = closed(state, unit.nation)
+    if mask[unit.tile] or not mask.any():
+        return None
+    return mask
+
+
 def has_room(state: GameState, rules: Ruleset, unit: Unit, tile: int) -> bool:
     """unit（连同编队）能不能停在 tile：堆叠上限只管停下的格子，路过的不算。"""
     if tile == unit.tile:
@@ -178,6 +191,9 @@ def local_step_problem(ctx, unit, a, b, final=True):
             return "超出本国基地转场范围"
     elif b not in s.grid.neighbors_of(a):
         return "路线地块不相邻"
+    shut = closed_for(s, unit)
+    if shut is not None and shut[b]:
+        return "和平国家的领土，边境关闭"
     city = s.city_at(b)
     if city and city.nation != unit.nation:
         return "不能进入外国城市"
@@ -222,13 +238,14 @@ def movement_map(state, rules, unit, cost=None) -> tuple[dict[int, int], dict[in
                 best[t], parents[t] = 0, unit.tile
         return best, parents
     heap = [(-budget, unit.tile)]
+    shut = closed_for(state, unit)
     while heap:
         neg_left, cur = heapq.heappop(heap)
         left = -neg_left
         if left < best.get(cur, -1) or left <= 0:
             continue
         for n in state.grid.neighbors_of(cur):
-            if n in blocked:
+            if n in blocked or (shut is not None and shut[n]):
                 continue
             c = enter(cur, n)
             if c <= 0 or (left < c and left < full):
@@ -260,7 +277,8 @@ def route_for(state, rules, unit, dest) -> list[int] | None:
         return path[::-1]
     # 本回合走不到：Numba A*（和 find_path 的 edge_cost 版逐步一致，运行时释放 GIL）
     g = state.grid
-    mask = np.zeros(g.size, dtype=np.bool_)
+    shut = closed_for(state, unit)
+    mask = np.zeros(g.size, dtype=np.bool_) if shut is None else shut.copy()
     if blocked:
         mask[np.fromiter(blocked, dtype=np.int64)] = True
     path = kernels.astar(
@@ -294,6 +312,9 @@ def move_target_problem(ctx: StepContext, unit: Unit, tile: int) -> str | None:
     city = state.city_at(tile)
     if city is not None and city.nation != unit.nation:
         return "不能进入敌方城市，请通过近战占领"
+    shut = closed_for(state, unit)
+    if shut is not None and shut[tile]:
+        return "那是和平国家的领土，边境关闭，不能进入（要先宣战或结盟）"
     if tile in blocked_tiles(state, rules, unit, ut) or not has_room(state, rules, unit, tile):
         return "目的地有敌军或容量不足"
     if ut.domain == "land" and ctx.costs("land")[tile] <= 0:

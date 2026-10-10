@@ -142,7 +142,9 @@ def test_development_levels_and_fortified_healing(board):
     result = step(board, [], RULES)
     assert result.state.cities[c.id].xp >= 30 and result.state.facility_xp[ft] >= 12
     assert result.state.region_xp[0] > 0
-    assert result.state.units[a.id].hp == 60 + RULES.healing.city  # 在本国城市里
+    assert (
+        result.state.units[a.id].hp == 60 + RULES.units["infantry"].hp * RULES.healing.city // 100
+    )  # 在本国城市里
     assert sum(e["type"] == "level_up" for e in result.events) >= 2
     assert board.state_hash() == before
 

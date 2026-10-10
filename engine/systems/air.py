@@ -62,6 +62,7 @@ def flight_flak(state, rules, plane, src, dst) -> list[tuple]:
     """飞 src → dst 这一段，会挨哪些防空火力：[(防空单位, 伤害, "enter"/"leave"), …]，按开火顺序。
     航线进入一个敌方防空圈开火一次，飞出再开火一次；累计最多 FLAK_CAP 点，打光为止。"""
     from engine.systems.combat import FLAK_CAP, FLAK_FACTOR, strength
+    from engine.systems.diplomacy import at_war
 
     g = state.grid
     path = flight_path(g, src, dst)
@@ -70,7 +71,7 @@ def flight_flak(state, rules, plane, src, dst) -> list[tuple]:
     span = g.distance(src, dst)
     guns = []
     for u in state.units.values():
-        if u.nation == plane.nation or u.layer != "surface":
+        if u.layer != "surface" or not at_war(state, u.nation, plane.nation):
             continue
         ut = rules.units[u.type]
         reach = aa_range(ut)

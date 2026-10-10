@@ -86,9 +86,10 @@ def resolve(ctx: StepContext) -> None:
         if u.damaged_turn == s.turn or u.attacked_turn == s.turn:
             continue
         city = s.city_at(u.tile)
-        amount = heal.city if city is not None and city.nation == u.nation else 0
-        amount = max(amount, heal.field if u.fortified else 0)
-        u.hp = min(rules.units[u.type].hp, u.hp + amount)
+        pct = heal.city if city is not None and city.nation == u.nation else 0
+        pct = max(pct, heal.field if u.fortified else 0)
+        full = rules.units[u.type].hp
+        u.hp = min(full, u.hp + full * pct // 100)  # 按生命上限的百分比回
     # 被包围的部队每回合减员，减到 0 溃散
     for uid in sorted(ring.units):
         u = s.units.get(uid)

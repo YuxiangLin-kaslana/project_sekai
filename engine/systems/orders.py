@@ -19,6 +19,7 @@ from engine.actions import (
     CityOrder,
     DemolishRoad,
     DevelopCity,
+    Diplomacy,
     Disembark,
     Embark,
     FormGroup,
@@ -30,6 +31,7 @@ from engine.actions import (
     Move,
     Order,
     Pillage,
+    RespondOffer,
     SetAI,
     SetPolicy,
     Ungroup,
@@ -99,6 +101,14 @@ def _tag(ctx: StepContext, unit: Unit, tag: str, what: str) -> None:
 def _apply(ctx: StepContext, order: Order) -> None:
     state, rules, log = ctx.state, ctx.rules, ctx.log
     nation = _issuer(ctx, order)
+
+    if isinstance(order, (Diplomacy, RespondOffer)):
+        from engine.systems.diplomacy import apply_order
+
+        problem = apply_order(ctx, order, nation)
+        if problem:
+            raise Rejected("diplomacy", problem)
+        return
 
     if isinstance(order, SetAI):
         n = state.nations[nation]
