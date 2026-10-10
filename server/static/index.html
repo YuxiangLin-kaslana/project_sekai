@@ -433,6 +433,7 @@
           <div class="row" title="舰炮、鱼雷射程倍数"><label for="set-naval_range">海军射程</label><input type="range" id="set-naval_range" data-setting="naval_range" min="50" max="300" step="10" value="100"><output></output></div>
           <div class="row" title="炮兵等陆上远程单位的射程倍数"><label for="set-artillery_range">炮兵射程</label><input type="range" id="set-artillery_range" data-setting="artillery_range" min="50" max="300" step="10" value="100"><output></output></div>
           <div class="row" title="每片地区（承载区）能建几座城的倍数：调高 → 城市更多"><label for="set-capacity">地区承载</label><input type="range" id="set-capacity" data-setting="capacity" min="50" max="400" step="10" value="100"><output></output></div>
+          <div class="row" title="每个国家每回合最多让多少支部队重新决策（64–256）；部队更多的国家国内轮流。调高更聪明，但回合更慢"><label for="set-ai_budget">AI 决策</label><input type="range" id="set-ai_budget" data-setting="ai_budget" data-default="128" data-unit="支/国" min="64" max="256" step="16" value="128"><output></output></div>
           <div class="row" title="每个国家开局的国库"><label for="set-start_gold">起始金币</label><input type="range" id="set-start_gold" data-setting="start_gold" min="0" max="1000" step="25" value="100"><output></output></div>
           <div class="row" title="军事单位维护费倍数：越高越养不起大军"><label for="set-upkeep">军费</label><input type="range" id="set-upkeep" data-setting="upkeep" min="0" max="300" step="10" value="100"><output></output></div>
           <label class="check-row"><input type="checkbox" id="set-auto-ai"> 开局后全部国家交给 AI</label>
@@ -773,8 +774,9 @@ function readSettings() {
 function syncSettings() {
   for (const el of SETTING_INPUTS) {
     const v = parseInt(el.value, 10);
-    el.nextElementSibling.textContent = v + "%";
-    el.nextElementSibling.classList.toggle("changed", v !== 100);
+    const def = parseInt(el.dataset.default ?? "100", 10);
+    el.nextElementSibling.textContent = el.dataset.unit ? `${v} ${el.dataset.unit}` : v + "%";
+    el.nextElementSibling.classList.toggle("changed", v !== def);
   }
   store.set("settings", JSON.stringify({ ...readSettings(), auto_ai: $("set-auto-ai").checked }));
 }
@@ -785,7 +787,7 @@ function syncSettings() {
   $("set-auto-ai").checked = !!saved.auto_ai;
   for (const el of SETTING_INPUTS) el.addEventListener("input", syncSettings);
   $("set-auto-ai").addEventListener("change", syncSettings);
-  $("settings-reset").onclick = () => { for (const el of SETTING_INPUTS) el.value = 100; $("set-auto-ai").checked = false; syncSettings(); };
+  $("settings-reset").onclick = () => { for (const el of SETTING_INPUTS) el.value = el.dataset.default ?? 100; $("set-auto-ai").checked = false; syncSettings(); };
   syncSettings();
 })();
 
@@ -1456,6 +1458,7 @@ function renderRuleSummary() {
     ["海军射程", pct("naval_range")],
     ["炮兵射程", pct("artillery_range")],
     ["地区承载", pct("capacity")],
+    ["AI 决策", `每国每回合最多 ${st.ai_budget ?? 128} 支`],
     ["起始金币", pct("start_gold")],
     ["军费", pct("upkeep")],
   ].map(([k, v]) => `<span>${k}</span><b>${esc(v)}</b>`).join("");

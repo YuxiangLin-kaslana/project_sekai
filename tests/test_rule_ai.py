@@ -512,3 +512,26 @@ def test_ring_troops_storm_the_walls_when_no_guns_are_firing(board):
     ctx = StepContext(board, RULES, [], EventLog(board.turn), RngTree(board.seed, "t", 1))
     assert rule_ai._storm(ctx, troop, enemy)  # 没有炮兵在轰：近战直接强攻城墙
     assert rule_ai._ai(ctx)["intents"][0][2] is troop
+
+
+def test_decision_budget_is_per_nation(board, monkeypatch):
+    from controllers import parallel, rule_ai
+
+    board.grid.tuning = {"ai_budget": 64}
+    for n in board.nations.values():
+        n.ai_enabled = True
+    big = [add(board, "infantry", 1, (2 + k % 12, 2 + k // 12)) for k in range(90)]
+    small = [add(board, "infantry", 2, (30 + k % 5, 2 + k // 5)) for k in range(10)]
+    seen = {}
+
+    def capture(state, rules, jobs):
+        seen.update({j["nation"]: j for j in jobs})
+        return []
+
+    monkeypatch.setattr(parallel, "run", capture)
+    step(board, [], RULES)
+    assert len(seen[1]["active"]) == 64  # 部队多的国家：本国内部轮流，最多 64 支
+    assert set(seen[2]["active"]) == {u.id for u in small}  # 部队少的国家：全部决策
+    assert rule_ai.actor_budget(board) == 64 and len(big) == 90
+    board.grid.tuning = {"ai_budget": 999}
+    assert rule_ai.actor_budget(board) == 256  # 每国最多 256 支

@@ -13,7 +13,7 @@
    - 守军和边境哨（_guards）：每城留守军；接壤、附近有外国陆军的城市在敌军最可能来的边境格放哨。
    - 海军（_navy_plan）：靠海的战线目标、跨海战线、沿海敌舰、跨海打进来的敌军 → 城市托管造战舰；
      有飞机和靠海目标时造航母。
-2. 单位决策（decide_unit；每回合按 ACTOR_BUDGET 轮转）：开拓团建城 / 前往选址；伤兵撤退；
+2. 单位决策（decide_unit；每国每回合最多 actor_budget 支，国内轮转）：开拓团建城 / 前往选址；伤兵撤退；
    快被包围的先突围；就近有好打的目标就打（集火：同一目标的预计伤害累加，优先能击杀的）；
    守军守城、边境哨守边境；野战军按所属战线的阶段行动（推进时站到战线上的位置）；将领随军团中心走；
    战舰追击敌舰、炮击靠海的战线目标、防御海岸；航母开到目标城外海让飞机上舰出击。
@@ -75,7 +75,9 @@ from engine.systems.cities import (
 from engine.systems.orders import automatic
 from engine.systems.settlement import city_scale, geography, map_scale, site_score
 
-ACTOR_BUDGET = 256
+ACTOR_BUDGET = 128  # 每国每回合最多决策几支部队（开局设置 ai_budget，64–256）；超出的国内轮流
+ACTOR_BUDGET_RANGE = (64, 256)
+FLOWS_PER_ACTOR = 48 / 256  # 每支要决策的部队配多少张新距离场名额
 CITY_ATTACK_BUDGET = 128
 FLOW_BUILDS = 48  # 每回合最多新建几张共享距离场（Numba 算得快；不够的单位改用自己的 A*）
 FLOW_MIN = 6  # 按国家分名额时每国至少这么多张
@@ -3596,12 +3598,19 @@ def resolve(ctx):
         if u.managed and s.nations[u.nation].ai_enabled
     ]
     # 驻守不动、附近没有外国军队的部队这回合不重新决策（每 IDLE_PERIOD 回合轮到一次），省下的预算
-    # 留给真正要动的部队；敌军一靠近当回合就恢复决策。预算按全局轮转，各国合计 ACTOR_BUDGET 支
+    # 留给真正要动的部队；敌军一靠近当回合就恢复决策。
     armies = _armies(ctx)
     actors = [u for u in units if u.layer != "cargo"]
     awake = [u for u in actors if not _idle(ctx, u, armies)]
-    start = (s.turn - 1) * ACTOR_BUDGET % max(1, len(awake))
-    active = {awake[(start + i) % len(awake)].id for i in range(min(ACTOR_BUDGET, len(awake)))}
+    # 决策名额按国家分：每国每回合最多 budget 支（开局设置），部队多的国家国内轮流
+    budget = actor_budget(s)
+    by_nation = {}
+    for u in awake:
+        by_nation.setdefault(u.nation, []).append(u)
+    active = set()
+    for mine in by_nation.values():
+        first = (s.turn - 1) * budget % len(mine)
+        active.update(mine[(first + i) % len(mine)].id for i in range(min(budget, len(mine))))
     awake_ids = {u.id for u in awake}
     # 城市防御射击同样按全局轮转
     cities = [
@@ -3628,14 +3637,19 @@ def resolve(ctx):
     for c in cities:
         if c.id in defend:
             jobs.setdefault(c.nation, _job(c.nation))["defend"].append(c.id)
-    # 新建距离场的名额（FLOW_BUILDS）按各国这回合要决策的部队数分，每国至少 FLOW_MIN 张
-    total = max(1, len(active))
+    # 新建距离场的名额按各国这回合要决策的部队数给（256 支配 FLOW_BUILDS 张），每国至少 FLOW_MIN 张
     for job in jobs.values():
-        job["flow_budget"] = max(FLOW_MIN, round(FLOW_BUILDS * len(job["active"]) / total))
+        job["flow_budget"] = max(FLOW_MIN, round(len(job["active"]) * FLOWS_PER_ACTOR))
     from controllers import parallel
 
     for result in parallel.run(s, ctx.rules, [jobs[n] for n in sorted(jobs)]):
         merge(ctx, result)
+
+
+def actor_budget(state) -> int:
+    """每国每回合最多决策几支部队：开局设置 ai_budget（64–256），默认 ACTOR_BUDGET。"""
+    lo, hi = ACTOR_BUDGET_RANGE
+    return max(lo, min(hi, int(state.grid.tuning.get("ai_budget", ACTOR_BUDGET))))
 
 
 def _job(nid):
@@ -3738,7 +3752,7 @@ def merge(ctx, result):
 
 
 def _opportunity_fire(ctx, waiting, armies):
-    """这回合没轮到决策的部队（超出 ACTOR_BUDGET）：射程里有敌军就原地开火 / 接战，不白白挨打。
+    """这回合没轮到决策的部队（超出本国的决策名额）：射程里有敌军就原地开火 / 接战，不白白挨打。
     只看射程内确实有外国军队的，开销很小。舰船、炮兵、空军也在这里打。"""
     s, rules, g = ctx.state, ctx.rules, ctx.state.grid
     for u in waiting:

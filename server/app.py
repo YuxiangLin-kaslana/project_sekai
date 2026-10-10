@@ -224,6 +224,7 @@ class GameCreate(BaseModel):
     naval_range: int = Field(100, ge=50, le=300)
     artillery_range: int = Field(100, ge=50, le=300)
     capacity: int = Field(100, ge=50, le=400)
+    ai_budget: int = Field(128, ge=64, le=256)  # 每国每回合最多决策几支部队（不是百分比）
 
 
 TUNING_KEYS = (
@@ -257,6 +258,8 @@ def create_game(body: GameCreate) -> dict:
     p = body.model_dump()
     dense = p.pop("stress_mode")
     tuning = {k: v for k in TUNING_KEYS if (v := p.pop(k)) != 100}
+    if (budget := p.pop("ai_budget")) != 128:
+        tuning["ai_budget"] = budget
     layers = _layers(**p)
     if dense:
         from engine.stress import populate
