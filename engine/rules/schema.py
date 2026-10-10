@@ -208,6 +208,10 @@ class BuildingType(_Strict):
     terrain_yields: dict[str, Yields] = {}  # 按改良前的地形给的产出（没写的地形用 yields）
     on_water: bool = False  # 能建在水面上（渔场、海上油田）
     enables: list[str] = []  # 城市有了它才能造的兵种类别：ships / aircraft
+    capturable: bool = False  # 敌国陆军占领这一格就归敌国（住宅区连同扩出来的土地，其余只这一格）
+    shelter: int = Field(
+        0, ge=0, le=100
+    )  # 停在本国这种区域里的舰船受到的伤害 −这么多 %，还能回血（港口）
     bombard: int = Field(0, ge=0)  # 自带炮击（军事基地）：每回合自动打射程内最弱的交战国部队，火力
     bombard_range: int = Field(2, ge=1, le=6)
     gold_assist: bool = True  # 能否用金币补生产力（城市开了金币补足建设时）；军事建筑不行

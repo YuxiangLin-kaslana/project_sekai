@@ -276,3 +276,36 @@ def test_settlers_can_sail_on_their_own(board):
     assert not out.rejected
     foot = add(board, "infantry", 1, COAST - 1, 4)
     assert act(board, order(foot, "move", to=[COAST, 4])).rejected  # 陆军还是要坐船
+
+
+def test_ports_spawn_shelter_and_heal_ships_and_change_hands(board):
+    from engine.state import City
+    from engine.systems.combat import preview
+    from engine.systems.economy import _spawn_tile
+
+    g = board.grid
+    city = City(board.new_id(), "港城", 1, g.idx(COAST - 3, 3), 3)
+    board.cities[city.id] = city
+    port = g.idx(COAST - 1, 3)
+    for t in g.within(city.tile, 2) + [port]:
+        g.owner[t], g.city_of[t] = 1, city.id
+    g.facility[port] = RULES.facility_index("port")
+    board._territory_cache = None
+    assert _spawn_tile(board, RULES, city, "destroyer") == port  # 舰船出生在港口
+    ship = add(board, "cruiser", 1, COAST - 1, 3)
+    ship.hp = 50
+    gun = add(board, "cruiser", 2, COAST + 1, 3)
+    info, _ = preview(board, RULES, gun, port)
+    assert any(m["label"] == "港口掩护" and m["value"] == -80 for m in info["modifiers"])
+    healed = step(board, [], RULES).state
+    assert healed.units[ship.id].hp > 50  # 港口里回血
+    # 敌国陆军占领港口：港口归敌国
+    board.units.pop(ship.id)
+    board._at.pop((port, "surface"), None)
+    foe_city = City(board.new_id(), "敌城", 2, g.idx(1, 6), 2)
+    board.cities[foe_city.id] = foe_city
+    g.owner[foe_city.tile], g.city_of[foe_city.tile] = 2, foe_city.id
+    add(board, "infantry", 2, COAST - 1, 3)
+    out = step(board, [], RULES)
+    assert int(out.state.grid.owner[port]) == 2
+    assert any(e["type"] == "district_captured" for e in out.events)

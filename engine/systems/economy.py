@@ -54,6 +54,13 @@ def _spawn_tile(state: GameState, rules: Ruleset, city: City, unit_id: str) -> i
     g = state.grid
     cls = ut.stack_class
     candidates = [] if ut.domain == "sea" else [city.tile]
+    if ut.domain == "sea":
+        # 舰船默认出生在本城的港口区域
+        from engine.systems.movement import port_tiles
+
+        candidates += [
+            t for t in port_tiles(state, rules, city.nation) if int(g.city_of[t]) == city.id
+        ]
     for n in sorted(int(x) for x in g.neighbors[city.tile] if x >= 0):
         if ut.domain == "air" or int(g.owner[n]) != city.nation:
             continue

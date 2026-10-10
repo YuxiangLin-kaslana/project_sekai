@@ -630,7 +630,7 @@ def march(ctx, unit, goal, reason, *, disperse=False, stop_within=0, avoid=None)
         left = unit.moves_left * MOVE_STEPS + unit.road_credit
         full = movement.unit_moves(g, ut) * MOVE_STEPS
         cost_table = ctx.costs(movement.move_domain(ut))
-        ports = movement.port_overrides(s, ut, unit.nation)
+        ports = movement.port_overrides(s, ut, unit.nation, rules)
         if not distance and not disperse:
             # 本回合的共享距离场名额用完了：改用单位自己的 A* 路线（绕水绕山），只走本回合走得到的一段
             route = []

@@ -666,6 +666,17 @@ def preview(state, rules, actor, tile) -> tuple[dict | None, str | None]:
         cut = rules.cities.melee_reduction
         damage = max(1, damage * (100 - cut) // 100)
         tactical = [*tactical, ("城防挡住近战", -cut)]
+    if isinstance(target, Unit) and rules.units[target.type].domain == "sea":
+        fac = rules.facility_at(int(state.grid.facility[target.tile]))
+        if (
+            fac is not None
+            and fac.shelter
+            and int(state.grid.owner[target.tile]) == target.nation
+            and target.tile not in state.damaged
+        ):
+            # 停在本国港口里的舰船：受到的伤害 −80%
+            damage = max(1, damage * (100 - fac.shelter) // 100)
+            tactical = [*tactical, (f"{fac.name}掩护", -fac.shelter)]
     ring_now = encirclement.status(state, rules)
     if (isinstance(target, City) and target.id in ring_now.cities) or (
         isinstance(target, Unit) and target.id in ring_now.units

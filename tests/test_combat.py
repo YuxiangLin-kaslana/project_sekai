@@ -833,3 +833,25 @@ def test_military_base_bombards_and_shelters_its_garrison(board):
     out = step(board, [], RULES)
     fire = [e for e in out.events if e["type"] == "base_fire"]
     assert fire and out.state.units[foe.id].hp < foe.hp  # 自带炮击，打 2 格内的敌军
+
+
+def test_occupying_a_residential_district_takes_its_land(board):
+    from engine.systems.cities import expand_territory, found_city
+
+    g = board.grid
+    mine = found_city(board, RULES, 1, g.idx(1, 3))
+    theirs = found_city(board, RULES, 2, g.idx(8, 3))
+    res = g.idx(6, 3)
+    g.owner[res], g.city_of[res] = 2, theirs.id
+    g.facility[res] = RULES.facility_index("residential")
+    board._territory_cache = None
+    claimed = expand_territory(board, theirs, res, 2)
+    assert claimed
+    soldier = add(board, "infantry", 1, 6, 3)
+    out = step(board, [], RULES)
+    s = out.state
+    assert any(e["type"] == "district_captured" for e in out.events)
+    assert int(s.grid.owner[res]) == 1 and int(s.grid.city_of[res]) == mine.id
+    assert all(int(s.grid.owner[t]) == 1 for t in claimed)  # 扩出来的土地一起划走
+    assert int(s.grid.owner[theirs.tile]) == 2  # 敌方市中心不划走
+    assert soldier.id in s.units

@@ -90,6 +90,14 @@ def resolve(ctx: StepContext) -> None:
             continue
         city = s.city_at(u.tile)
         pct = heal.city if city is not None and city.nation == u.nation else 0
+        fac = rules.facility_at(int(s.grid.facility[u.tile]))
+        if (
+            fac is not None
+            and fac.shelter
+            and int(s.grid.owner[u.tile]) == u.nation
+            and u.tile not in s.damaged
+        ):
+            pct = max(pct, heal.city)  # 停在本国港口里：和在城里一样回血
         pct = max(pct, heal.field if u.fortified else 0)
         full = rules.units[u.type].hp
         u.hp = min(full, u.hp + full * pct // 100)  # 按生命上限的百分比回

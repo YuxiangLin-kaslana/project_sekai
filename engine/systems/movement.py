@@ -46,14 +46,29 @@ def is_air_base(state: GameState, rules: Ruleset, nation: int, tile: int) -> boo
     return facility_active(state, rules, tile)  # 机场要有人劳作才能起降
 
 
-def port_overrides(state: GameState, ut: UnitType, nation: int) -> dict[int, int]:
+def port_tiles(state: GameState, rules: Ruleset, nation: int) -> list[int]:
+    """本国的港口区域格（没被炸坏）：舰船可以开进去停靠、出生、回血。"""
+    g = state.grid
+    ports = [rules.facility_index(b.id) for b in rules.buildings.values() if "ships" in b.enables]
+    if not ports:
+        return []
+    tiles = np.flatnonzero(np.isin(g.facility, ports) & (g.owner == nation))
+    return [int(t) for t in tiles if int(t) not in state.damaged]
+
+
+def port_overrides(state: GameState, ut: UnitType, nation: int, rules=None) -> dict[int, int]:
+    """舰船能开进的陆地格：本国临水的城市、本国的港口区域（给了 rules 才算港口）。"""
     if ut.domain != "sea":
         return {}
-    return {
+    out = {
         c.tile: 1
         for c in state.cities.values()
         if c.nation == nation and coastal(state.grid, c.tile)
     }
+    if rules is not None:
+        for t in port_tiles(state, rules, nation):
+            out[t] = 1
+    return out
 
 
 def blocked_tiles(state: GameState, rules: Ruleset, unit: Unit, ut: UnitType) -> set[int]:
@@ -122,6 +137,8 @@ def edge_table(state, rules, domain: str, nation: int) -> np.ndarray:
         for c in state.nation_cities(nation):
             if coastal(g, c.tile):
                 cost[c.tile] = 1
+        for t in port_tiles(state, rules, nation):
+            cost[t] = 1  # 本国港口区域：舰船能开进去停靠
     safe = np.maximum(g.neighbors, 0)
     table = cost[safe].astype(np.int16) * MOVE_STEPS
     if domain in ("land", "amphibious"):
@@ -161,7 +178,7 @@ def _planner(state, rules, unit, cost=None):
     ut = rules.units[unit.type]
     if cost is None:
         cost = move_costs(state.grid, rules, move_domain(ut))
-    overrides = port_overrides(state, ut, unit.nation)
+    overrides = port_overrides(state, ut, unit.nation, rules)
     blocked = blocked_tiles(state, rules, unit, ut)
     # 和 edge_cost 同一套规则，预先把地形消耗、河流转成 Python 列表（寻路每条边都要算一次）
     land = move_domain(ut) in ("land", "amphibious")
@@ -210,7 +227,13 @@ def local_step_problem(ctx, unit, a, b, final=True):
     if (
         ut.domain != "air"
         and edge_cost(
-            s, rules, unit, ctx.costs(move_domain(ut)), port_overrides(s, ut, unit.nation), a, b
+            s,
+            rules,
+            unit,
+            ctx.costs(move_domain(ut)),
+            port_overrides(s, ut, unit.nation, rules),
+            a,
+            b,
         )
         <= 0
     ):
@@ -336,7 +359,7 @@ def move_target_problem(ctx: StepContext, unit: Unit, tile: int) -> str | None:
     if (
         ut.domain == "sea"
         and ctx.costs("sea")[tile] <= 0
-        and tile not in port_overrides(state, ut, unit.nation)
+        and tile not in port_overrides(state, ut, unit.nation, rules)
     ):
         return "舰船只能进入水域或本国港口"
     return None
@@ -370,7 +393,7 @@ def resolve(ctx: StepContext) -> None:
             ctx.log.add("move_blocked", unit=ref("unit", unit.id), reason="路线受阻或沿途容量不足")
             continue
         ut = rules.units[unit.type]
-        costs, overrides = ctx.costs(move_domain(ut)), port_overrides(state, ut, unit.nation)
+        costs, overrides = ctx.costs(move_domain(ut)), port_overrides(state, ut, unit.nation, rules)
         budget = min(u.moves_left * MOVE_STEPS + u.road_credit for u in members)
         full = min(unit_moves(state.grid, rules.units[u.type]) * MOVE_STEPS for u in members)
         # 先按移动力走出本回合的一段（可以穿过本方已满的格子），再退回到最后一个能停下的格子

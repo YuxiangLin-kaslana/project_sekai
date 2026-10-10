@@ -28,6 +28,7 @@ from engine.systems import (
     economy,
     encirclement,
     movement,
+    occupation,
     progression,
     stability,
 )
@@ -57,6 +58,7 @@ PIPELINE: tuple[tuple[str, Callable[[StepContext], None]], ...] = (
     ("movement", movement.resolve),
     ("encirclement", encirclement.resolve),
     ("combat", combat.resolve),
+    ("occupation", occupation.resolve),
     ("city_management", city_management.resolve),
     ("economy", economy.resolve),
     ("stability", stability.resolve),
@@ -83,6 +85,7 @@ def step(
     for _, system in PIPELINE:
         if immediate and _ in {
             "rule_ai",
+            "occupation",
             "city_management",
             "economy",
             "stability",

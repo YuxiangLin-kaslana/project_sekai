@@ -84,6 +84,7 @@ residential:
   road_housing: 2            # 有道路连到市中心再 +2 住房
   expand: 2                  # 以自身为中心把城市辖区往外扩 2 格
   allowed_terrain: [plains, grassland, desert, tundra, hills, forest, rainforest, marsh, snow]
+  capturable: true          # 被敌国陆军占领：连同扩出来的土地一起归敌国
   icon: residential
 
 factory:
@@ -126,6 +127,8 @@ port:
   yields: { gold: 3 }
   enables: [ships]           # 有港口的城市才能造舰船
   stacking: { military: 0 }
+  capturable: true
+  shelter: 80                # 停在本国港口里的舰船：受到的伤害 −80%，还能回血
   icon: port
 
 airfield:
@@ -141,6 +144,7 @@ airfield:
   enables: [aircraft]        # 有机场的城市才能造飞机
   stacking: { air: 3 }
   gold_assist: false
+  capturable: true
   icon: airfield
 
 military_base:
@@ -159,6 +163,7 @@ military_base:
     - { target: city, stat: unit_cost, op: mul, value: 70 }      # 造兵省 30% 生产力（也就快 30%）
     - { target: tile, stat: defense, op: add, value: 35 }        # 进驻的部队防守 +35%
   gold_assist: false
+  capturable: true
   icon: base
 
 research:
