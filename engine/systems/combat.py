@@ -649,8 +649,7 @@ def _capture(ctx, city, unit):
     city.production_reason = ""
     s._network_cache = None
     s._settlement_usage = None
-    s._flow_cache.clear()
-    s._edge_cache.clear()
+    s.invalidate_paths()
     s._worked_cache.clear()
     s._yield_cache.clear()
     s.grid.owner[s.grid.city_of == city.id] = unit.nation

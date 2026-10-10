@@ -117,8 +117,7 @@ def eliminate(ctx: StepContext) -> None:
         s.grid.owner[s.grid.owner == nid] = -1
         n.eliminated, n.gold, n.capital, n.ai_enabled = True, 0, None, False
         n.city_management, n.strategy = False, {}
-        s._flow_cache.clear()
-        s._edge_cache.clear()
+        s.invalidate_paths()
         s._network_cache = None
         ctx.log.add("nation_eliminated", nation=ref("nation", nid), name=n.name)
 
@@ -205,8 +204,7 @@ def _independence(ctx: StepContext, city) -> None:
             remaining[0].capital = True
     s._network_cache = None
     s._settlement_usage = None
-    s._flow_cache.clear()
-    s._edge_cache.clear()
+    s.invalidate_paths()
     s._worked_cache.clear()
     s._yield_cache.clear()
     s._supply_cache.clear()

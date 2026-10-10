@@ -168,14 +168,19 @@ class HexGrid:
         return full.index(j)
 
     def distance(self, i: int, j: int) -> int:
+        # 轴向坐标的六角距离 = max(|dr|, (|2dq + dr| + |dr|) / 2)；东西环绕时把 2dq + dr 平移到
+        # 离 0 最近（|2dq + dr| 越小距离越短），一次算完，不用三种平移各算一遍（AI 每回合调几十万次）
         _, _, q, r = _topology(self)
-        dq, dr = q[i] - q[j], r[i] - r[j]
-        best = (abs(dq) + abs(dr) + abs(dq + dr)) // 2
+        dr = r[i] - r[j]
+        x = 2 * (q[i] - q[j]) + dr
         if self.wrap_x:
-            for k in (-1, 1):
-                dqk = dq - k * self.width
-                best = min(best, (abs(dqk) + abs(dr) + abs(dqk + dr)) // 2)
-        return best
+            w = self.width
+            x = (x + w) % (2 * w) - w
+        if dr < 0:
+            dr = -dr
+        if x < 0:
+            x = -x
+        return dr if x <= dr else (x + dr) >> 1
 
     def within(self, i: int, radius: int) -> list[int]:
         """与 i 距离 <= radius 的所有格子（含 i），按距离再按 idx 排序。结果按网格尺寸缓存（只和拓扑有关）。"""

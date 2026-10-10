@@ -232,8 +232,7 @@ def build(ctx, nation, start, end):
     ctx.state._network_cache = None
     ctx.state._yield_cache.clear()
     ctx.state._settlement_usage = None
-    ctx.state._flow_cache.clear()
-    ctx.state._edge_cache.clear()
+    ctx.state.invalidate_paths()
     ctx.log.add(
         "road_built",
         nation=ref("nation", nation),
@@ -345,5 +344,4 @@ def _roads_changed(s) -> None:
     s._network_cache = None
     s._yield_cache.clear()
     s._settlement_usage = None
-    s._flow_cache.clear()
-    s._edge_cache.clear()
+    s.invalidate_paths()

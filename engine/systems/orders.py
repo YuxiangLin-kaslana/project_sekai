@@ -450,6 +450,7 @@ def automatic(ctx: StepContext, order: Order, *, goal: str, reason: str) -> bool
     """规则管理器提交结构化命令，仍经过归属、资源、地形、预算校验。"""
     previous = ctx.automatic
     ctx.automatic = True
+    start = len(ctx.log.events)
     try:
         _apply(ctx, order)
     except Rejected as r:
@@ -474,6 +475,11 @@ def automatic(ctx: StepContext, order: Order, *, goal: str, reason: str) -> bool
         reason=reason,
         order=order.model_dump(mode="json"),
     )
+    if ctx.record is not None:
+        # 按国家并行规划（controllers/parallel.py）：记下执行成功的指令，回主进程按顺序重放；
+        # 这条指令执行时产生的事件在主进程重放时会重新产生，这里标出来不重复带回
+        ctx.record.append((order, goal, reason))
+        ctx.auto_spans.append((start, len(ctx.log.events)))
     if isinstance(order, CityOrder):
         ctx.state.cities[parse_ref(order.city, "city")].production_reason = (
             reason if order.queue else ""

@@ -29,6 +29,9 @@ class StepContext:
     automatic: bool = False  # 国家管理器走与人类相同的指令校验路径
     planned_routes: dict[int, list[int]] = field(default_factory=dict)
     automatic_attacks: set[tuple] = field(default_factory=set)
+    record: list | None = None  # 并行规划时记录执行成功的自动指令（见 orders.automatic）
+    auto_spans: list = field(default_factory=list)
+    only_nation: int | None = None  # 并行规划：这个上下文只替这个国家决策
 
     def costs(self, domain: str) -> np.ndarray:
         """按通行方式的进入消耗（每回合算一次；地形在回合内不变）。"""

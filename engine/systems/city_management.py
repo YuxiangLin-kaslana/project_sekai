@@ -101,111 +101,143 @@ def record_combat(ctx):
 
 
 def resolve(ctx):
-    s, rules = ctx.state, ctx.rules
+    """城市托管：各国在同一份局面上各自安排（可以分到多个进程并行，见 controllers/parallel.py），
+    主进程再按国家编号依次重放各国的指令。"""
+    s = ctx.state
     record_combat(ctx)
-    if not any(n.city_management for n in s.nations.values()):
+    jobs = [
+        {"nation": nid, "kind": "cities", "weight": len(s.nation_cities(nid))}
+        for nid, n in sorted(s.nations.items())
+        if n.city_management
+    ]
+    if not jobs:
         return
-    components = None
-    for nid, n in sorted(s.nations.items()):
-        if not n.city_management:
-            continue
-        cities = s.nation_cities(nid)
-        budget = budget_for(s, rules, n, cities)
-        for c in cities:
-            if not c.managed:
-                continue
-            report, intents = decide_city(s, rules, c, budget)
-            for order, goal, reason in intents:
-                old_queue = list(c.queue)
-                if automatic(ctx, order, goal=goal, reason=reason):
-                    # 统一预留未来维护费；后面的城市不能重复花同一份军备预算。
-                    if order.type == "city_order":
-                        for sign, queue in ((-1, old_queue), (1, order.queue)):
-                            for item in queue:
-                                kind, _, key = item.partition(":")
-                                b = rules.units[key] if kind == "unit" else rules.buildings[key]
-                                budget.committed += sign * b.upkeep
-                                if kind == "unit" and b.category == "military":
-                                    budget.pending_units += sign
-                                    budget.types[key] += sign
-                                    # 战争缺口按兵种扣减，后面的城市不重复补同一缺口
-                                    if b.ranged_strength:
-                                        budget.want_siege = max(0, budget.want_siege - sign)
-                                    elif b.domain == "land":
-                                        budget.want_melee = max(0, budget.want_melee - sign)
-                    elif order.type == "develop_city":
-                        budget.committed += rules.buildings[order.facility].upkeep
-                else:
-                    report.update(status="blocked", reason="安排受阻，详见国家回报")
+    from controllers import parallel
+
+    for result in parallel.run(s, ctx.rules, jobs):
+        merge(ctx, result)
+
+
+def merge(ctx, result):
+    """把一国的城市托管结果并回主局面：重放指令、各城与国家的管理回报、道路计划、战报。"""
+    s = ctx.state
+    n = s.nations.get(result["nation"])
+    if n is None:
+        return
+    for order, goal, reason in result["orders"]:
+        automatic(ctx, order, goal=goal, reason=reason)
+    for cid, report in result["reports"].items():
+        c = s.cities.get(cid)
+        if c is not None and c.nation == n.id:
             c.management = report
-        summary = {
-            "turn": s.turn,
-            "income": budget.income,
-            "net_income": budget.net,
-            "committed_upkeep": budget.committed,
-            "reserve": budget.reserve,
-            "army": budget.army,
-            "military_target": budget.target,
-            "pending_units": budget.pending_units,
-            "road_status": "idle",
-            "road_reason": "暂无新的必要道路",
-        }
-        if (
-            budget.margin <= 0
-            or n.gold <= budget.reserve
-            or n.policy == "wealth"
-            and n.gold < budget.reserve * 3
-        ):
-            summary.update(road_status="waiting", road_reason="先保障国库和维护费，暂缓新道路")
-        else:
-            if components is None:
-                components = road_components(s)
-            if n.road_plan is None:
-                candidates = road_candidates(s, rules, n, cities, components)
-                if candidates:
-                    _, _, a, b, reason = candidates[0]
-                    n.road_plan = {"start": a, "end": b, "reason": reason}
-            if n.road_plan:
-                p = n.road_plan
-                start, end = s.grid.col_row(p["start"]), s.grid.col_row(p["end"])
-                proposal = plan(s, rules, nid, start, end)
-                if "error" in proposal:
-                    n.road_failures[f"{p['start']}:{p['end']}"] = s.turn
-                    summary.update(road_status="blocked", road_reason=proposal["error"])
-                    ctx.log.add(
-                        "directive_report",
-                        nation=ref("nation", nid),
-                        goal="roads",
-                        status="blocked",
-                        reason=proposal["error"],
-                    )
-                    n.road_plan = None
-                elif proposal["cost"] == 0:
-                    n.road_plan = None
-                    summary["road_reason"] = "既有道路已连接目标"
-                elif proposal["cost"] > n.gold - budget.reserve:
-                    summary.update(
-                        road_status="waiting",
-                        road_reason=f"连接道路需要 {proposal['cost']} 金；保留国库后尚不足，继续积累",
-                        road_cost=proposal["cost"],
-                    )
-                elif automatic(
-                    ctx,
-                    BuildRoad(issuer=ref("nation", nid), start=start, to=end),
+    n.management = result["management"]
+    n.road_plan = result["road_plan"]
+    n.road_failures = result["road_failures"]
+    ctx.log.events.extend(result["events"])
+
+
+def nation_turn(ctx, nid):
+    """一国的城市托管（ctx.state 是这个国家专用的一份局面）。"""
+    s, rules = ctx.state, ctx.rules
+    n = s.nations[nid]
+    components = None
+    cities = s.nation_cities(nid)
+    budget = budget_for(s, rules, n, cities)
+    for c in cities:
+        if not c.managed:
+            continue
+        report, intents = decide_city(s, rules, c, budget)
+        for order, goal, reason in intents:
+            old_queue = list(c.queue)
+            if automatic(ctx, order, goal=goal, reason=reason):
+                # 统一预留未来维护费；后面的城市不能重复花同一份军备预算。
+                if order.type == "city_order":
+                    for sign, queue in ((-1, old_queue), (1, order.queue)):
+                        for item in queue:
+                            kind, _, key = item.partition(":")
+                            b = rules.units[key] if kind == "unit" else rules.buildings[key]
+                            budget.committed += sign * b.upkeep
+                            if kind == "unit" and b.category == "military":
+                                budget.pending_units += sign
+                                budget.types[key] += sign
+                                # 战争缺口按兵种扣减，后面的城市不重复补同一缺口
+                                if b.ranged_strength:
+                                    budget.want_siege = max(0, budget.want_siege - sign)
+                                elif b.domain == "land":
+                                    budget.want_melee = max(0, budget.want_melee - sign)
+                elif order.type == "develop_city":
+                    budget.committed += rules.buildings[order.facility].upkeep
+            else:
+                report.update(status="blocked", reason="安排受阻，详见国家回报")
+        c.management = report
+    summary = {
+        "turn": s.turn,
+        "income": budget.income,
+        "net_income": budget.net,
+        "committed_upkeep": budget.committed,
+        "reserve": budget.reserve,
+        "army": budget.army,
+        "military_target": budget.target,
+        "pending_units": budget.pending_units,
+        "road_status": "idle",
+        "road_reason": "暂无新的必要道路",
+    }
+    if (
+        budget.margin <= 0
+        or n.gold <= budget.reserve
+        or n.policy == "wealth"
+        and n.gold < budget.reserve * 3
+    ):
+        summary.update(road_status="waiting", road_reason="先保障国库和维护费，暂缓新道路")
+    else:
+        if components is None:
+            components = road_components(s)
+        if n.road_plan is None:
+            candidates = road_candidates(s, rules, n, cities, components)
+            if candidates:
+                _, _, a, b, reason = candidates[0]
+                n.road_plan = {"start": a, "end": b, "reason": reason}
+        if n.road_plan:
+            p = n.road_plan
+            start, end = s.grid.col_row(p["start"]), s.grid.col_row(p["end"])
+            proposal = plan(s, rules, nid, start, end)
+            if "error" in proposal:
+                n.road_failures[f"{p['start']}:{p['end']}"] = s.turn
+                summary.update(road_status="blocked", road_reason=proposal["error"])
+                ctx.log.add(
+                    "directive_report",
+                    nation=ref("nation", nid),
                     goal="roads",
-                    reason=p["reason"],
-                ):
-                    summary.update(
-                        road_status="completed", road_reason=p["reason"], road_cost=proposal["cost"]
-                    )
-                    ctx.log.add(
-                        "directive_report",
-                        nation=ref("nation", nid),
-                        goal="roads",
-                        status="completed",
-                        reason="道路工程完成",
-                        cost=proposal["cost"],
-                    )
-                    n.road_plan = None
-                    components = None
-        n.management = summary
+                    status="blocked",
+                    reason=proposal["error"],
+                )
+                n.road_plan = None
+            elif proposal["cost"] == 0:
+                n.road_plan = None
+                summary["road_reason"] = "既有道路已连接目标"
+            elif proposal["cost"] > n.gold - budget.reserve:
+                summary.update(
+                    road_status="waiting",
+                    road_reason=f"连接道路需要 {proposal['cost']} 金；保留国库后尚不足，继续积累",
+                    road_cost=proposal["cost"],
+                )
+            elif automatic(
+                ctx,
+                BuildRoad(issuer=ref("nation", nid), start=start, to=end),
+                goal="roads",
+                reason=p["reason"],
+            ):
+                summary.update(
+                    road_status="completed", road_reason=p["reason"], road_cost=proposal["cost"]
+                )
+                ctx.log.add(
+                    "directive_report",
+                    nation=ref("nation", nid),
+                    goal="roads",
+                    status="completed",
+                    reason="道路工程完成",
+                    cost=proposal["cost"],
+                )
+                n.road_plan = None
+                components = None
+    n.management = summary

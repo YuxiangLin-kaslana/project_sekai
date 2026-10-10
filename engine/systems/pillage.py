@@ -68,8 +68,7 @@ def pillage(ctx: StepContext, unit, target: dict) -> None:
         for edge in target["roads"]:
             del s.roads[edge]
         s._network_cache = None
-        s._flow_cache.clear()
-        s._edge_cache.clear()
+        s.invalidate_paths()
     s.nations[unit.nation].gold += target["loot"]
     if city is not None:
         city.stability = max(0, city.stability - rules.pillage.stability)

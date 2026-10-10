@@ -135,8 +135,7 @@ def found_city(
     state._territory_cache = None
     state._network_cache = None
     state._settlement_usage = None
-    state._flow_cache.clear()
-    state._edge_cache.clear()
+    state.invalidate_paths()
     state._worked_cache.clear()
     state._yield_cache.clear()
     if capital:

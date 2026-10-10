@@ -61,7 +61,7 @@ from engine.actions import (
 )
 from engine.hexmap import kernels
 from engine.hexmap.grid import _topology
-from engine.ids import ref
+from engine.ids import parse_ref, ref
 from engine.state import MOVE_STEPS, City, Unit
 from engine.systems import combat, encirclement, movement, naval, stacking
 from engine.systems.cities import (
@@ -78,6 +78,7 @@ from engine.systems.settlement import city_scale, geography, map_scale, site_sco
 ACTOR_BUDGET = 256
 CITY_ATTACK_BUDGET = 128
 FLOW_BUILDS = 48  # 每回合最多新建几张共享距离场（Numba 算得快；不够的单位改用自己的 A*）
+FLOW_MIN = 6  # 按国家分名额时每国至少这么多张
 FLOW_LIMIT = 12000
 FLOW_CACHE_LIMIT = 160
 FIELD_LIST_MAX = 60_000  # 距离场格子数不超过这么多时存成 Python 列表
@@ -439,7 +440,7 @@ def flow(ctx, unit, goal):
     # 缓存冷热只改变耗时；每回合可新建的距离场数量与缓存命中率无关。
     allowed = getattr(ctx, "flow_keys", set())
     if key not in allowed:
-        if len(allowed) >= FLOW_BUILDS:
+        if len(allowed) >= getattr(ctx, "flow_budget", FLOW_BUILDS):
             return {}
         allowed.add(key)
         ctx.flow_keys = allowed
@@ -476,7 +477,7 @@ def _prefetch_flows(ctx, plans):
     todo = []
     for key in wanted:
         if key not in allowed:
-            if len(allowed) >= FLOW_BUILDS:
+            if len(allowed) >= getattr(ctx, "flow_budget", FLOW_BUILDS):
                 break
             allowed.add(key)
         if key not in s._flow_cache:
@@ -3351,6 +3352,7 @@ def _assault_sweep(ctx):
                 ut = rules.units[u.type]
                 if (
                     u.nation == defenders[0].nation
+                    or (ctx.only_nation is not None and u.nation != ctx.only_nation)
                     or not s.nations[u.nation].ai_enabled
                     or not u.managed
                     or ut.domain != "land"
@@ -3397,6 +3399,7 @@ def _capture_sweep(ctx):
                 ut = rules.units[u.type]
                 if (
                     u.nation == city.nation
+                    or (ctx.only_nation is not None and u.nation != ctx.only_nation)
                     or not s.nations[u.nation].ai_enabled
                     or not u.managed
                     or ut.domain != "land"
@@ -3494,77 +3497,156 @@ def _idle(ctx, unit, armies):
 
 
 def resolve(ctx):
+    """国家 AI：各国在回合开始时的同一份局面上各自规划（谁先谁后不影响别国，可以分到多个进程并行，
+    见 controllers/parallel.py），主进程再按国家编号依次重放各国的指令。"""
     s = ctx.state
     if ctx.immediate or not any(n.ai_enabled for n in s.nations.values()):
         return
-    _ai(ctx)
     units = [
         u
         for u in sorted(s.units.values(), key=lambda u: u.id)
         if u.managed and s.nations[u.nation].ai_enabled
     ]
-    # 船上的部队不单独决策（随船走，到了岸边由 _landings 统一下船），但算进国家的兵力
-    riders = [u for u in units if u.layer == "cargo"]
-    actors = [u for u in units if u.layer != "cargo"]
-    if not units:
-        defend_cities(ctx)
-        resolve_attacks(ctx)
-        return
     # 驻守不动、附近没有外国军队的部队这回合不重新决策（每 IDLE_PERIOD 回合轮到一次），省下的预算
-    # 留给真正要动的部队；敌军一靠近当回合就恢复决策
+    # 留给真正要动的部队；敌军一靠近当回合就恢复决策。预算按全局轮转，各国合计 ACTOR_BUDGET 支
+    armies = _armies(ctx)
+    actors = [u for u in units if u.layer != "cargo"]
+    awake = [u for u in actors if not _idle(ctx, u, armies)]
+    start = (s.turn - 1) * ACTOR_BUDGET % max(1, len(awake))
+    active = {awake[(start + i) % len(awake)].id for i in range(min(ACTOR_BUDGET, len(awake)))}
+    awake_ids = {u.id for u in awake}
+    # 城市防御射击同样按全局轮转
+    cities = [
+        c for c in sorted(s.cities.values(), key=lambda c: c.id) if s.nations[c.nation].ai_enabled
+    ]
+    defend = set()
+    if cities:
+        first = (s.turn - 1) * CITY_ATTACK_BUDGET % len(cities)
+        defend = {
+            cities[(first + i) % len(cities)].id
+            for i in range(min(CITY_ATTACK_BUDGET, len(cities)))
+        }
+    # 未轮到的 AI 单位不重新寻路；人工多回合移动照常执行。
+    for u in units:
+        u.destination = None
+    jobs = {}
+    for u in units:
+        job = jobs.setdefault(u.nation, _job(u.nation))
+        job["units"].append(u.id)
+        if u.id in active:
+            job["active"].append(u.id)
+        elif u.id in awake_ids:
+            job["waiting"].append(u.id)
+    for c in cities:
+        if c.id in defend:
+            jobs.setdefault(c.nation, _job(c.nation))["defend"].append(c.id)
+    # 新建距离场的名额（FLOW_BUILDS）按各国这回合要决策的部队数分，每国至少 FLOW_MIN 张
+    total = max(1, len(active))
+    for job in jobs.values():
+        job["flow_budget"] = max(FLOW_MIN, round(FLOW_BUILDS * len(job["active"]) / total))
+    from controllers import parallel
+
+    for result in parallel.run(s, ctx.rules, [jobs[n] for n in sorted(jobs)]):
+        merge(ctx, result)
+
+
+def _job(nid):
+    return {
+        "nation": nid,
+        "units": [],
+        "active": [],
+        "waiting": [],
+        "defend": [],
+        "flow_budget": FLOW_MIN,
+    }
+
+
+def _armies(ctx):
+    """格子 → 那里有军事单位的国家。"""
+    s = ctx.state
     armies = {}
     for (tile, _), ids in s._at.items():
         for i in ids:
             if is_military(ctx.rules, s.units[i]):
                 armies.setdefault(tile, set()).add(s.units[i].nation)
-    awake = [u for u in actors if not _idle(ctx, u, armies)]
-    start = (s.turn - 1) * ACTOR_BUDGET % max(1, len(awake))
-    active = [awake[(start + i) % len(awake)] for i in range(min(ACTOR_BUDGET, len(awake)))]
-    by_nation = {}
-    for u in units:
-        by_nation.setdefault(u.nation, []).append(u)
-    plans, guards = {}, {}
+    return armies
+
+
+def nation_turn(ctx, job):
+    """一个国家这回合的全部 AI 决策（ctx.state 是这个国家专用的一份局面）：国家战略、守军、包围、
+    轮到的部队逐个决策、没轮到的原地开火、船上部队下船、城市防御射击，最后统一提交攻击。"""
+    s = ctx.state
+    nid = job["nation"]
+    ctx.only_nation = nid
+    ctx.flow_budget = job["flow_budget"]
+    _ai(ctx)
+    units = [s.units[i] for i in job["units"] if i in s.units]
+    ashore = [u for u in units if u.layer != "cargo"]
+    riders = [u for u in units if u.layer == "cargo"]
+    guards = _guards(ctx, nid, ashore) if units else {}
     _ai(ctx)["guards"] = guards  # 跨海接运时不去接守军（_troop）
-    encircle = _ai(ctx).setdefault("encircle", {})
-    for nid in sorted(by_nation):
-        owned = by_nation[nid]
-        ashore = [u for u in owned if u.layer != "cargo"]
-        nation_guards = _guards(ctx, nid, ashore)
-        guards.update(nation_guards)
-        plans[nid] = plan_nation(ctx, s.nations[nid], owned)
+    plan = plan_nation(ctx, s.nations[nid], units) if units else {}
+    if units:
         _bodyguards(ctx, nid)
-        encircle.update(plan_encirclements(ctx, nid, ashore, nation_guards))
-    _prefetch_flows(ctx, plans)
+        _ai(ctx).setdefault("encircle", {}).update(plan_encirclements(ctx, nid, ashore, guards))
+        _prefetch_flows(ctx, {nid: plan})
     # 每支部队按所属战线决策（战线的目标、阶段、战线位置）；不在战线上的（守军、边境哨、侦察、
     # 开拓团、闲置舰船）按国家整体的计划
-    base, views = {}, {}
-    for nid, p in plans.items():
-        base[nid] = {
-            "mode": p.get("mode"),
-            "target_city": None,
-            "settlement": p.get("settlement"),
-            "settlements": p.get("settlements"),
-        }
-        for f in p.get("fronts") or []:
-            view = {**base[nid], **f}
-            for uid in [*f.get("units", []), *f.get("corps", []), *f.get("engineers", [])]:
-                views[uid] = view
+    base = {
+        "mode": plan.get("mode"),
+        "target_city": None,
+        "settlement": plan.get("settlement"),
+        "settlements": plan.get("settlements"),
+    }
+    views = {}
+    for f in plan.get("fronts") or []:
+        view = {**base, **f}
+        for uid in [*f.get("units", []), *f.get("corps", []), *f.get("engineers", [])]:
+            views[uid] = view
 
     def view_of(u):
-        return views.get(u.id) or base.get(u.nation) or {}
+        return views.get(u.id) or base
 
-    # 未轮到的 AI 单位不重新寻路；人工多回合移动照常执行。
-    for u in units:
-        u.destination = None
     claimed = set()
-    for u in active:
-        if u.id in s.units and u.moves_left > 0:
+    for uid in job["active"]:
+        u = s.units.get(uid)
+        if u is not None and u.moves_left > 0:
             decide_unit(ctx, u, view_of(u), guards, claimed)
-    _opportunity_fire(ctx, [u for u in awake if u.id not in {a.id for a in active}], armies)
+    _opportunity_fire(ctx, [s.units[i] for i in job["waiting"] if i in s.units], _armies(ctx))
     if riders:
         _landings(ctx, riders, view_of, geography(s, ctx.rules)["land_components"])
-    defend_cities(ctx)
+    defend_cities(ctx, [s.cities[c] for c in job["defend"] if c in s.cities])
     resolve_attacks(ctx)
+
+
+def merge(ctx, result):
+    """把一个国家的规划结果并回主局面：国家战略、单位的 AI 目标、按顺序重放指令（重新校验）、
+    规划时产生的战报。"""
+    from engine.systems.orders import automatic
+
+    s = ctx.state
+    nation = s.nations.get(result["nation"])
+    if nation is None:
+        return
+    if result["strategy"] is not None:
+        nation.strategy = result["strategy"]
+    for order, goal, reason in result["orders"]:
+        uid = getattr(order, "unit", None)
+        route = None
+        if uid is not None and order.type == "move":
+            route = result["routes"].get(parse_ref(uid, "unit"))
+            if route is not None:
+                ctx.planned_routes[parse_ref(uid, "unit")] = route
+        if not automatic(ctx, order, goal=goal, reason=reason) and route is not None:
+            ctx.planned_routes.pop(parse_ref(uid, "unit"), None)
+    for uid, (goal, target) in result["notes"].items():
+        u = s.units.get(uid)
+        if u is not None and u.nation == nation.id:
+            u.ai_goal, u.ai_target = goal, target
+    ctx.log.events.extend(result["events"])
+    captures = result.get("captures")
+    if captures:
+        ctx.captures = getattr(ctx, "captures", set()) | captures
 
 
 def _opportunity_fire(ctx, waiting, armies):
@@ -3595,17 +3677,9 @@ def _opportunity_fire(ctx, waiting, armies):
             )
 
 
-def defend_cities(ctx):
-    """城市防御射击：和部队的攻击意图一起统一提交（远程优先级）。"""
-    s = ctx.state
-    cities = [
-        c for c in sorted(s.cities.values(), key=lambda c: c.id) if s.nations[c.nation].ai_enabled
-    ]
-    if not cities:
-        return
-    start = (s.turn - 1) * CITY_ATTACK_BUDGET % len(cities)
-    for i in range(min(CITY_ATTACK_BUDGET, len(cities))):
-        c = cities[(start + i) % len(cities)]
+def defend_cities(ctx, cities):
+    """城市防御射击：和部队的攻击意图一起统一提交（远程优先级）。cities：这回合轮到的城市。"""
+    for c in cities:
         choice = attack_choice(ctx, c)
         if choice is not None:
             tile, info, target = choice

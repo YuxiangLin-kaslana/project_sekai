@@ -74,6 +74,11 @@ def _warmup() -> None:
 @asynccontextmanager
 async def _lifespan(_: FastAPI):
     # 地图生成的热点用 Numba 编译；启动后在后台先生成一张小图，把编译做掉，第一个真实请求就不用等
+    # 国家 AI 按国家并行规划：服务器里才开工作进程（见 controllers/parallel.py），启动时先把进程拉起来
+    from controllers import parallel
+
+    parallel.enable()
+    threading.Thread(target=parallel.warm, args=(RULES,), daemon=True).start()
     threading.Thread(target=_warmup, daemon=True).start()
     yield
 

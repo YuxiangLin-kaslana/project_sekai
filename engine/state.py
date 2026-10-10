@@ -8,7 +8,10 @@ from __future__ import annotations
 
 import copy
 import hashlib
+import itertools
 import json
+import operator
+import pickle
 from dataclasses import asdict, dataclass, field
 
 import numpy as np
@@ -18,6 +21,9 @@ from engine.rules.schema import Ruleset, UnitType
 
 FULL_HP = 100
 MOVE_STEPS = 3  # 移动力按 1/3 点结算：平地每格 1 点（3 步），道路每段只要 1 步（快 3 倍）
+
+
+_PATH_EPOCHS = itertools.count(1)
 
 
 @dataclass(slots=True)
@@ -133,6 +139,18 @@ class Unit:
     title: str = ""  # 将领统率的军团番号（第 N 军团）
 
 
+_UNIT_FIELDS = operator.attrgetter(*Unit.__slots__)
+
+
+def _copy_unit(u: Unit) -> Unit:
+    v = Unit(*_UNIT_FIELDS(u))
+    if v.task is not None:
+        v.task = copy.copy(v.task)
+    if v.sortie is not None:
+        v.sortie = dict(v.sortie)
+    return v
+
+
 @dataclass(slots=True)
 class GameState:
     turn: int
@@ -158,6 +176,8 @@ class GameState:
     _edge_cache: dict = field(
         default_factory=dict, repr=False
     )  # 六向通行费用表（道路、城市变了就清）
+    # 路网版本：道路、城市一变（invalidate_paths）就加一。AI 工作进程据此判断自己缓存的距离场还能不能用
+    _path_epoch: int = field(default_factory=lambda: next(_PATH_EPOCHS), repr=False)
     _worked_cache: dict = field(default_factory=dict, repr=False)
     _yield_cache: dict = field(default_factory=dict, repr=False)
     _facility_value_cache: dict = field(default_factory=dict, repr=False)
@@ -169,6 +189,14 @@ class GameState:
     _supply_cache: dict = field(default_factory=dict, repr=False)
     # 各国城市数、军队数（士气用，engine/systems/combat.py 的 morale_penalty），按回合缓存
     _power_cache: dict = field(default_factory=dict, repr=False)
+
+    def invalidate_paths(self) -> None:
+        """道路、城市变了：寻路用的距离场、通行费用表作废。换新字典而不是清空——并行规划时各国的
+        局面副本和主局面共用缓存字典，一个副本变了不能把别人的缓存也清掉。路网版本取全局递增的编号，
+        不同分支（各自修了不同的路）不会撞号。"""
+        self._flow_cache = {}
+        self._edge_cache = {}
+        self._path_epoch = next(_PATH_EPOCHS)
 
     def _moved(self) -> None:
         if not self._encircled_lock:
@@ -262,28 +290,29 @@ class GameState:
     # ---- 复制与哈希 ----
 
     def clone(self) -> GameState:
-        # 单位除施工任务外都是标量；道路记录只含标量。避免对大规模单位/道路反复递归复制。
-        units = {uid: copy.copy(u) for uid, u in self.units.items()}
-        for uid, u in units.items():
-            if u.task is not None:
-                u.task = copy.copy(self.units[uid].task)
+        # 单位除施工任务、出击记录外都是标量：按字段直接重建（比 copy.copy 快几倍），
+        # 施工任务和出击记录各拷一份（出击记录会被原地修改，不能和上一回合的局面共用）
+        units = {uid: _copy_unit(u) for uid, u in self.units.items()}
         return GameState(
             turn=self.turn,
             seed=self.seed,
             ruleset_id=self.ruleset_id,
             grid=self.grid.copy(),
-            nations=copy.deepcopy(self.nations),
-            cities=copy.deepcopy(self.cities),
+            # 国家、城市里有嵌套的字典 / 列表（战略、战绩、生产队列……）：用 pickle 往返做深拷贝，
+            # 比 copy.deepcopy 快几倍（并行规划时每国都要拷一份）
+            nations=pickle.loads(pickle.dumps(self.nations, pickle.HIGHEST_PROTOCOL)),
+            cities=pickle.loads(pickle.dumps(self.cities, pickle.HIGHEST_PROTOCOL)),
             units=units,
             next_id=self.next_id,
             facility_xp=dict(self.facility_xp),
             damaged=dict(self.damaged),
             region_xp=dict(self.region_xp),
-            roads={edge: dict(value) for edge, value in self.roads.items()},
+            roads=dict(self.roads),  # 道路记录只整条替换 / 删除，不原地改：浅拷贝就够
             _at={k: list(v) for k, v in self._at.items()},
             _settlement_cache=self._settlement_cache,
             _flow_cache=dict(self._flow_cache),
             _edge_cache=dict(self._edge_cache),
+            _path_epoch=self._path_epoch,
             _facility_value_cache=dict(self._facility_value_cache),
         )
 
