@@ -143,8 +143,24 @@ function legacyCityOf(snap, n) {
   return out;
 }
 
+// 剧本素材：规则数据里 assets.icons 给出的图标（兵种符号、设施图标）替换内置画法；没给的用内置的
+const scenarioIcons = new Map();
+function loadScenarioIcons(rules) {
+  scenarioIcons.clear();
+  for (const [name, url] of Object.entries(rules.assets?.icons ?? {})) {
+    const img = new Image();
+    img.onload = () => { artCache.clear(); artCachePixels = 0; scaledArt.clear(); scaledArtPixels = 0; };
+    img.src = url;
+    scenarioIcons.set(name, img);
+  }
+}
+function scenarioIcon(name) {
+  const img = scenarioIcons.get(name);
+  return img && img.complete && img.naturalWidth ? img : null;
+}
+
 export function setGame(snap, rules, W, H) {
-  if (rules) { G.rules = rules; artCache.clear(); artCachePixels=0; scaledArt.clear(); scaledArtPixels=0; }
+  if (rules) { G.rules = rules; loadScenarioIcons(rules); artCache.clear(); artCachePixels=0; scaledArt.clear(); scaledArtPixels=0; }
   G.snap = snap;
   G.W = W;
   G.H = H;
@@ -1468,6 +1484,13 @@ const ART_KEY = {
 };
 
 export function drawFacilityTile(ctx, icon, x, y, z, c, info, seed) {
+  const custom = scenarioIcon(icon);
+  if (custom) {
+    // 剧本自带的设施图标：画在格子中央
+    const s = z * 1.3;
+    ctx.drawImage(custom, x - s / 2, y - s / 2, s, s);
+    return;
+  }
   const draw = TILE_ART[icon];
   if (!draw) return;
   if (z < (G.snap?.stress ? 28 : LOD.tileArt)) {
@@ -1590,7 +1613,13 @@ function drawCityPlates(ctx, v) {
 // ---------------------------------------------------------------- 兵种符号（北约军标风格）
 
 function drawSymbol(ctx, icon, x, y, w, h, ink) {
-  // 在 (x, y) 为中心、w × h 的符号框里画兵种符号
+  // 在 (x, y) 为中心、w × h 的符号框里画兵种符号；剧本自带了这个图标就用剧本的
+  const custom = scenarioIcon(icon);
+  if (custom) {
+    const s = Math.min(w, h * 1.4);
+    ctx.drawImage(custom, x - s / 2, y - s / 2.8, s, s / 1.4);
+    return;
+  }
   ctx.save();
   ctx.strokeStyle = ink;
   ctx.fillStyle = ink;

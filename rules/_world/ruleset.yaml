@@ -1,0 +1,37 @@
+# 共用的世界：地形类型（terrain.yaml）和世界生成参数。所有剧本都继承它（extends: _world），
+# 地形生成在所有剧本里完全一样；单位、建筑、科技、资源、国家、贴图等由各剧本自己定义。
+# 以下划线开头的目录不是剧本，不出现在开局的剧本列表里。
+name: _world
+version: 0.1.0
+title: 共用世界
+description: 地形与世界生成，供各剧本继承。
+
+worldgen:
+  resource_density: 0.5   # 相同地形/种子下，资源总格数至多旧分布的一半
+  land_ratio: 0.38        # 陆地占全图比例
+  mountain_ratio: 0.07    # 陆地中山脉占比
+  hill_ratio: 0.2         # 陆地中丘陵占比
+  volcanoes: 3            # 每 1000 个陆地格的火山数（俯冲带火山弧、岛弧、热点、裂谷）
+  river_flow: 10000        # 成河所需的流量（上游径流 mm 按角累加）；越小河越多
+  river_lowland: 3.0       # 平地成河阈值最多再提高几倍
+  min_river_length: 3
+  lake_max_size: 8
+  ice_temperature: -15    # 年均温低于它（°C）的海面结冰
+  area_size: 180          # 大区目标格数，缩小到原来的五分之一
+  sea_area_size: 2500     # 海域的目标格数
+  biomes:                 # 世界生成的地形角色 → 本规则集的地形
+    ocean: ocean
+    coast: coast
+    lake: lake
+    ice: ice
+    mountains: mountains
+    hills: hills
+    snow: snow
+    tundra: tundra
+    desert: desert
+    plains: plains
+    grassland: grassland
+    forest: forest
+    rainforest: rainforest
+    marsh: marsh
+    volcano: volcano

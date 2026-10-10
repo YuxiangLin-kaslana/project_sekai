@@ -418,6 +418,9 @@
       <!-- ================= 地形生成 ================= -->
       <section class="tab on" id="tab-gen">
         <form id="form" autocomplete="off">
+          <h3>剧本</h3>
+          <div class="row" title="剧本决定国家发展方式、兵种、科技、建筑和贴图；地形生成所有剧本都一样"><label for="scenario">剧本</label><select id="scenario"><option value="">默认剧本</option></select><span></span></div>
+          <p class="hint" id="scenario-desc"></p>
           <h3>世界参数</h3>
           <div class="row"><label for="seed">种子</label><input type="number" id="seed" min="0" max="2147483647" value="42"><button type="button" id="random" title="随机种子">随机</button></div>
           <div class="row"><label for="size">规模</label>
@@ -679,6 +682,7 @@ $("expand").onclick = () => setCollapsed(false);
 function readForm() {
   const [width, height] = $("size").value.split("x").map(Number);
   return {
+    scenario: $("scenario").value || "",
     seed: Math.max(0, Math.min(2147483647, parseInt($("seed").value || "0", 10))),
     width, height,
     nations: Math.max(1, Math.min(40, parseInt($("nations").value || "8", 10))),
@@ -701,13 +705,28 @@ function syncLabels() {
 
 function setUrl() {
   const p = readForm();
-  const q = new URLSearchParams({ seed: p.seed, size: `${p.width}x${p.height}`, land: p.land, temp: p.temp, rain: p.rain, rough: p.rough, nations: p.nations, mode });
+  const q = new URLSearchParams({ ...(p.scenario ? { scenario: p.scenario } : {}), seed: p.seed, size: `${p.width}x${p.height}`, land: p.land, temp: p.temp, rain: p.rain, rough: p.rough, nations: p.nations, mode });
   if (gameId) q.set("game", gameId);
   history.replaceState(null, "", "?" + q.toString());
 }
 
+// 剧本列表（开局页下拉框）：服务器 rules/ 下的各剧本
+let pendingScenario = null;
+async function loadScenarios() {
+  try {
+    const list = await fetch("/api/scenarios").then((r) => r.json());
+    const sel = $("scenario");
+    sel.innerHTML = list.map((x) => `<option value="${esc(x.id)}"${x.default ? " selected" : ""}>${esc(x.title)}</option>`).join("");
+    if (pendingScenario && list.some((x) => x.id === pendingScenario)) sel.value = pendingScenario;
+    const show = () => { $("scenario-desc").textContent = list.find((x) => x.id === sel.value)?.description ?? ""; };
+    sel.onchange = show; show();
+  } catch {}
+}
+loadScenarios();
+
 function fromUrl() {
   const q = new URLSearchParams(location.search);
+  if (q.has("scenario")) { pendingScenario = q.get("scenario"); const sel = $("scenario"); if (![...sel.options].some((o) => o.value === pendingScenario)) sel.add(new Option(pendingScenario, pendingScenario)); sel.value = pendingScenario; }
   if (q.has("seed")) $("seed").value = parseInt(q.get("seed"), 10) || 0;
   if (q.has("size") && [...$("size").options].some((o) => o.value === q.get("size"))) $("size").value = q.get("size");
   if (q.has("land")) $("land").value = Math.round(parseFloat(q.get("land")) * 100) || 38;
@@ -855,14 +874,14 @@ async function api(path, body) {
 }
 
 async function startGame(p, restoreId) {
-  const params = { seed: p.seed, width: p.width, height: p.height, nations: p.nations, land: +p.land, temp: +p.temp, rain: +p.rain, rough: +p.rough };
+  const params = { scenario: p.scenario, seed: p.seed, width: p.width, height: p.height, nations: p.nations, land: +p.land, temp: +p.temp, rain: +p.rain, rough: +p.rough };
   let snap = null;
   if (restoreId) {
     try {
       snap = await api(`/api/games/${encodeURIComponent(restoreId)}`);
     } catch { snap = null; } // 服务重启后对局没了：重新开一局
     // 地址里的世界参数被改过：对局不属于这张地图，重新开一局
-    if (snap && (Object.entries(params).some(([k, v]) => snap.world[k] !== v) || !!snap.stress !== stressEnabled)) snap = null;
+    if (snap && (Object.entries(params).some(([k, v]) => !(k === "scenario" && !v) && snap.world[k] !== v) || !!snap.stress !== stressEnabled)) snap = null;
   }
   if (!snap) { snap = await api("/api/games", {...params, ...readSettings(), stress_mode: stressEnabled}); autoAiPending = $("set-auto-ai").checked; }
   stressBenchmark = null;

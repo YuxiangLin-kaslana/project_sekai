@@ -1,37 +1,8 @@
 name: alt_ww2
+extends: _world          # 地形与世界生成共用 rules/_world/（所有剧本相同）
 version: 0.1.0
 title: 架空近现代（二战）
-description: 第一个内置规则集。二战式的近现代背景，陆海空军并存；国家与地名均为架空。
-
-worldgen:
-  resource_density: 0.5   # 相同地形/种子下，资源总格数至多旧分布的一半
-  land_ratio: 0.38        # 陆地占全图比例
-  mountain_ratio: 0.07    # 陆地中山脉占比
-  hill_ratio: 0.2         # 陆地中丘陵占比
-  volcanoes: 3            # 每 1000 个陆地格的火山数（俯冲带火山弧、岛弧、热点、裂谷）
-  river_flow: 10000        # 成河所需的流量（上游径流 mm 按角累加）；越小河越多
-  river_lowland: 3.0       # 平地成河阈值最多再提高几倍
-  min_river_length: 3
-  lake_max_size: 8
-  ice_temperature: -15    # 年均温低于它（°C）的海面结冰
-  area_size: 180          # 大区目标格数，缩小到原来的五分之一
-  sea_area_size: 2500     # 海域的目标格数
-  biomes:                 # 世界生成的地形角色 → 本规则集的地形
-    ocean: ocean
-    coast: coast
-    lake: lake
-    ice: ice
-    mountains: mountains
-    hills: hills
-    snow: snow
-    tundra: tundra
-    desert: desert
-    plains: plains
-    grassland: grassland
-    forest: forest
-    rainforest: rainforest
-    marsh: marsh
-    volcano: volcano
+description: 第一个内置剧本。二战式的近现代背景，陆海空军并存；国家与地名均为架空。
 
 cities:
   radius: 2               # 建城时辖区半径（约 19 格）

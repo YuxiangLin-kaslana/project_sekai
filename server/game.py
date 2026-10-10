@@ -58,6 +58,7 @@ class Game:
     events: list[dict] = field(default_factory=list)  # 最近一回合的事件
     lock: threading.RLock = field(default_factory=threading.RLock)
     stress: dict | None = None
+    rules: Ruleset | None = None  # 这局用的剧本
 
 
 class GameStore:
@@ -66,8 +67,12 @@ class GameStore:
         self._games: OrderedDict[str, Game] = OrderedDict()
         self._lock = threading.Lock()
 
-    def create(self, world: dict, state: GameState, stress: dict | None = None) -> Game:
-        game = Game(id=secrets.token_urlsafe(9), world=dict(world), state=state, stress=stress)
+    def create(
+        self, world: dict, state: GameState, stress: dict | None = None, *, rules: Ruleset
+    ) -> Game:
+        game = Game(
+            id=secrets.token_urlsafe(9), world=dict(world), state=state, stress=stress, rules=rules
+        )
         with self._lock:
             self._games[game.id] = game
             dense = [key for key, value in self._games.items() if value.stress]
@@ -122,9 +127,24 @@ def advance(
 # ---------------------------------------------------------------- 快照
 
 
+def scenario_assets(rules: Ruleset) -> dict:
+    """剧本自带的素材（rules/<剧本>/assets/）：icons/<图标名>.svg|png 替换内置的兵种符号、设施图标。"""
+    from engine.rules.loader import RULES_ROOT
+
+    folder = RULES_ROOT / rules.name / "assets" / "icons"
+    icons = {}
+    if folder.is_dir():
+        for f in sorted(folder.iterdir()):
+            if f.suffix.lower() in (".svg", ".png", ".webp"):
+                icons[f.stem] = f"/api/scenarios/{rules.name}/assets/icons/{f.name}"
+    return {"icons": icons}
+
+
 def rules_json(rules: Ruleset) -> dict:
     """前端画单位牌、列生产菜单需要的规则数据。"""
     return {
+        "scenario": {"id": rules.name, "title": rules.title},
+        "assets": scenario_assets(rules),
         "units": {
             u.id: {
                 "name": u.name,

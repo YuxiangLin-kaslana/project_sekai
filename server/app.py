@@ -23,7 +23,7 @@ from pydantic import BaseModel, Field, ValidationError
 
 from engine.actions import parse_orders
 from engine.hexmap.worldgen import WorldGenParams, generate_world
-from engine.rules.loader import load_ruleset
+from engine.rules.loader import list_scenarios, load_ruleset
 from engine.setup import new_game
 from engine.state import MOVE_STEPS
 from engine.step import step
@@ -31,7 +31,19 @@ from server.game import GameStore, advance, rules_json, snapshot
 from server.mapdata import MapLayers, build_layers, chunk_bytes
 
 STATIC = Path(__file__).parent / "static"
-RULES = load_ruleset("alt_ww2")
+# 剧本：rules/ 下每个不以下划线开头的目录（地形与世界生成共用 rules/_world）；每局对局记着自己的剧本
+SCENARIOS = {name: load_ruleset(name) for name in list_scenarios()}
+DEFAULT_SCENARIO = "alt_ww2" if "alt_ww2" in SCENARIOS else next(iter(SCENARIOS))
+RULES = SCENARIOS[DEFAULT_SCENARIO]
+
+
+def _scenario(name: str | None):
+    rules = SCENARIOS.get(name or DEFAULT_SCENARIO)
+    if rules is None:
+        raise HTTPException(404, f"没有这个剧本：{name}")
+    return rules
+
+
 CACHE_SIZE = 6
 CACHE_TILES = 1_200_000  # 缓存里所有地图的格子总数上限（约 3 张 800×460 精细地球）
 LONG_CACHE = {"Cache-Control": "public, max-age=86400"}
@@ -115,6 +127,7 @@ _lock = threading.Lock()
 
 
 def _layers(
+    scenario: str,
     seed: int,
     width: int,
     height: int,
@@ -125,7 +138,9 @@ def _layers(
     rough: float,
 ) -> MapLayers:
     """同参数只生成一次（最近 CACHE_SIZE 张，格子总数不超过 CACHE_TILES）；生成过程串行，避免同一张图被并发重复生成。"""
+    rules = _scenario(scenario)
     key = (
+        rules.id,
         seed,
         width,
         height,
@@ -144,16 +159,16 @@ def _layers(
             height=height,
             seed=seed,
             num_starts=nations,
-            land_ratio=key[4],
-            temperature=key[5],
-            rainfall=key[6],
-            roughness=key[7],
+            land_ratio=key[5],
+            temperature=key[6],
+            rainfall=key[7],
+            roughness=key[8],
         )
-        layers = build_layers(generate_world(params, RULES), RULES)
+        layers = build_layers(generate_world(params, rules), rules)
         _cache[key] = layers
 
         def tiles() -> int:
-            return sum(k[1] * k[2] for k in _cache)
+            return sum(k[2] * k[3] for k in _cache)
 
         while len(_cache) > 1 and (len(_cache) > CACHE_SIZE or tiles() > CACHE_TILES):
             _cache.popitem(last=False)
@@ -170,8 +185,9 @@ def world_meta(
     temp: Temp = 0.0,
     rain: Rain = 0.0,
     rough: Rough = 0.5,
+    scenario: str = "",
 ) -> Response:
-    layers = _layers(seed, width, height, nations, land, temp, rain, rough)
+    layers = _layers(scenario, seed, width, height, nations, land, temp, rain, rough)
     body = json.dumps(layers.meta, ensure_ascii=False, separators=(",", ":"))
     return Response(body, media_type="application/json", headers=LONG_CACHE)
 
@@ -188,8 +204,9 @@ def world_chunk(
     temp: Temp = 0.0,
     rain: Rain = 0.0,
     rough: Rough = 0.5,
+    scenario: str = "",
 ) -> Response:
-    layers = _layers(seed, width, height, nations, land, temp, rain, rough)
+    layers = _layers(scenario, seed, width, height, nations, land, temp, rain, rough)
     try:
         data = chunk_bytes(layers, cx, cy)
     except IndexError as e:
@@ -205,6 +222,7 @@ GAMES = GameStore()
 class GameCreate(BaseModel):
     """建对局：在这张世界（参数同 /api/world）上按起始点摆放国家。"""
 
+    scenario: str = ""  # 剧本（rules/ 下的目录名）；空 = 默认剧本
     seed: int = Field(42, ge=0, le=2_147_483_647)
     width: int = Field(80, ge=20, le=800)
     height: int = Field(50, ge=16, le=460)
@@ -260,24 +278,56 @@ def create_game(body: GameCreate) -> dict:
     tuning = {k: v for k in TUNING_KEYS if (v := p.pop(k)) != 100}
     if (budget := p.pop("ai_budget")) != 128:
         tuning["ai_budget"] = budget
+    rules = _scenario(p["scenario"])
+    p["scenario"] = rules.name
     layers = _layers(**p)
     if dense:
         from engine.stress import populate
 
         started = time.perf_counter()
-        state, stats = populate(layers.world, RULES, tuning=tuning)
+        state, stats = populate(layers.world, rules, tuning=tuning)
         stats["generation_ms"] = round((time.perf_counter() - started) * 1000, 1)
-        game = GAMES.create(p, state, stats)
+        game = GAMES.create(p, state, stats, rules=rules)
     else:
-        game = GAMES.create(p, new_game(layers.world, RULES, tuning))
-    return {"rules": rules_json(RULES), **snapshot(game, RULES)}
+        game = GAMES.create(p, new_game(layers.world, rules, tuning), rules=rules)
+    return {"rules": rules_json(rules), **snapshot(game, rules)}
+
+
+@app.get("/api/scenarios/{name}/assets/{path:path}")
+def scenario_asset(name: str, path: str):
+    """剧本素材文件（只读 rules/<剧本>/assets/ 下的文件）。"""
+    from fastapi.responses import FileResponse
+
+    from engine.rules.loader import RULES_ROOT
+
+    if name not in SCENARIOS:
+        raise HTTPException(404, "没有这个剧本")
+    base = (RULES_ROOT / name / "assets").resolve()
+    target = (base / path).resolve()
+    if not target.is_file() or base not in target.parents:
+        raise HTTPException(404, "没有这个素材")
+    return FileResponse(target, headers=LONG_CACHE)
+
+
+@app.get("/api/scenarios")
+def scenarios() -> list[dict]:
+    """可选的剧本（开局页的下拉框）。"""
+    return [
+        {
+            "id": name,
+            "title": r.title,
+            "description": r.description,
+            "default": name == DEFAULT_SCENARIO,
+        }
+        for name, r in SCENARIOS.items()
+    ]
 
 
 @app.get("/api/games/{game_id}")
 def get_game(game_id: str) -> dict:
     game = _game(game_id)
     with game.lock:
-        return {"rules": rules_json(RULES), **snapshot(game, RULES)}
+        return {"rules": rules_json(game.rules), **snapshot(game, game.rules)}
 
 
 @app.post("/api/games/{game_id}/turn")
@@ -289,8 +339,8 @@ def play_turn(game_id: str, body: TurnSubmit) -> dict:
     except ValidationError as e:
         raise HTTPException(422, e.errors(include_url=False)) from e
     with game.lock:
-        result = advance(game, orders, RULES, autoplay=body.autoplay)
-        return {**snapshot(game, RULES), "rejected": result["rejected"]}
+        result = advance(game, orders, game.rules, autoplay=body.autoplay)
+        return {**snapshot(game, game.rules), "rejected": result["rejected"]}
 
 
 @app.post("/api/games/{game_id}/benchmark")
@@ -300,7 +350,7 @@ def benchmark_game(game_id: str) -> dict:
     with game.lock:
         cpu = time.process_time()
         started = time.perf_counter()
-        result = step(game.state, [], RULES)
+        result = step(game.state, [], game.rules)
         elapsed = time.perf_counter() - started
         out = {
             "turn_ms": round(elapsed * 1000, 1),
@@ -330,8 +380,8 @@ def play_actions(game_id: str, body: TurnSubmit) -> dict:
     with game.lock:
         if body.expected_hash is not None and body.expected_hash != game.state.state_hash():
             raise HTTPException(409, "对局已经变化，请刷新后重新选择")
-        result = advance(game, orders, RULES, autoplay=False, immediate=True)
-        return {**snapshot(game, RULES), "rejected": result["rejected"]}
+        result = advance(game, orders, game.rules, autoplay=False, immediate=True)
+        return {**snapshot(game, game.rules), "rejected": result["rejected"]}
 
 
 @app.get("/api/games/{game_id}/tactics")
@@ -351,30 +401,30 @@ def game_tactics(game_id: str, actor: str, col: int | None = None, row: int | No
         result = {
             "actor": actor,
             "state_hash": s.state_hash(),
-            **tactics(s, RULES, entity),
-            "combat_strength": strength(s, RULES, entity),
-            "ranged_strength": strength(s, RULES, entity, ranged=True)
-            if attack_kind(RULES, entity) != "melee"
+            **tactics(s, game.rules, entity),
+            "combat_strength": strength(s, game.rules, entity),
+            "ranged_strength": strength(s, game.rules, entity, ranged=True)
+            if attack_kind(game.rules, entity) != "melee"
             else None,
         }
         if kind == "unit":
             from engine.systems.pillage import pillage_target
 
-            target, problem = pillage_target(s, RULES, entity)
+            target, problem = pillage_target(s, game.rules, entity)
             result["pillage"] = {"name": target["name"], "loot": target["loot"]} if target else None
             result["pillage_blocked"] = problem
             from engine.systems import roads as road_rules
 
-            if "build_facility" in RULES.units[entity.type].tags:
+            if "build_facility" in game.rules.units[entity.type].tags:
                 # 工兵修路：往哪几个相邻格能修、各要多少金（方向按地图上的方位）
                 import math
 
                 g = s.grid
                 lay = []
                 for b in g.neighbors_of(entity.tile):
-                    if road_rules.lay_problem(s, RULES, entity, b) is None:
+                    if road_rules.lay_problem(s, game.rules, entity, b) is None:
                         kind, price = road_rules.engineering(
-                            s, RULES, entity.nation, entity.tile, b
+                            s, game.rules, entity.nation, entity.tile, b
                         )
                         dq = int(g.axial_q[b]) - int(g.axial_q[entity.tile])
                         dr = int(g.axial_r[b]) - int(g.axial_r[entity.tile])
@@ -391,32 +441,32 @@ def game_tactics(game_id: str, actor: str, col: int | None = None, row: int | No
                             }
                         )
                 result["lay_road"] = lay
-            result["demolish_blocked"] = road_rules.demolish_problem(s, RULES, entity)
+            result["demolish_blocked"] = road_rules.demolish_problem(s, game.rules, entity)
             from engine.systems.naval import embark_target
 
-            if RULES.units[entity.type].domain == "land":
-                ship, problem = embark_target(s, RULES, entity)
-                result["embark"] = RULES.units[ship.type].name if ship else None
+            if game.rules.units[entity.type].domain == "land":
+                ship, problem = embark_target(s, game.rules, entity)
+                result["embark"] = game.rules.units[ship.type].name if ship else None
                 result["embark_blocked"] = problem
             from engine.systems import generals
 
-            if generals.is_general(RULES, entity):
+            if generals.is_general(game.rules, entity):
                 # 将领：军团成员、上限、加成，以及身边还能编入的本国军事单位
                 corps = generals.members(s, entity)
-                room = generals.capacity(RULES, entity.rank) - len(corps)
+                room = generals.capacity(game.rules, entity.rank) - len(corps)
                 nearby = [
                     u
-                    for t in s.grid.within(entity.tile, RULES.generals.radius)
+                    for t in s.grid.within(entity.tile, game.rules.generals.radius)
                     for u in s.units_at(t)
                     if u.nation == entity.nation
                     and u.corps != entity.id
-                    and RULES.units[u.type].category == "military"
+                    and game.rules.units[u.type].category == "military"
                 ]
                 result["corps"] = {
                     "members": [ref("unit", u.id) for u in corps],
-                    "capacity": generals.capacity(RULES, entity.rank),
-                    "bonus": generals.bonus(RULES, entity.rank),
-                    "radius": RULES.generals.radius,
+                    "capacity": generals.capacity(game.rules, entity.rank),
+                    "bonus": generals.bonus(game.rules, entity.rank),
+                    "radius": game.rules.generals.radius,
                     "recruits": [ref("unit", u.id) for u in sorted(nearby, key=lambda u: u.id)][
                         : max(0, room)
                     ],
@@ -428,19 +478,19 @@ def game_tactics(game_id: str, actor: str, col: int | None = None, row: int | No
                     "name": g.name,
                     "rank": g.rank,
                     "title": g.title,
-                    "in_range": generals.commander(s, RULES, entity) is not None,
-                    "bonus": generals.bonus(RULES, g.rank),
+                    "in_range": generals.commander(s, game.rules, entity) is not None,
+                    "bonus": generals.bonus(game.rules, g.rank),
                 }
-            if "found_city" in RULES.units[entity.type].tags:
+            if "found_city" in game.rules.units[entity.type].tags:
                 from engine.systems.cities import found_city_problem
 
                 result["found_city_blocked"] = found_city_problem(
-                    s, RULES, entity.nation, entity.tile
+                    s, game.rules, entity.nation, entity.tile
                 )
-            best, parents = movement_map(s, RULES, entity)
+            best, parents = movement_map(s, game.rules, entity)
             paths = {}
             for tile in sorted(best):
-                if tile == entity.tile or not has_room(s, RULES, entity, tile):
+                if tile == entity.tile or not has_room(s, game.rules, entity, tile):
                     continue  # 路过的已满格子不能停
                 path = [tile]
                 while path[-1] != entity.tile:
@@ -459,13 +509,13 @@ def game_tactics(game_id: str, actor: str, col: int | None = None, row: int | No
                     tile = s.grid.idx(col, row)
                 except IndexError as e:
                     raise HTTPException(422, str(e)) from e
-                result["route"] = route_for(s, RULES, entity, tile)
+                result["route"] = route_for(s, game.rules, entity, tile)
         return result
 
 
 @app.get("/healthz")
 def healthz() -> dict:
-    return {"ok": True, "ruleset": RULES.id, "data": DATA_VERSION}
+    return {"ok": True, "ruleset": RULES.id, "scenarios": list(SCENARIOS), "data": DATA_VERSION}
 
 
 _update = {"checked": 0.0, "manifest": None}
@@ -535,7 +585,7 @@ def city_options(game_id: str, city: str) -> dict:
             for tile in city_tiles(game.state, c):
                 if any(u.task for u in game.state.units_at(tile)):
                     continue
-                buildings = facility_options(game.state, RULES, c.nation, tile)
+                buildings = facility_options(game.state, game.rules, c.nation, tile)
                 if buildings:
                     options.append(
                         {
@@ -560,7 +610,7 @@ def road_preview(game_id: str, body: RoadPreview) -> dict:
     with game.lock:
         return {
             "state_hash": game.state.state_hash(),
-            **plan(game.state, RULES, nation, body.start, body.to),
+            **plan(game.state, game.rules, nation, body.start, body.to),
         }
 
 

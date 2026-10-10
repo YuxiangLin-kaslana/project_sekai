@@ -10,6 +10,7 @@ from engine.rules.loader import RULES_ROOT, RulesetError, load_ruleset
 @pytest.fixture
 def rules_root(tmp_path: Path) -> Path:
     shutil.copytree(RULES_ROOT / "alt_ww2", tmp_path / "alt_ww2")
+    shutil.copytree(RULES_ROOT / "_world", tmp_path / "_world")  # 共用的地形与世界生成
     return tmp_path
 
 
@@ -29,7 +30,7 @@ def test_builtin_ruleset_loads():
 
 def test_id_hash_tracks_content(rules_root: Path):
     before = load_ruleset("alt_ww2", root=rules_root).id
-    _edit(rules_root / "alt_ww2/terrain.yaml", lambda d: d["plains"].update(defense=5))
+    _edit(rules_root / "_world/terrain.yaml", lambda d: d["plains"].update(defense=5))
     assert load_ruleset("alt_ww2", root=rules_root).id != before
 
 
@@ -41,7 +42,7 @@ def test_unknown_terrain_in_resource_is_rejected(rules_root: Path):
 
 def test_biome_must_match_water_flag(rules_root: Path):
     _edit(
-        rules_root / "alt_ww2/ruleset.yaml",
+        rules_root / "_world/ruleset.yaml",
         lambda d: d["worldgen"]["biomes"].update(ocean="plains"),
     )
     with pytest.raises(RulesetError, match="ocean"):
@@ -49,7 +50,7 @@ def test_biome_must_match_water_flag(rules_root: Path):
 
 
 def test_unknown_field_is_rejected(rules_root: Path):
-    _edit(rules_root / "alt_ww2/terrain.yaml", lambda d: d["plains"].update(speed=3))
+    _edit(rules_root / "_world/terrain.yaml", lambda d: d["plains"].update(speed=3))
     with pytest.raises(RulesetError):
         load_ruleset("alt_ww2", root=rules_root)
 
@@ -91,3 +92,10 @@ def test_extends_cycle_is_rejected(rules_root: Path):
         )
     with pytest.raises(RulesetError, match="循环"):
         load_ruleset("a", root=rules_root)
+
+
+def test_scenarios_list_skips_shared_bases():
+    from engine.rules.loader import list_scenarios
+
+    names = list_scenarios()
+    assert "alt_ww2" in names and "_world" not in names

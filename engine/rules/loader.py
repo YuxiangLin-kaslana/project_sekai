@@ -114,3 +114,12 @@ def load_ruleset(name_or_path: str | Path, root: Path = RULES_ROOT) -> Ruleset:
         return Ruleset.model_validate(raw)
     except ValidationError as e:
         raise RulesetError(f"{directory}: 规则集校验失败\n{e}") from e
+
+
+def list_scenarios(root: Path = RULES_ROOT) -> list[str]:
+    """可以开局的剧本：rules/ 下有 ruleset.yaml、名字不以下划线开头的目录（_world 等是共用的基底）。"""
+    return sorted(
+        d.name
+        for d in root.iterdir()
+        if d.is_dir() and not d.name.startswith("_") and (d / "ruleset.yaml").exists()
+    )
