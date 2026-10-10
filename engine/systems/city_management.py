@@ -102,6 +102,9 @@ def resolve(ctx):
     主进程再按国家编号依次重放各国的指令。"""
     s = ctx.state
     record_combat(ctx)
+    from engine.systems.learning import update as learn
+
+    learn(ctx)  # AI 作战学习：记下各类进攻的战果
     jobs = [
         {"nation": nid, "kind": "cities", "weight": len(s.nation_cities(nid))}
         for nid, n in sorted(s.nations.items())

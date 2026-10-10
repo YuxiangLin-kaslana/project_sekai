@@ -72,6 +72,7 @@ from engine.systems.cities import (
     production_problem,
 )
 from engine.systems.diplomacy import at_war
+from engine.systems.learning import bias as learned_bias
 from engine.systems.orders import automatic
 from engine.systems.settlement import city_scale, geography, map_scale, site_score
 
@@ -387,6 +388,11 @@ def attack_choice(ctx, actor, *, only_static=False):
             and (isinstance(target, City) or rules.units[target.type].domain == "land")
         ):
             score += 20  # 舰炮打岸上目标：海军的主要用处
+        if isinstance(actor, Unit):
+            # 作战学习：这类打法（兵种 × 目标 × 正面 / 侧击 / 背击）在本国的实战战绩
+            score += learned_bias(
+                s, rules, actor.nation, actor.type, isinstance(target, City), info.get("modifiers")
+            )
         if score >= 0 or loss == 0:
             best.append((-score, tile, info, target))
     if not best:
