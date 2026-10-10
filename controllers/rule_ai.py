@@ -1907,7 +1907,12 @@ def _assign_engineers(ctx, nation, p, fronts, units, components):
             pick = min(free, key=lambda u: (g.distance(u.tile, target), u.id))
             f["engineers"] = [pick.id]
             taken.add(pick.id)
-    p["engineer_want"] = min(2, sum(1 for f in land_fronts if not f["engineers"]))
+    # 缺工兵的战线数，减去闲着的工兵（在别的陆地上、一时分不过去的也算），总数不超过陆上战线数 + 1：
+    # 每个工兵都永久占一个人口，不能无限造
+    idle = sum(1 for u in engineers if u.id not in taken)
+    missing = sum(1 for f in land_fronts if not f["engineers"])
+    room = len(land_fronts) + 1 - len(engineers)
+    p["engineer_want"] = max(0, min(2, missing - idle, room))
 
 
 def _fits(ctx, u, f, components, home):
@@ -2226,7 +2231,10 @@ def plan_front(ctx, nation, p, f, cities, components):
     spare = max(0, len(melee_units) - need_melee)
     firepower = len(siege_units) + bombers + spare // STAND_IN
     # 远程火力够了、有 MELEE_MIN 支近战（掩护炮兵、城防打空后开进去占领）就出发，围城的近战路上再补
-    ready = firepower >= need_siege and len(melee_units) >= min(need_melee, MELEE_MIN)
+    # 火力远远过剩（需要的 3 倍以上）时没有近战也出发：先把城防轰空，附近的近战（抢城）、贴城的战舰再去占
+    ready = firepower >= need_siege and (
+        len(melee_units) >= min(need_melee, MELEE_MIN) or firepower >= 3 * need_siege
+    )
     # 兵力明显占优（战线上的兵力是目标城防 + 守军的 OVERWHELM 倍以上）就开打，不必凑满编制
     ours = sum(
         combat.strength(s, rules, u)
