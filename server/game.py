@@ -388,6 +388,7 @@ def _snapshot(game: Game, rules: Ruleset) -> dict:
         },
         "id": game.id,
         "world": game.world,
+        "settings": dict(s.grid.tuning),
         "turn": s.turn,
         "state_hash": s.state_hash(),
         "nations": nations,

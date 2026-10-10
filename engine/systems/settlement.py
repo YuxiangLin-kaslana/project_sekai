@@ -30,7 +30,7 @@ CITY_SCALE_EXP = 0.6  # 城市范围随地图放大得慢一些：大地图上�
 def city_scale(g) -> float:
     """城市辖区、城市间距、每区名额用的尺度：地图尺度的 0.6 次方（80×50 是 1，128×80 约 1.3，
     800×460 约 3.9，而地图尺度是 9.6）。"""
-    return map_scale(g) ** CITY_SCALE_EXP
+    return map_scale(g) ** CITY_SCALE_EXP * g.tuning.get("city_size", 100) / 100
 
 
 def geography(state, rules):

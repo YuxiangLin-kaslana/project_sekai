@@ -85,10 +85,11 @@ def _develop(state: GameState, rules: Ruleset, city_id: int, count: int) -> None
         g.facility[t] = rules.facility_index(b)
 
 
-def new_game(world: World, rules: Ruleset) -> GameState:
+def new_game(world: World, rules: Ruleset, tuning: dict | None = None) -> GameState:
     if world.ruleset_id != rules.id:
         raise ValueError(f"规则集不一致：世界用 {world.ruleset_id}，传入 {rules.id}")
     grid = world.grid.copy()
+    grid.tuning = dict(tuning or {})  # 开局设置，见 HexGrid.tuning
     grid.owner[:] = -1
     grid.city_of[:] = -1
     grid.facility[:] = 0
@@ -103,7 +104,7 @@ def new_game(world: World, rules: Ruleset) -> GameState:
             name=tpl.name if tpl else f"国家 {k + 1}",
             color=tpl.color if tpl else _generated_color(k),
             template=tpl.id if tpl else None,
-            gold=rules.start.gold,
+            gold=rules.start.gold * grid.tuning.get("start_gold", 100) // 100,
         )
 
     start = rules.start

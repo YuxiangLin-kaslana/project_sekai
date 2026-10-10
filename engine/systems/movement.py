@@ -85,7 +85,8 @@ def unit_moves(grid, ut) -> int:
         return ut.moves
     from engine.systems.settlement import map_scale
 
-    return max(1, round(ut.moves * map_scale(grid) ** 0.5))
+    pct = grid.tuning.get("sea_speed" if ut.domain == "sea" else "land_speed", 100)
+    return max(1, round(ut.moves * map_scale(grid) ** 0.5 * pct / 100))
 
 
 def edge_table(state, rules, domain: str, nation: int) -> np.ndarray:

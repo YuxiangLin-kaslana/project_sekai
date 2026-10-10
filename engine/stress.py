@@ -36,9 +36,12 @@ def _nearest(g, seeds):
     return closest
 
 
-def populate(world: World, rules: Ruleset, unit_density: float = 0.08) -> tuple[GameState, dict]:
+def populate(
+    world: World, rules: Ruleset, unit_density: float = 0.08, tuning: dict | None = None
+) -> tuple[GameState, dict]:
     rng = np.random.default_rng(np.random.SeedSequence([world.params.seed, 0x53454B41]))
     g = world.grid.copy()
+    g.tuning = dict(tuning or {})
     g.owner[:] = -1
     g.city_of[:] = -1
     g.facility[:] = 0

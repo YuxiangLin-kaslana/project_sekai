@@ -236,7 +236,8 @@ def upkeep(state: GameState, rules: Ruleset, nation: int) -> int:
                 army += ut.upkeep
             else:
                 civil += ut.upkeep
-    total = civil + (army * rules.army.upkeep_percent + 50) // 100
+    pct = rules.army.upkeep_percent * state.grid.tuning.get("upkeep", 100) // 100
+    total = civil + (army * pct + 50) // 100
     for c in state.nation_cities(nation):
         total += sum(rules.buildings[b].upkeep for b in c.buildings)
     g = state.grid

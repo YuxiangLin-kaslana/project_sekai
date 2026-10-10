@@ -101,6 +101,9 @@ class HexGrid:
     neighbors: np.ndarray = field(repr=False)  # int32[N, 6]
     axial_q: np.ndarray = field(repr=False)  # int64   每格的轴向坐标 q（只读）
     axial_r: np.ndarray = field(repr=False)  # int64   每格的轴向坐标 r（只读）
+    # 开局设置（百分比，100 = 默认）：land_speed / sea_speed 移速，city_size 城市范围，upkeep 军队维护费。
+    # 只在开局时写一次，之后只读，复制时共享
+    tuning: dict = field(default_factory=dict, repr=False)
 
     @classmethod
     def empty(cls, width: int, height: int, wrap_x: bool = True) -> HexGrid:
@@ -262,4 +265,5 @@ class HexGrid:
             neighbors=self.neighbors,  # 只读，可共享
             axial_q=self.axial_q,
             axial_r=self.axial_r,
+            tuning=self.tuning,
         )

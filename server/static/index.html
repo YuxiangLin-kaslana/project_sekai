@@ -43,8 +43,8 @@
   .brand span { color: var(--muted); font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .icon-btn { width: 30px; height: 30px; padding: 0; display: grid; place-items: center; font-size: 15px; flex: none; }
 
-  .tabs { display: flex; gap: 2px; padding: 8px 10px 0; border-bottom: 1px solid var(--line); }
-  .tabs button { flex: 1; border: 0; border-radius: 7px 7px 0 0; background: none; color: var(--muted); padding: 8px 4px 9px; font-size: 13px; border-bottom: 2px solid transparent; }
+  .tabs { display: grid; grid-template-columns: repeat(4, 1fr); gap: 2px; padding: 6px 10px 0; border-bottom: 1px solid var(--line); }
+  .tabs button { border: 0; border-radius: 7px 7px 0 0; background: none; color: var(--muted); padding: 6px 2px 7px; font-size: 13px; border-bottom: 2px solid transparent; white-space: nowrap; }
   .tabs button:hover { color: var(--text); background: rgba(255, 255, 255, 0.04); }
   .tabs button.on { color: var(--gold); border-bottom-color: var(--gold); font-weight: 600; }
   .sb-body { flex: 1; overflow: auto; padding: 4px 16px 20px; overscroll-behavior: contain; }
@@ -81,6 +81,7 @@
   .row input[type=number], .row select { width: 100%; }
   .row input[type=range] { width: 100%; padding: 0; accent-color: var(--gold); background: none; border: 0; }
   .row output { min-width: 40px; text-align: right; color: var(--text); font-variant-numeric: tabular-nums; font-size: 12px; }
+  .row output.changed { color: var(--gold); font-weight: 600; }
   .row.two { grid-template-columns: 52px 1fr auto; }
   .gen-btn { width: 100%; padding: 8px; margin-top: 8px; font-size: 14px; }
 
@@ -127,11 +128,38 @@
   .log .bad { color: var(--bad); }
 
   /* 对局页：回合栏吸顶；各区块可折叠（折叠状态记在浏览器里） */
-  #tab-game .turnbar {
-    position: sticky; top: 0; z-index: 2; margin: 0 -16px; padding: 10px 16px;
-    border-radius: 0; border-width: 0 0 1px; background: var(--side);
+  #turnbar {
+    margin: 0; padding: 8px 16px; border-radius: 0; border-width: 0 0 1px; background: var(--side);
     box-shadow: 0 8px 12px -10px rgba(0, 0, 0, 0.7);
   }
+  .app.collapsed #turnbar { display: none; }
+  .list-head { display: flex; align-items: baseline; gap: 8px; }
+  .list-head small { margin-left: auto; color: var(--muted); font-size: 11px; }
+  .seg.small { grid-template-columns: repeat(auto-fit, minmax(48px, 1fr)); margin-top: 10px; }
+  .seg.small button, .chips.small .chip { font-size: 12px; padding: 4px 6px; }
+  .filter-row { display: flex; gap: 6px; margin-top: 12px; }
+  .filter-row select { flex: 1; min-width: 0; }
+  .chips.small { margin-top: 8px; }
+  .list { margin-top: 8px; }
+  .list-row { display: grid; grid-template-columns: 10px 1fr auto; gap: 8px; align-items: center; padding: 6px 6px; border-radius: 6px; cursor: pointer; font-size: 13px; }
+  .list-row:hover, .list-row:focus-visible { background: rgba(255, 255, 255, 0.05); outline: none; }
+  .list-row .sub { display: block; color: var(--muted); font-size: 11px; }
+  .list-row .right { text-align: right; color: var(--muted); font-size: 11px; font-variant-numeric: tabular-nums; }
+  .list-row .right b { display: block; color: var(--text); font-size: 13px; font-weight: 500; }
+  .list-row .warn { color: #e5c78f; }
+  .list-row .bad { color: var(--bad); }
+  .list-group { margin-top: 10px; font-size: 12px; font-weight: 600; color: var(--gold); letter-spacing: 0.04em; display: flex; }
+  .list-group small { margin-left: auto; color: var(--muted); font-weight: 400; }
+  .list-more { width: 100%; margin-top: 6px; font-size: 12px; }
+  .army-summary { display: grid; grid-template-columns: repeat(3, 1fr); gap: 6px; margin-top: 10px; }
+  .army-summary div { padding: 6px 8px; border: 1px solid var(--line); border-radius: 8px; background: var(--side-2); font-size: 11px; color: var(--muted); }
+  .army-summary b { display: block; font: 600 16px/1.3 Georgia, serif; color: var(--text); }
+  .game-brief { display: grid; grid-template-columns: repeat(2, 1fr); gap: 6px; margin-top: 10px; }
+  .game-brief:empty { display: none; }
+  .game-brief button { text-align: left; padding: 7px 9px; font-size: 11px; color: var(--muted); }
+  .game-brief b { display: block; font-size: 14px; color: var(--text); font-weight: 600; }
+  .log.full { max-height: none; margin-top: 8px; }
+  .check-row { display: flex; align-items: center; gap: 8px; margin: 8px 0; font-size: 13px; color: var(--text); }
   .turnbar .quick { padding: 5px 9px; font-size: 12px; color: var(--muted); }
   .turnbar .quick[aria-pressed=true] { color: var(--gold); border-color: rgba(216, 184, 120, 0.65); background: rgba(216, 184, 120, 0.1); }
   details.fold { margin-top: 10px; border-top: 1px solid var(--line); }
@@ -348,15 +376,32 @@
       <button type="button" class="icon-btn" id="collapse" title="收起侧边栏（H）">‹</button>
     </header>
     <nav class="tabs" id="tabs">
-      <button type="button" data-tab="gen" class="on">地形生成</button>
-      <button type="button" data-tab="view">显示</button>
-      <button type="button" data-tab="game">对局<span class="tab-badge" id="tab-turn"></span></button>
+      <button type="button" data-tab="gen" class="on" title="新开一局：世界参数与规则设置（1）">开局</button>
+      <button type="button" data-tab="game" title="回合、选中的单位 / 城市、自动模拟（2）">总览<span class="tab-badge" id="tab-turn"></span></button>
+      <button type="button" data-tab="nations" title="各国国力对比（3）">国家<span class="tab-badge" id="badge-nations"></span></button>
+      <button type="button" data-tab="cities" title="城市列表、城市管理与道路（4）">城市<span class="tab-badge" id="badge-cities"></span></button>
+      <button type="button" data-tab="army" title="军队编制：陆军 / 海军 / 空军 / 将领 / 平民（5）">军队<span class="tab-badge" id="badge-army"></span></button>
+      <button type="button" data-tab="log" title="本回合战报，按类别筛选（6）">战报<span class="tab-badge" id="badge-log"></span></button>
+      <button type="button" data-tab="view" title="地图模式与图层（7）">地图</button>
+      <button type="button" data-tab="wiki" title="兵牌图例与本局规则（8）">百科</button>
     </nav>
     <div class="rail" id="rail">
       <button type="button" id="expand" title="展开侧边栏（H）">›</button>
-      <button type="button" data-open="gen" title="地形生成">地</button>
-      <button type="button" data-open="view" title="显示">显</button>
-      <button type="button" data-open="game" title="对局">局</button>
+      <button type="button" data-open="gen" title="开局">开</button>
+      <button type="button" data-open="game" title="总览">总</button>
+      <button type="button" data-open="nations" title="国家">国</button>
+      <button type="button" data-open="cities" title="城市">城</button>
+      <button type="button" data-open="army" title="军队">军</button>
+      <button type="button" data-open="log" title="战报">报</button>
+      <button type="button" data-open="view" title="地图">图</button>
+      <button type="button" data-open="wiki" title="百科">典</button>
+    </div>
+    <!-- 回合栏：所有分类都看得到 -->
+    <div class="turnbar" id="turnbar">
+      <div class="t" id="turn">—<small>回合</small></div>
+      <div class="grow" id="turn-note">没有对局</div>
+      <button type="button" class="quick" id="auto-sim-quick" aria-pressed="false" title="开启 / 暂停自动模拟" disabled>自动</button>
+      <button type="button" class="primary" id="next-turn" disabled>下一回合</button>
     </div>
 
     <div class="sb-body">
@@ -380,6 +425,14 @@
           <div class="row" title="全球降雨：干旱 ↔ 湿润"><label for="rain">降雨</label><input type="range" id="rain" min="-100" max="100" step="5" value="0"><output id="rain-val">正常</output></div>
           <div class="row" title="地形复杂度：平缓（海岸平滑、山少）↔ 崎岖（海岸破碎、山多）"><label for="rough">地形</label><input type="range" id="rough" min="0" max="100" step="5" value="50"><output id="rough-val">适中</output></div>
           <div class="row"><label for="nations">国家</label><input type="number" id="nations" min="1" max="40" value="8"><span></span></div>
+          <h3>规则设置</h3>
+          <div class="row" title="陆军每回合移动力（地图越大本来就越快，这里再乘一个倍数）"><label for="set-land_speed">陆军移速</label><input type="range" id="set-land_speed" data-setting="land_speed" min="50" max="300" step="10" value="100"><output></output></div>
+          <div class="row" title="舰船每回合移动力倍数"><label for="set-sea_speed">海军移速</label><input type="range" id="set-sea_speed" data-setting="sea_speed" min="50" max="300" step="10" value="100"><output></output></div>
+          <div class="row" title="城市辖区、城市间距、每片承载区能放几座城：调小 → 城市更小更密"><label for="set-city_size">城市范围</label><input type="range" id="set-city_size" data-setting="city_size" min="50" max="200" step="10" value="100"><output></output></div>
+          <div class="row" title="每个国家开局的国库"><label for="set-start_gold">起始金币</label><input type="range" id="set-start_gold" data-setting="start_gold" min="0" max="1000" step="25" value="100"><output></output></div>
+          <div class="row" title="军事单位维护费倍数：越高越养不起大军"><label for="set-upkeep">军费</label><input type="range" id="set-upkeep" data-setting="upkeep" min="0" max="300" step="10" value="100"><output></output></div>
+          <label class="check-row"><input type="checkbox" id="set-auto-ai"> 开局后全部国家交给 AI</label>
+          <div class="btn-row"><button type="button" id="settings-reset">恢复默认设置</button></div>
           <button type="submit" class="primary gen-btn" id="go">生成世界</button>
           <p class="hint">生成后自动开一局：每个起始点一个国家，首都 + 开局部队。</p>
           <button type="button" id="stress-toggle" class="stress-toggle" aria-pressed="false"><span class="switch-track"><i></i></span><span><b>全陆地随机生成</b><small>默认关闭 · 城市 / 国家 / 军队 / 建筑 / 道路</small></span></button>
@@ -436,23 +489,9 @@
 
       <!-- ================= 对局 ================= -->
       <section class="tab" id="tab-game">
-        <!-- 回合栏吸顶：滚动时“下一回合”和自动模拟开关一直在 -->
-        <div class="turnbar">
-          <div class="t" id="turn">—<small>回合</small></div>
-          <div class="grow" id="turn-note">没有对局</div>
-          <button type="button" class="quick" id="auto-sim-quick" aria-pressed="false" title="开启 / 暂停自动模拟" disabled>自动</button>
-          <button type="button" class="primary" id="next-turn" disabled>下一回合</button>
-        </div>
         <!-- 选中的单位 / 城市放最上面：点地图后第一眼就能看到 -->
         <div id="selection"><p class="hint">点选军事单位查看移动与攻击范围；点击单位列表可切换部队。城市也可以发动防御射击。</p></div>
-        <details class="fold" data-fold="log" open>
-          <summary>战报<small id="log-summary"></small></summary>
-          <div class="log" id="log"></div>
-        </details>
-        <details class="fold" data-fold="nations" open>
-          <summary>国家<small id="nation-count"></small></summary>
-          <div id="nation-list"></div>
-        </details>
+        <div class="game-brief" id="game-brief"></div>
         <details class="fold" data-fold="sim">
           <summary>自动模拟与国家 AI<small id="sim-summary"></small></summary>
           <div class="management-panel" id="simulation-panel" hidden>
@@ -461,16 +500,73 @@
             <div class="btn-row"><button type="button" id="ai-all">全部国家交给 AI</button><button type="button" id="ai-stop">全部国家暂停 AI</button></div>
           </div>
         </details>
+        <div id="stress-report" class="stress-report" hidden></div>
+      </section>
+
+      <!-- ================= 国家 ================= -->
+      <section class="tab" id="tab-nations">
+        <div class="list-head"><h3>国家</h3><small id="nation-count"></small></div>
+        <div class="seg small" id="nation-sort">
+          <button type="button" data-sort="cities" class="on">城市</button>
+          <button type="button" data-sort="units">军队</button>
+          <button type="button" data-sort="gold">金钱</button>
+          <button type="button" data-sort="pop">人口</button>
+        </div>
+        <div id="nation-list"></div>
+        <p class="hint">点一个国家：地图跳到它的首都，城市 / 军队分类也切到这个国家。</p>
+      </section>
+
+      <!-- ================= 城市 ================= -->
+      <section class="tab" id="tab-cities">
+        <div class="filter-row"><select id="city-nation" aria-label="国家"></select><select id="city-sort" aria-label="排序"><option value="population">按人口</option><option value="stability">按稳定度（低在前）</option><option value="production">按生产力</option><option value="name">按名字</option></select></div>
+        <div class="chips small" id="city-flags">
+          <button type="button" class="chip" data-flag="unrest">只看动荡</button>
+          <button type="button" class="chip" data-flag="hungry">只看缺粮</button>
+          <button type="button" class="chip" data-flag="attacked">只看受威胁</button>
+        </div>
+        <div class="list" id="city-list"></div>
         <details class="fold" data-fold="manage">
           <summary>城市管理与道路<small id="manage-summary"></small></summary>
           <div id="city-management-panel" class="management-panel" hidden></div>
           <button type="button" id="plan-road" class="plan-road">规划道路与桥梁</button>
         </details>
-        <div id="stress-report" class="stress-report" hidden></div>
-        <details class="fold" data-fold="legend">
-          <summary>兵牌图例</summary>
-          <div class="legend-units" id="unit-legend"></div>
-        </details>
+      </section>
+
+      <!-- ================= 军队 ================= -->
+      <section class="tab" id="tab-army">
+        <div class="filter-row"><select id="army-nation" aria-label="国家"></select></div>
+        <div class="seg small" id="army-kind">
+          <button type="button" data-kind="all" class="on">全部</button>
+          <button type="button" data-kind="land">陆军</button>
+          <button type="button" data-kind="sea">海军</button>
+          <button type="button" data-kind="air">空军</button>
+          <button type="button" data-kind="general">将领</button>
+          <button type="button" data-kind="civilian">平民</button>
+        </div>
+        <div class="army-summary" id="army-summary"></div>
+        <div class="list" id="army-list"></div>
+      </section>
+
+      <!-- ================= 战报 ================= -->
+      <section class="tab" id="tab-log">
+        <div class="list-head"><h3>战报</h3><small id="log-summary"></small></div>
+        <div class="seg small" id="log-filter">
+          <button type="button" data-kind="all" class="on">全部</button>
+          <button type="button" data-kind="war">战斗</button>
+          <button type="button" data-kind="alert">警报</button>
+          <button type="button" data-kind="build">建设</button>
+          <button type="button" data-kind="other">其他</button>
+        </div>
+        <div class="log full" id="log"></div>
+      </section>
+
+      <!-- ================= 百科 ================= -->
+      <section class="tab" id="tab-wiki">
+        <h3>本局规则</h3>
+        <div class="kv" id="rule-summary"><span class="hint">开局后显示</span></div>
+        <h3>兵牌图例</h3>
+        <div class="legend-units" id="unit-legend"></div>
+        <p class="hint">完整规则见仓库里的《游戏规则.md》。快捷键：<kbd>1</kbd>–<kbd>8</kbd> 切换分类，<kbd>H</kbd> 收起侧边栏。</p>
       </section>
     </div>
     <div class="resizer" id="resizer" title="拖动调整侧边栏大小"></div>
@@ -513,6 +609,7 @@ function openTab(name) {
   for (const b of document.querySelectorAll("#tabs [data-tab]")) b.classList.toggle("on", b.dataset.tab === name);
   for (const s of document.querySelectorAll(".tab")) s.classList.toggle("on", s.id === "tab-" + name);
   store.set("tab", name);
+  if (game.G.snap) renderVisibleTab();
 }
 function setCollapsed(on) {
   app.classList.toggle("collapsed", on);
@@ -658,7 +755,34 @@ async function generate({ restoreGame = null } = {}) {
     renderGame();
   }
   $("loading").classList.add("hide");
+  if (autoAiPending) { autoAiPending = false; await setAllAI(true); }
 }
+
+// ================================================================ 开局规则设置（记在浏览器里，随建局请求发给服务器）
+
+let autoAiPending = false;
+const SETTING_INPUTS = [...document.querySelectorAll("[data-setting]")];
+function readSettings() {
+  return Object.fromEntries(SETTING_INPUTS.map((el) => [el.dataset.setting, parseInt(el.value, 10)]));
+}
+function syncSettings() {
+  for (const el of SETTING_INPUTS) {
+    const v = parseInt(el.value, 10);
+    el.nextElementSibling.textContent = v + "%";
+    el.nextElementSibling.classList.toggle("changed", v !== 100);
+  }
+  store.set("settings", JSON.stringify({ ...readSettings(), auto_ai: $("set-auto-ai").checked }));
+}
+(function loadSettings() {
+  let saved = {};
+  try { saved = JSON.parse(store.get("settings") || "{}") ?? {}; } catch {}
+  for (const el of SETTING_INPUTS) if (Number.isFinite(saved[el.dataset.setting])) el.value = saved[el.dataset.setting];
+  $("set-auto-ai").checked = !!saved.auto_ai;
+  for (const el of SETTING_INPUTS) el.addEventListener("input", syncSettings);
+  $("set-auto-ai").addEventListener("change", syncSettings);
+  $("settings-reset").onclick = () => { for (const el of SETTING_INPUTS) el.value = 100; $("set-auto-ai").checked = false; syncSettings(); };
+  syncSettings();
+})();
 
 // ================================================================ 显示
 
@@ -718,7 +842,7 @@ async function startGame(p, restoreId) {
     // 地址里的世界参数被改过：对局不属于这张地图，重新开一局
     if (snap && (Object.entries(params).some(([k, v]) => snap.world[k] !== v) || !!snap.stress !== stressEnabled)) snap = null;
   }
-  if (!snap) snap = await api("/api/games", {...params, stress_mode: stressEnabled});
+  if (!snap) { snap = await api("/api/games", {...params, ...readSettings(), stress_mode: stressEnabled}); autoAiPending = $("set-auto-ai").checked; }
   stressBenchmark = null;
   game.setGame(snap, snap.rules, world.width, world.height);
   gameId = snap.id;
@@ -755,7 +879,7 @@ const EVENT_KIND = {
   level_up: 'build', gold_assist: 'build',
 };
 function logHtml() {
-  return logLines.map((l) => `<div class="${l.bad ? 'bad' : l.head ? 'head' : l.kind ?? ''}">${esc(l.text)}</div>`).join('');
+  return logLines.filter((l) => logKind === "all" || l.head || l.bad || (logKind === "other" ? !l.kind : l.kind === logKind)).map((l) => `<div class="${l.bad ? 'bad' : l.head ? 'head' : l.kind ?? ''}">${esc(l.text)}</div>`).join('');
 }
 const KIND_TEXT = { melee: "近战交锋", air: "航空打击", ranged: "远程攻击", anti_air: "防空射击", torpedo: "鱼雷攻击", capture: "俘虏平民" };
 const EVENT_TEXT = {
@@ -1152,6 +1276,177 @@ function renderSelection() {
   el.appendChild(head);
 }
 
+// 分类页共用：国家下拉框（全部 + 各存续国家），选中项跨刷新保留
+function fillNationSelect(sel, withAll = true) {
+  const keep = sel.value;
+  const alive = game.G.snap.nations.filter((n) => n.cities || n.units);
+  sel.innerHTML = (withAll ? '<option value="">全部国家</option>' : '') + alive.map((n) => `<option value="${esc(n.id)}">${esc(n.name)}</option>`).join('');
+  if ([...sel.options].some((o) => o.value === keep)) sel.value = keep;
+}
+function focusNation(id) {
+  for (const k of ["city-nation", "army-nation"]) { const sel = $(k); if ([...sel.options].some((o) => o.value === id)) sel.value = id; }
+}
+function jumpTo(tile, zoom = 32) {
+  const col = tile % world.width, row = (tile / world.width) | 0;
+  centerOn(col, row, zoom);
+  game.select(tile);
+  renderGame();
+  redraw();
+}
+const LIST_LIMIT = 150; // 长列表先显示这么多条，点“显示更多”再展开
+const listLimits = {};
+function moreButton(key, total, rerender) {
+  const shown = listLimits[key] ?? LIST_LIMIT;
+  if (total <= shown) return null;
+  const b = document.createElement("button");
+  b.type = "button"; b.className = "list-more";
+  b.textContent = `还有 ${fmt(total - shown)} 条 · 显示更多`;
+  b.onclick = () => { listLimits[key] = shown + LIST_LIMIT * 2; rerender(); };
+  return b;
+}
+
+let citySort = "population";
+const cityFlags = new Set();
+function renderCityList() {
+  const el = $("city-list");
+  el.innerHTML = "";
+  const snap = game.G.snap;
+  if (!snap) { el.innerHTML = '<p class="hint">开局后显示</p>'; return; }
+  fillNationSelect($("city-nation"));
+  const nation = $("city-nation").value;
+  const unrestLine = game.G.rules.stability_unrest ?? 30;
+  let cities = snap.cities.filter((c) => !nation || c.nation === nation);
+  if (cityFlags.has("unrest")) cities = cities.filter((c) => (c.stability ?? 100) < unrestLine);
+  if (cityFlags.has("hungry")) cities = cities.filter((c) => (c.food_balance ?? 0) < 0);
+  if (cityFlags.has("attacked")) cities = cities.filter((c) => c.hp < c.max_hp || c.stability_lack?.some((r) => /攻击|压境|包围/.test(r)));
+  const key = {
+    population: (a, b) => b.population - a.population || (b.capital - a.capital),
+    stability: (a, b) => (a.stability ?? 100) - (b.stability ?? 100),
+    production: (a, b) => (b.yields?.production ?? 0) - (a.yields?.production ?? 0),
+    name: (a, b) => a.name.localeCompare(b.name, "zh-CN"),
+  }[citySort];
+  cities.sort(key);
+  const limit = listLimits.city ?? LIST_LIMIT;
+  for (const c of cities.slice(0, limit)) {
+    const n = game.nationOf(c.nation);
+    const row = document.createElement("div");
+    row.className = "list-row"; row.tabIndex = 0;
+    const item = c.queue?.[0];
+    const [qk, qid] = item ? item.split(":") : [];
+    const making = item ? ((qk === "unit" ? game.G.rules.units[qid] : game.G.rules.buildings[qid])?.name ?? '') : '';
+    const st = c.stability ?? 100;
+    row.innerHTML = `<i class="nation-dot" style="background:${n?.color}"></i><div>${c.capital ? '★ ' : ''}${esc(c.name)}<span class="sub">${esc(n?.name ?? '')} · 人口 ${c.population} · 产 ${c.yields?.production ?? 0}${making ? ' · 在造' + esc(making) : ''}</span></div>` +
+      `<div class="right"><b class="${st < unrestLine ? 'bad' : st < 60 ? 'warn' : ''}">${st}</b>稳定${(c.food_balance ?? 0) < 0 ? '<br><span class="bad">缺粮</span>' : ''}</div>`;
+    row.title = c.stability_lack?.length ? '稳定度下降：' + c.stability_lack.join('、') : '';
+    const go = () => { managementNation = c.nation; jumpTo(c.tile, 32); };
+    row.onclick = go; row.onkeydown = (e) => { if (e.key === "Enter") go(); };
+    el.appendChild(row);
+  }
+  if (!cities.length) el.innerHTML = '<p class="hint">没有符合条件的城市</p>';
+  const more = moreButton("city", cities.length, renderCityList);
+  if (more) el.appendChild(more);
+}
+
+let armyKind = "all";
+const ARMY_GROUPS = [
+  ["general", "将领与军团"], ["land", "陆军"], ["sea", "海军"], ["air", "空军"], ["civilian", "平民"],
+];
+function armyGroup(u) {
+  const def = game.unitDef(u);
+  if (u.rank) return "general";
+  if (def.category === "civilian") return "civilian";
+  return def.domain === "sea" ? "sea" : def.domain === "air" ? "air" : "land";
+}
+function renderArmyList() {
+  const el = $("army-list"), sum = $("army-summary");
+  el.innerHTML = ""; sum.innerHTML = "";
+  const snap = game.G.snap;
+  if (!snap) { el.innerHTML = '<p class="hint">开局后显示</p>'; return; }
+  fillNationSelect($("army-nation"));
+  const nation = $("army-nation").value;
+  const units = snap.units.filter((u) => !nation || u.nation === nation);
+  const groups = new Map(ARMY_GROUPS.map(([k]) => [k, []]));
+  for (const u of units) groups.get(armyGroup(u)).push(u);
+  const hurt = units.filter((u) => u.hp < (u.max_hp ?? 100) * 0.5).length;
+  sum.innerHTML = [["陆军", groups.get("land").length], ["海军", groups.get("sea").length], ["空军", groups.get("air").length],
+    ["将领", groups.get("general").length], ["平民", groups.get("civilian").length], ["重伤", hurt]]
+    .map(([label, v]) => `<div><b>${fmt(v)}</b>${label}</div>`).join("");
+  for (const [key, label] of ARMY_GROUPS) {
+    if (armyKind !== "all" && armyKind !== key) continue;
+    const list = groups.get(key);
+    if (!list.length) continue;
+    // 按兵种汇总：每个兵种一行，点开看具体部队
+    const byType = new Map();
+    for (const u of list) { if (!byType.has(u.type)) byType.set(u.type, []); byType.get(u.type).push(u); }
+    el.insertAdjacentHTML("beforeend", `<div class="list-group">${label}<small>${fmt(list.length)} 支</small></div>`);
+    for (const [type, us] of [...byType].sort((a, b) => b[1].length - a[1].length)) {
+      const det = document.createElement("details");
+      det.className = "fold army-type";
+      const open = armyOpen.has(key + type);
+      det.open = open;
+      const avg = Math.round(100 * us.reduce((s, u) => s + u.hp / (u.max_hp ?? 100), 0) / us.length);
+      det.innerHTML = `<summary>${esc(unitName(type))}<small>${fmt(us.length)} 支 · 平均生命 ${avg}%</small></summary>`;
+      det.addEventListener("toggle", () => { if (det.open) { armyOpen.add(key + type); fill(); } else armyOpen.delete(key + type); });
+      const fill = () => {
+        for (const old of det.querySelectorAll(":scope > :not(summary)")) old.remove();
+        const lim = listLimits["army" + type] ?? 40;
+        for (const u of us.slice().sort((a, b) => a.hp / (a.max_hp ?? 100) - b.hp / (b.max_hp ?? 100)).slice(0, lim)) {
+          const row = unitRow(u);
+          row.classList.add("selectable");
+          row.onclick = () => { jumpTo(u.tile, 40); chooseActor(u.id); openTab("game"); };
+          det.appendChild(row);
+        }
+        if (us.length > lim) {
+          const b = document.createElement("button");
+          b.type = "button"; b.className = "list-more"; b.textContent = `还有 ${fmt(us.length - lim)} 支 · 显示更多`;
+          b.onclick = () => { listLimits["army" + type] = lim + 120; fill(); };
+          det.appendChild(b);
+        }
+      };
+      if (open) fill();
+      el.appendChild(det);
+    }
+  }
+  if (!units.length) el.innerHTML = '<p class="hint">没有部队</p>';
+}
+const armyOpen = new Set();
+
+let logKind = "all";
+function renderBrief() {
+  const el = $("game-brief");
+  const snap = game.G.snap;
+  if (!snap) { el.innerHTML = ""; return; }
+  const unrestLine = game.G.rules.stability_unrest ?? 30;
+  const alive = snap.nations.filter((n) => n.cities).length;
+  const unrest = snap.cities.filter((c) => (c.stability ?? 100) < unrestLine).length;
+  const wars = logLines.filter((l) => l.kind === "war").length;
+  const items = [
+    ["nations", "存续国家", `${alive} / ${snap.nations.length}`],
+    ["cities", "城市", fmt(snap.cities.length) + (unrest ? ` · 动荡 ${unrest}` : "")],
+    ["army", "部队", fmt(snap.units.length)],
+    ["log", "本回合战报", wars ? `${logLines.length - 1} 条 · 战斗 ${wars}` : `${Math.max(0, logLines.length - 1)} 条`],
+  ];
+  el.innerHTML = items.map(([tab, label, v]) => `<button type="button" data-goto="${tab}"><b>${esc(v)}</b>${label}</button>`).join("");
+  for (const b of el.querySelectorAll("[data-goto]")) b.onclick = () => openTab(b.dataset.goto);
+}
+function renderRuleSummary() {
+  const snap = game.G.snap, el = $("rule-summary");
+  if (!snap) { el.innerHTML = '<span class="hint">开局后显示</span>'; return; }
+  const st = snap.settings ?? {};
+  const pct = (k) => (st[k] ?? 100) + "%";
+  const scale = Math.max(1, Math.sqrt(world.width * world.height / 4000));
+  const land = Math.sqrt(scale) * (st.land_speed ?? 100) / 100, sea = Math.sqrt(scale) * (st.sea_speed ?? 100) / 100;
+  const city = Math.pow(scale, 0.6) * (st.city_size ?? 100) / 100;
+  el.innerHTML = [
+    ["地图", `${world.width}×${world.height} · 尺度 ${scale.toFixed(2)}`],
+    ["陆军移速", `${pct("land_speed")} · 实际 ×${land.toFixed(2)}`],
+    ["海军移速", `${pct("sea_speed")} · 实际 ×${sea.toFixed(2)}`],
+    ["城市范围", `${pct("city_size")} · 实际 ×${city.toFixed(2)}`],
+    ["起始金币", pct("start_gold")],
+    ["军费", pct("upkeep")],
+  ].map(([k, v]) => `<span>${k}</span><b>${esc(v)}</b>`).join("");
+}
+
 function renderNations() {
   const el = $("nation-list");
   el.innerHTML = "";
@@ -1168,7 +1463,10 @@ function renderNations() {
   $("nation-count").textContent = `${alive} 国存续 / 共 ${game.G.snap.nations.length}`;
   // 已灭亡的国家（独立后又被吞并的叛军会越积越多）收成一行，点开再看
   const gone = game.G.snap.nations.filter((n) => !n.cities && !n.units);
-  const shown = showGoneNations ? game.G.snap.nations : game.G.snap.nations.filter((n) => n.cities || n.units);
+  const pop = new Map();
+  for (const c of game.G.snap.cities) pop.set(c.nation, (pop.get(c.nation) ?? 0) + c.population);
+  const shown = (showGoneNations ? game.G.snap.nations : game.G.snap.nations.filter((n) => n.cities || n.units)).slice()
+    .sort((a, b) => ({ cities: b.cities - a.cities, units: b.units - a.units, gold: b.gold - a.gold, pop: (pop.get(b.id) ?? 0) - (pop.get(a.id) ?? 0) })[nationSort] || 0);
   for (const n of shown) {
     const row = document.createElement("div");
     row.className = "nation-row" + (n.id === managementNation ? " active" : "") + (n.cities ? "" : " gone");
@@ -1177,6 +1475,7 @@ function renderNations() {
     row.innerHTML = `<i class="nation-dot" style="background:${n.color}"></i><div>${esc(n.name)}${restless ? `<em class="unrest">动荡 ${restless}</em>` : ""}${n.ai_enabled ? '<em class="ai">AI</em>' : ""}</div><span>${fmt(n.gold)}</span><span>${n.cities}</span><span>${n.units}</span>`;
     row.addEventListener("click", () => {
       managementNation=n.id;
+      focusNation(n.id);
       const cap = game.G.cities.get(n.capital);
       if (!cap) return;
       centerOn(cap.col, cap.row, 14);
@@ -1195,6 +1494,7 @@ function renderNations() {
   }
 }
 let showGoneNations = false;
+let nationSort = "cities";
 
 function renderGame() {
   const snap = game.G.snap;
@@ -1218,10 +1518,22 @@ function renderGame() {
   $("auto-sim-quick").setAttribute("aria-pressed", String(autoSim));
   $("auto-sim-quick").textContent = autoSim ? "暂停" : "自动";
   $("sim-summary").textContent = !snap ? "" : autoSim ? "自动模拟中" : `${snap.nations.filter((n) => n.ai_enabled).length} 国启用 AI`;
+  $("badge-nations").textContent = snap ? snap.nations.filter((n) => n.cities).length : "";
+  $("badge-cities").textContent = snap ? snap.cities.length : "";
+  $("badge-army").textContent = snap ? (snap.units.length >= 10000 ? Math.round(snap.units.length / 1000) + "k" : snap.units.length) : "";
+  $("badge-log").textContent = logLines.length > 1 ? logLines.length - 1 : "";
   renderSelection();
-  renderNations();
-  renderCityManagement();
+  renderBrief();
   renderStressReport();
+  // 看不见的分类不画（大局里城市 / 军队列表上千条）；切过去时再画
+  renderVisibleTab();
+}
+function renderVisibleTab() {
+  const tab = document.querySelector(".tab.on")?.id.slice(4);
+  if (tab === "nations") renderNations();
+  if (tab === "cities") { renderCityList(); renderCityManagement(); }
+  if (tab === "army") renderArmyList();
+  if (tab === "wiki") renderRuleSummary();
 }
 
 // ================================================================ 战术指挥
@@ -1635,8 +1947,28 @@ $("plan-road").onclick = ()=>{
   openTab('game');
 };
 
+const TAB_ORDER = [...document.querySelectorAll("#tabs [data-tab]")].map((b) => b.dataset.tab);
+function segment(id, attr, set) {
+  for (const b of document.querySelectorAll(`#${id} [data-${attr}]`)) b.addEventListener("click", () => {
+    for (const o of document.querySelectorAll(`#${id} [data-${attr}]`)) o.classList.toggle("on", o === b);
+    set(b.dataset[attr]);
+  });
+}
+segment("nation-sort", "sort", (v) => { nationSort = v; renderNations(); });
+segment("army-kind", "kind", (v) => { armyKind = v; renderArmyList(); });
+segment("log-filter", "kind", (v) => { logKind = v; $("log").innerHTML = logHtml(); });
+$("city-sort").onchange = () => { citySort = $("city-sort").value; renderCityList(); };
+$("city-nation").onchange = () => { listLimits.city = LIST_LIMIT; renderCityList(); };
+$("army-nation").onchange = renderArmyList;
+for (const chip of document.querySelectorAll("#city-flags [data-flag]")) chip.addEventListener("click", () => {
+  chip.classList.toggle("on");
+  if (chip.classList.contains("on")) cityFlags.add(chip.dataset.flag); else cityFlags.delete(chip.dataset.flag);
+  renderCityList();
+});
+
 window.addEventListener("keydown", (e) => {
   if (e.ctrlKey || e.metaKey || e.altKey || e.target.closest("input, select, textarea")) return;
+  if (/^[1-8]$/.test(e.key)) { if (app.classList.contains("collapsed")) setCollapsed(false); openTab(TAB_ORDER[+e.key - 1]); }
   if (e.key === "Escape") cancelCommand();
   if (e.key === "h" || e.key === "H") setCollapsed(!app.classList.contains("collapsed"));
 });
@@ -1644,7 +1976,7 @@ window.addEventListener("keydown", (e) => {
 // 起始点图层默认关（开局后首都就在起始点上）
 setLayer("starts", false);
 if (store.get("collapsed") === "1") setCollapsed(true);
-openTab(store.get("tab") || "gen");
+openTab(TAB_ORDER.includes(store.get("tab")) ? store.get("tab") : "gen");
 const initial = fromUrl();
 applyMode(initial.mode);
 generate({ restoreGame: initial.game });

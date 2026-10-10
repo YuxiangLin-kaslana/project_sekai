@@ -209,6 +209,15 @@ class GameCreate(BaseModel):
     rain: float = Field(0.0, ge=-1.0, le=1.0)
     rough: float = Field(0.5, ge=0.0, le=1.0)
     stress_mode: bool = False
+    # 开局设置（百分比，100 = 默认），见 engine/hexmap/grid.py 的 HexGrid.tuning
+    land_speed: int = Field(100, ge=50, le=300)
+    sea_speed: int = Field(100, ge=50, le=300)
+    city_size: int = Field(100, ge=50, le=200)
+    start_gold: int = Field(100, ge=0, le=1000)
+    upkeep: int = Field(100, ge=0, le=300)
+
+
+TUNING_KEYS = ("land_speed", "sea_speed", "city_size", "start_gold", "upkeep")
 
 
 class TurnSubmit(BaseModel):
@@ -228,16 +237,17 @@ def _game(game_id: str):
 def create_game(body: GameCreate) -> dict:
     p = body.model_dump()
     dense = p.pop("stress_mode")
+    tuning = {k: v for k in TUNING_KEYS if (v := p.pop(k)) != 100}
     layers = _layers(**p)
     if dense:
         from engine.stress import populate
 
         started = time.perf_counter()
-        state, stats = populate(layers.world, RULES)
+        state, stats = populate(layers.world, RULES, tuning=tuning)
         stats["generation_ms"] = round((time.perf_counter() - started) * 1000, 1)
         game = GAMES.create(p, state, stats)
     else:
-        game = GAMES.create(p, new_game(layers.world, RULES))
+        game = GAMES.create(p, new_game(layers.world, RULES, tuning))
     return {"rules": rules_json(RULES), **snapshot(game, RULES)}
 
 
