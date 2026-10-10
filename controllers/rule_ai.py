@@ -1010,20 +1010,25 @@ def choose_target(
     return c, why
 
 
-def sea_reach(ctx, nid):
+def sea_reach(ctx, nid, comp=None):
     """本国舰船从港口出发走海路到每片海面要几步（numpy 数组，走不到为 UNREACHED），每回合每国算一次。
-    起点是本国沿海城市旁边的海面，只走舰船能走的水域（内湖里的港口出不了海）。"""
+    起点是本国沿海城市旁边的海面，只走舰船能走的水域（内湖里的港口出不了海）。
+    comp：只从这块陆地上的港口出发（部队在哪块陆地上，就从哪里的港口上船）。"""
     cache = _ai(ctx).setdefault("sea_reach", {})
-    if nid not in cache:
+    key = (nid, comp)
+    if key not in cache:
         s, g = ctx.state, ctx.state.grid
         water = np.ascontiguousarray(ctx.costs("sea") > 0)
         sources = np.zeros(g.size, dtype=np.bool_)
+        land = geography(s, ctx.rules)["land_components"] if comp is not None else None
         for c in s.nation_cities(nid):
+            if land is not None and int(land[c.tile]) != comp:
+                continue
             for n in g.neighbors_of(c.tile):
                 sources[n] = water[n]
         limit = round(SEA_REACH * map_scale(g))
-        cache[nid] = kernels.masked_bfs(sources, water, g.neighbors, limit)
-    return cache[nid]
+        cache[key] = kernels.masked_bfs(sources, water, g.neighbors, limit)
+    return cache[key]
 
 
 def _near_land(ctx, tile, depth):
@@ -1042,12 +1047,12 @@ def _near_land(ctx, tile, depth):
     return steps
 
 
-def landing_site(ctx, nid, target, dist=None):
+def landing_site(ctx, nid, target, dist=None, comp=None):
     """跨海进攻 target 的登陆场：目标城 BEACH_RANGE 步以内、靠海、没有外国单位的陆地格（滩头），
     和滩头旁边本国舰船开得到的海面（锚地）。挑海路近、离城 3 步左右（城市射程外）、好守的地方；
     出发港是海路离锚地最近的本国沿海城市。找不到返回 None。"""
     s, rules, g = ctx.state, ctx.rules, ctx.state.grid
-    dist = sea_reach(ctx, nid) if dist is None else dist
+    dist = sea_reach(ctx, nid, comp) if dist is None else dist
     nbr = _topology(g)[0]
     best = None
     reach = round(BEACH_RANGE * map_scale(g))
@@ -1146,19 +1151,24 @@ def _overseas_targets(ctx, nation, cities, overseas, current):
     return out
 
 
-def _sea_op(ctx, nation, p, target):
-    """跨海作战的登陆场：原来的还能用（滩头没被占、出发港还是本国的）就沿用，否则重选。"""
+def _sea_op(ctx, nation, p, target, comp=None):
+    """跨海作战的登陆场：原来的还能用（滩头没被占、出发港还是本国的、出发港和部队在同一块陆地上）
+    就沿用，否则重选。comp：部队主力所在的陆地，出发港选在这块陆地上（部队走得到）。"""
     s = ctx.state
     old = p.get("sea")
+    land = geography(s, ctx.rules)["land_components"]
     if (
         old
         and old.get("target") == target.id
         and s.city_at(old["beach"]) is None
         and not any(u.nation != nation.id for u in s.units_at(old["beach"], "surface"))
         and getattr(s.cities.get(old["port_city"]), "nation", None) == nation.id
+        and (comp is None or int(land[old["port"]]) == comp)
     ):
         return dict(old)
-    return landing_site(ctx, nation.id, target)
+    return landing_site(ctx, nation.id, target, comp=comp) or (
+        landing_site(ctx, nation.id, target) if comp is not None else None
+    )
 
 
 def _sea_comps(ctx, tile):
@@ -2168,7 +2178,14 @@ def plan_front(ctx, nation, p, f, cities, components):
     )
     stranded = len(field) - here
     if components[target.tile] not in home or (stranded >= FERRY_LOCAL and stranded > 2 * here):
-        op = _sea_op(ctx, nation, f, target)
+        # 出发港选在部队主力所在的陆地上（部队走得到港口）
+        spread = Counter(
+            int(components[u.tile])
+            for u in field
+            if u.layer != "cargo" and components[u.tile] != components[target.tile]
+        )
+        comp = max(spread, key=lambda k: (spread[k], -k)) if spread else None
+        op = _sea_op(ctx, nation, f, target, comp)
         if op is None:
             # 海外目标找不到登陆场（海岸被敌军站满、出发港丢了）：暂时不打
             skip[str(target.id)] = s.turn + 3 * PLAN_PERIOD
@@ -2221,8 +2238,8 @@ def plan_front(ctx, nation, p, f, cities, components):
             lift=sum(
                 rules.units[u.type].carry
                 for u in military
-                if rules.units[u.type].carry and _afloat(ctx, u, op)
-            ),
+                if rules.units[u.type].carry and _afloat(ctx, u, op) and u.corps is None
+            ),  # 编进舰队的战舰归舰队调度，不算运力
             need=need,
             lift_need=need,
             aboard=sum(1 for u in field_land if u.layer == "cargo"),
