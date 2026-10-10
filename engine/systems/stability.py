@@ -22,7 +22,7 @@ from collections import Counter, deque
 from engine.ids import parse_ref, ref
 from engine.state import Nation
 from engine.systems import encirclement
-from engine.systems.cities import FOOD_PER_POP, city_yields, population_upkeep
+from engine.systems.cities import FOOD_PER_POP, city_yields, heads, population_upkeep
 from engine.systems.context import StepContext
 from engine.systems.diplomacy import at_war
 from engine.systems.settlement import city_scale
@@ -41,11 +41,11 @@ def shortages(state, rules, city) -> list[str]:
     """本城现在缺什么（food / gold / production），按固定顺序。"""
     y = city_yields(state, rules, city)
     out = []
-    if y.food < city.population * FOOD_PER_POP:
+    if y.food < heads(state, city) * FOOD_PER_POP:
         out.append("food")
     if state.nations[city.nation].gold < 0:
         out.append("gold")
-    if y.production <= 0 and population_upkeep(rules, city) > 0:
+    if y.production <= 0 and population_upkeep(rules, city, state) > 0:
         out.append("production")
     return out
 

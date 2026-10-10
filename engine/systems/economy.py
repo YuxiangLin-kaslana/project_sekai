@@ -16,6 +16,7 @@ from engine.systems.cities import (
     city_stat,
     city_yields,
     food_to_grow,
+    heads,
     item_cost,
     pop_cap,
     production_problem,
@@ -127,6 +128,7 @@ def _produce(ctx: StepContext, city: City) -> None:
                 hp=ut.hp,
                 moves_left=0,
                 xp=city_stat(rules, city, "unit_experience"),
+                home=city.id,  # 这座城供养它：照样吃这座城的粮食、耗生产力
             )
         )
         ctx.log.add(
@@ -176,7 +178,8 @@ def _produce(ctx: StepContext, city: City) -> None:
 
 def _grow(ctx: StepContext, city: City, food: int) -> None:
     """粮食结余攒进存粮，够了就长一口人——但要有空余住房（人口上限 = 住房 − 被征召的人口）。"""
-    city.food += food - FOOD_PER_POP * city.population
+    # 吃饭的人头：城里的人口 + 这座城供养的单位（单位从人口里抽出来，照样吃饭）
+    city.food += food - FOOD_PER_POP * heads(ctx.state, city)
     storage = 100
     for bid in city.buildings:
         for m in ctx.rules.buildings[bid].modifiers:
@@ -195,6 +198,29 @@ def _grow(ctx: StepContext, city: City, food: int) -> None:
         if city.population > 1:
             city.population -= 1
             ctx.log.add("famine", city=ref("city", city.id), population=city.population)
+        else:
+            # 城里只剩 1 人还在挨饿：养不起的部队解散一支（先散平民、再散最弱的）
+            from engine.systems.cities import supported_units
+
+            units = supported_units(ctx.state, city)
+            if units:
+                u = min(
+                    units,
+                    key=lambda u: (
+                        ctx.rules.units[u.type].category == "military",
+                        u.hp,
+                        -u.id,
+                    ),
+                )
+                ctx.log.add(
+                    "unit_destroyed",
+                    unit=ref("unit", u.id),
+                    tile=u.tile,
+                    unit_type=u.type,
+                    nation=ref("nation", u.nation),
+                    reason="缺粮解散",
+                )
+                ctx.state.remove_unit(u.id)
 
 
 def _buy(ctx: StepContext, city: City, wanted: int, project: str, apply) -> None:

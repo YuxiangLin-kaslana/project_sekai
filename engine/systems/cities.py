@@ -421,7 +421,7 @@ def assign_jobs(
         # 先满足口粮和少量增长余粮
         food, target = (
             base.food,
-            FOOD_PER_POP * city.population + growth_surplus(city.population, rules),
+            FOOD_PER_POP * heads(state, city) + growth_surplus(city.population, rules),
         )
         for i in sorted(range(len(slots)), key=lambda i: (-slots[i][1].food, slots[i][0])):
             if food >= target or left <= 0 or not slots[i][1].food:
@@ -441,7 +441,7 @@ def assign_jobs(
                     take(i)
         # 再保证生产力够付维持人口的消耗（多留 2 点）
         prod = base.production + sum(slots[i][1].production for i in range(len(slots)) if taken[i])
-        need = population_upkeep(rules, city) + 2
+        need = population_upkeep(rules, city, state) + 2
         for i in sorted(range(len(slots)), key=lambda i: (-slots[i][1].production, slots[i][0])):
             if prod >= need or left <= 0 or not slots[i][1].production:
                 break
@@ -512,6 +512,7 @@ def city_yields(
         city.id,
         city.nation,
         city.population,
+        supported(state, city),
         tuple(city.buildings),
         level(city.xp, "city"),
         city.managed,
@@ -561,7 +562,7 @@ def city_yields(
         gold=total.gold * _city_multiplier(rules, city, "gold") // 100 + net["trade_gold"],
         science=total.science * _city_multiplier(rules, city, "science") // 100,
     )
-    upkeep = population_upkeep(rules, city)
+    upkeep = population_upkeep(rules, city, state)  # 城里的人口 + 供养的单位
     if upkeep:
         result = result.model_copy(update={"production": max(0, result.production - upkeep)})
     if state._economy_cache_enabled and planned is None:
@@ -569,9 +570,50 @@ def city_yields(
     return result
 
 
-def population_upkeep(rules: Ruleset, city: City) -> int:
-    """维持人口每回合消耗的生产力（每人 production_per_pop%，二战剧本 0.5）。"""
-    return city.population * rules.cities.production_per_pop // 100
+def supported(state: GameState, city: City) -> int:
+    """这座城供养着几个活着的单位：单位是从人口里抽出来的，照样吃粮、耗生产力（住房另算，见 drafted）。
+    供养城丢了：由本国首都供养。开局就有的单位（没有供养城）不用供养。"""
+    key = (len(state.units), state.next_id, tuple((c.id, c.nation) for c in state.cities.values()))
+    if state._support is None or state._support[0] != key:
+        count: dict[int, int] = {}
+        for u in state.units.values():
+            if u.home is None:
+                continue
+            home = state.cities.get(u.home)
+            if home is None or home.nation != u.nation:
+                capital = state.nations[u.nation].capital if u.nation in state.nations else None
+                home = state.cities.get(capital) if capital is not None else None
+            if home is not None:
+                count[home.id] = count.get(home.id, 0) + 1
+        state._support = (key, count)
+    return state._support[1].get(city.id, 0)
+
+
+def supported_units(state: GameState, city: City) -> list:
+    """这座城供养的活着的单位（供养城丢了的由首都供养）。"""
+    out = []
+    capital = state.nations[city.nation].capital
+    for u in state.units.values():
+        if u.home is None or u.nation != city.nation:
+            continue
+        home = state.cities.get(u.home)
+        if home is None or home.nation != u.nation:
+            home = state.cities.get(capital) if capital is not None else None
+        if home is not None and home.id == city.id:
+            out.append(u)
+    return sorted(out, key=lambda u: u.id)
+
+
+def heads(state: GameState, city: City) -> int:
+    """要吃饭、要耗生产力的人头：城里的人口 + 这座城供养的单位。"""
+    return city.population + supported(state, city)
+
+
+def population_upkeep(rules: Ruleset, city: City, state: GameState | None = None) -> int:
+    """维持人口每回合消耗的生产力（每人 production_per_pop%，二战剧本 0.5）；
+    给了 state 时连供养的单位一起算。"""
+    n = heads(state, city) if state is not None else city.population
+    return n * rules.cities.production_per_pop // 100
 
 
 def facility_active(state: GameState, rules: Ruleset, tile: int) -> bool:

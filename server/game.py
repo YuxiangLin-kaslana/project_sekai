@@ -38,9 +38,11 @@ from engine.systems.cities import (
     city_yields,
     connected,
     food_to_grow,
+    heads,
     housing,
     nation_resources,
     pop_cap,
+    supported,
 )
 from engine.systems.combat import (
     attack_range,
@@ -382,6 +384,7 @@ def _snapshot(game: Game, rules: Ruleset) -> dict:
                 "housing": housing(s, rules, c),
                 "pop_cap": pop_cap(s, rules, c),
                 "drafted": c.drafted,
+                "supported": supported(s, c),  # 这座城供养的活着的单位（照样吃粮、耗生产力）
                 "jobs": {str(t): n for t, n in sorted(jobs.items())},
                 "linked": sorted(
                     t
@@ -400,7 +403,7 @@ def _snapshot(game: Game, rules: Ruleset) -> dict:
                 "food": c.food,
                 "food_to_grow": food_to_grow(c.population, rules),
                 "yields": outputs[cid].model_dump(),
-                "food_balance": outputs[cid].food - c.population * FOOD_PER_POP,
+                "food_balance": outputs[cid].food - heads(s, c) * FOOD_PER_POP,
                 "network": city_network(s, rules, c),
                 "environment": city_environment(s, rules, c),
                 "managed": c.managed,

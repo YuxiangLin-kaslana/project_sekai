@@ -68,6 +68,7 @@ from engine.systems.cities import (
     city_yields,
     coastal,
     found_city_problem,
+    heads,
     nation_resources,
     production_problem,
 )
@@ -1691,7 +1692,7 @@ def plan_nation(ctx, nation, units):
                 and not production_problem(s, rules, c, "unit:settler")
             ):
                 # 软性打分：生产快、余粮多的城市优先；带走人口后剩得越少越不划算
-                score = y.production + 2 * (y.food - c.population * FOOD_PER_POP) - 30 / left
+                score = y.production + 2 * (y.food - heads(s, c) * FOOD_PER_POP) - 30 / left
                 choices.append((-score, c.id, c))
         if choices:
             c = min(choices, key=lambda x: x[:2])[2]
@@ -2454,7 +2455,8 @@ def _navy_plan(ctx, nation, p, units, cities):
         and int(components[u.tile]) not in settled.get(u.nation, ())
     )
     # 沿海敌舰最多按港口数算：不跟着邻国的船越造越多（军备竞赛）
-    want = 3 * len(shore) + 4 * len(across) + min(raiders, len(ports)) + (invaders + 1) // 2
+    # 每条跨海战线 2 艘护航（运兵交给运输船），每个靠海的战线目标 3 艘炮击
+    want = 3 * len(shore) + 2 * len(across) + min(raiders, len(ports)) + (invaders + 1) // 2
     if p.get("posture") == "战争":
         want += len(ports) // 2  # 打仗的国家常备一支海军：每两座港口一艘
     p["naval_want"] = max(0, want - len(warships)) if ports else 0

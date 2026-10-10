@@ -21,6 +21,7 @@ from engine.systems.cities import (
     facility_problem,
     food_to_grow,
     growth_surplus,
+    heads,
     nation_resources,
     pop_cap,
     production_problem,
@@ -462,7 +463,7 @@ def decide_city(state, rules, city, budget):
     nation = state.nations[city.nation]
     issuer, cid = ref("nation", city.nation), ref("city", city.id)
     y = city_yields(state, rules, city)
-    net_food = y.food - city.population * FOOD_PER_POP
+    net_food = y.food - heads(state, city) * FOOD_PER_POP
     threatened, defenders = budget.nearby.get(city.id, (0, 0))
     hungry = net_food < 0 or net_food == 0 and city.food < food_to_grow(city.population, rules) // 4
     # 造单位后城里至少留这么多人：平时 KEEP_POP（大城三分之一），外国军队压境时可以抽到 2 人
@@ -599,6 +600,15 @@ def decide_city(state, rules, city, budget):
             if "carrier" in u.tags and not budget.carrier_want:
                 continue  # 航空母舰：有飞机、有靠海的战线目标、还没有航母时才造
             if (
+                u.domain == "sea"
+                and not lift
+                and "carrier" not in u.tags
+                and budget.naval_want <= 0
+            ):
+                # 战舰只按海军缺口造（炮击沿海目标、护航、海岸防御）：舰炮从海上打岸上没有反击，
+                # 战损比天然好看，按战损比加分会让每座沿海城市狂造，白白占掉人口
+                continue
+            if (
                 production_problem(state, rules, city, "unit:" + u.id, budget.have)
                 or _spawn_tile(state, rules, city, u.id) is None
             ):
@@ -608,6 +618,8 @@ def decide_city(state, rules, city, budget):
             ) or nation.gold < budget.reserve + u.gold:
                 continue
             left = city.population - u.population
+            if net_food < 2 and not threatened > defenders:
+                continue  # 抽走的人不再干活、照样吃饭：余粮不够就不征兵（先发展）
             if left < keep:
                 continue  # 留够劳作的人：每个兵都永久占一个住房，抽干了城市就再也长不起来
             # 新陆军优先填补近城防务；海空兵种按现有编成补充，避免全造同一兵种。
@@ -659,7 +671,9 @@ def decide_city(state, rules, city, budget):
             if lift:
                 # 跨海作战缺运力：载得越多越值（在沿海城市才造得出舰船）。每条船都占一个人口，
                 # 运输船（载 4）一个人口运 4 支，比驱逐舰（载 1）划算得多
-                score += 40 + 35 * min(u.carry, budget.want_lift) - (20 if u.carry < 2 else 0)
+                # 战舰运兵只算一半（它还要护航、打仗，海军加分另算），专门运兵的运输船吃满
+                bonus = 40 + 50 * min(u.carry, budget.want_lift)
+                score += bonus if "unarmed" in u.tags else bonus / 2 - (20 if u.carry < 2 else 0)
                 reason = f"跨海作战还缺运兵船运力 {budget.want_lift}，优先造运兵舰船"
             if is_line(u) and budget.want_melee > 0:
                 # 战线缺近战（守城、边境哨也占着近战）：不按全国近战 / 远程比例扣分
@@ -1035,7 +1049,7 @@ def _urgent_development(state, rules, city, budget):
     if plan and plan.get("city") == city.id and not g.facility[plan["tile"]]:
         return plan["facility"], plan["tile"], plan["reason"]
     y = city_yields(state, rules, city)
-    net_food = y.food - city.population * FOOD_PER_POP
+    net_food = y.food - heads(state, city) * FOOD_PER_POP
     linked = connected(state, city)
     owned = {s_.id for _, s_ in city_sites(state, rules, city)}
     houses = [b for b in rules.buildings.values() if b.placement == "district" and b.housing]
