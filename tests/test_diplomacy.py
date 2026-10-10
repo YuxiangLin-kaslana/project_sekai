@@ -17,7 +17,7 @@ RULES = load_ruleset("alt_ww2")
 
 
 def board(n=3):
-    g = HexGrid.empty(30, 12, wrap_x=False)
+    g = HexGrid.empty(10 * n, 12, wrap_x=False)
     g.terrain[:] = RULES.terrain_index("plains")
     g.area[:] = 0
     s = GameState(1, 7, RULES.id, g)
@@ -97,3 +97,31 @@ def test_new_games_start_at_peace_and_ai_goes_to_war_after_expanding():
         s = r.state
         declared |= any(e["type"] == "war_declared" for e in r.events)
     assert declared  # 扩张期结束后 AI 会主动宣战
+
+
+def test_relation_values_drive_war_alliance_and_breakups():
+    s = board(4)
+    for n in s.nations.values():
+        n.ai_enabled = True
+    ctx = StepContext(s, RULES, [], EventLog(s.turn), RngTree(s.seed, "t", 1))
+    diplomacy._set_value(s, 1, 2, -1)  # 跌破 0：开战
+    diplomacy._set_value(s, 3, 4, 101)  # 超过 100：结盟
+    diplomacy.resolve(ctx)
+    assert diplomacy.at_war(s, 1, 2) and diplomacy.allied(s, 3, 4)
+    # 同盟的关系值跌破 ALLY_BREAK：同盟解除，转为和平（有休战期）
+    diplomacy._set_value(s, 3, 4, diplomacy.ALLY_BREAK - 1)
+    diplomacy.resolve(ctx)
+    assert diplomacy.status(s, 3, 4) == "peace"
+    assert diplomacy.relation(s, 3, 4)["truce"] > s.turn
+
+
+def test_dominant_side_refuses_peace_when_few_nations_remain():
+    s = board(2)
+    rel = diplomacy.relation(s, 1, 2)
+    s.relations[diplomacy.key(1, 2)] = {**rel, "status": "war", "since": 0, "progress": 0}
+    s.turn = 500  # 早就僵持了
+    pw = {1: 300.0, 2: 20.0}
+    ok, _ = diplomacy.accepts(s, "peace", 1, 2, pw)
+    assert not ok  # 只剩 2 国、我方占上风：僵持也不和
+    ok, _ = diplomacy.accepts(s, "peace", 2, 1, pw)
+    assert ok  # 弱的一方当然愿意和
