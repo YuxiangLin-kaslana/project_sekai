@@ -75,9 +75,14 @@ def lock_reason(state, rules, actor) -> str | None:
     if actor.destination is not None:
         return "行军中不能交战，先停下（驻守）"
     if ut.domain == "air":
-        # 出击 = 起飞 → 攻击 → 返航降落：要从本国机场起飞，本回合转过场的不能再出击
+        # 出击三回合：起飞飞到目标上空 → 攻击 → 返航降落（engine/systems/air.py）
         from engine.systems.movement import is_air_base
 
+        sortie = actor.sortie
+        if sortie is not None:
+            if sortie["stage"] == "outbound" and sortie["turn"] < state.turn:
+                return None  # 在目标上空：这回合攻击
+            return "出击任务中（飞往目标 / 返航），完成前不能下别的命令"
         if actor.moves_left < ut.moves:
             return "本回合已经转场，下一回合再出击"
         if not is_air_base(state, rules, actor.nation, actor.tile):
@@ -340,7 +345,10 @@ def preview(state, rules, actor, tile) -> tuple[dict | None, str | None]:
     problem = lock_reason(state, rules, actor)
     if problem:
         return None, problem
-    if tile == actor.tile or state.grid.distance(actor.tile, tile) > attack_range(rules, actor):
+    overhead = isinstance(actor, Unit) and actor.sortie is not None  # 出击的飞机在目标正上空攻击
+    if (tile == actor.tile and not overhead) or state.grid.distance(
+        actor.tile, tile
+    ) > attack_range(rules, actor):
         return None, "超出攻击范围"
     kind = attack_kind(rules, actor)
     if kind == "ranged" and line_blocked(state, rules, actor, actor.tile, tile):
@@ -548,6 +556,46 @@ def _lost_aboard(ctx, ship) -> None:
         )
 
 
+def auto_flak(ctx) -> None:
+    """高射炮自动开火：本回合还没开过火的高射炮，打射程内最近的一架在空中（出击中）的敌机。"""
+    s, rules, g = ctx.state, ctx.rules, ctx.state.grid
+    planes = [u for u in s.units.values() if u.sortie is not None]
+    if not planes:
+        return
+    guns = sorted(
+        (u for u in s.units.values() if rules.units[u.type].anti_air and u.layer == "surface"),
+        key=lambda u: u.id,
+    )
+    for gun in guns:
+        if gun.attacked_turn == s.turn or gun.id not in s.units:
+            continue
+        reach = rules.units[gun.type].range
+        near = [
+            p
+            for p in planes
+            if p.id in s.units and p.nation != gun.nation and g.distance(p.tile, gun.tile) <= reach
+        ]
+        if not near:
+            continue
+        plane = min(near, key=lambda p: (g.distance(p.tile, gun.tile), p.id))
+        power = strength(s, rules, gun, ranged=True, against=plane.nation)
+        own = strength(s, rules, plane, against=gun.nation)
+        damage = min(plane.hp, max(6, min(40, FLAK_FACTOR * power // own)))
+        plane.hp -= damage
+        plane.damaged_turn = gun.attacked_turn = s.turn
+        ctx.log.add(
+            "anti_air_fire",
+            unit=ref("unit", gun.id),
+            target=ref("unit", plane.id),
+            tile=plane.tile,
+            damage=damage,
+            target_hp=plane.hp,
+        )
+        gain(ctx, gun, 3 + (6 if plane.hp <= 0 else 0), "unit")
+        if plane.hp <= 0:
+            _destroy(ctx, plane, plane.tile, "被防空火力击落")
+
+
 def _destroy(ctx, unit, tile, reason=None):
     extra = {"reason": reason} if reason else {}
     ctx.log.add(
@@ -570,6 +618,9 @@ def resolve(ctx: StepContext) -> None:
     s._encircled_lock = True
     try:
         _resolve(ctx)
+        from engine.systems import air
+
+        air.after_combat(ctx)
     finally:
         s._encircled_lock = False
         s._encircled = None
@@ -664,8 +715,10 @@ def _settle(ctx: StepContext, tile: int) -> None:
 
 def _resolve(ctx: StepContext) -> None:
     s, rules = ctx.state, ctx.rules
+    from engine.systems import air
+
     _skirmish(ctx)
-    for order in ctx.attacks:
+    for order in [*air.strike_orders(ctx), *ctx.attacks]:
         is_city = isinstance(order, CityAttack)
         collection, key = (s.cities, "city") if is_city else (s.units, "unit")
         automatic_order = (order.type, getattr(order, key), order.to) in ctx.automatic_attacks
@@ -696,10 +749,18 @@ def _resolve(ctx: StepContext) -> None:
                 continue
             ctx.log.reject(order.model_dump(mode="json"), "cannot_attack", problem)
             continue
+        if (
+            isinstance(actor, Unit)
+            and rules.units[actor.type].domain == "air"
+            and actor.sortie is None
+        ):
+            air.launch(ctx, actor, tile)  # 第 1 回合只起飞、飞到目标上空，下回合才攻击
+            continue
         target = target_at(s, rules, actor, tile)
         start = actor.tile
         if info["flak"]:
             gun = s.units[parse_ref(info["flak_from"], "unit")]
+            gun.attacked_turn = s.turn  # 这门已经开过火，战斗阶段末不再自动开火
             actor.hp -= info["flak"]
             actor.damaged_turn = s.turn
             ctx.log.add(

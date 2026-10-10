@@ -167,12 +167,33 @@ def main() -> None:
     url = f"http://127.0.0.1:{port}/"
     print()
     print(f"游戏服务器启动中：{url}")
-    print("第一次启动要编译地图生成程序，大约一两分钟；之后就快了。")
+    print("第一次启动要加载、编译地图程序，可能要一两分钟；服务器准备好后会自动打开浏览器。")
     print("关闭这个窗口即可退出游戏。")
-    threading.Timer(2.0, lambda: webbrowser.open(url)).start()
-    import uvicorn
 
-    uvicorn.run("server.app:app", host="127.0.0.1", port=port, log_level="warning")
+    def open_when_ready():
+        # 等服务器真的能连上再开浏览器（第一次启动导入 numpy / numba 比较慢）
+        for _ in range(600):
+            try:
+                with socket.create_connection(("127.0.0.1", port), timeout=1):
+                    break
+            except OSError:
+                time.sleep(0.5)
+        print(f"服务器已就绪，打开浏览器：{url}")
+        webbrowser.open(url)
+
+    threading.Thread(target=open_when_ready, daemon=True).start()
+    try:
+        import uvicorn
+
+        uvicorn.run("server.app:app", host="127.0.0.1", port=port, log_level="info")
+    except Exception:
+        import traceback
+
+        traceback.print_exc()
+        print()
+        print("游戏服务器启动失败。请把上面的报错截图发给开发者。")
+        input("按回车键退出…")
+        raise
 
 
 if __name__ == "__main__":

@@ -38,12 +38,13 @@ class Nation:
     ai_enabled: bool = False
     strategy: dict = field(default_factory=dict)
     corps_count: int = 0  # 已组建过几个军团（军团番号按它编）
-    # 各兵种的实战战绩（逐回合衰减）：{兵种: [造成的伤害, 投入（存活支数 × 造价 / 100 的累计）]}，
-    # AI 按“同样的投入谁打出的伤害多”来挑兵种
+    # 各兵种的实战战绩（逐回合衰减）：{兵种: [造成的伤害, 投入（存活支数 × 造价 / 100）, 受到的伤害]}，
+    # AI 按战损比（造成 ÷ 受到）挑兵种
     combat_record: dict = field(default_factory=dict)
-    hostile: dict = field(
-        default_factory=dict
-    )  # {对方国家 ID（字符串）: 最近一次交战 / 对它开战役的回合}
+    # 本国部队最近挨了哪些外国兵种多少伤害（逐回合衰减），AI 多造克制它们的兵
+    hurt_by: dict = field(default_factory=dict)
+    # {对方国家 ID（字符串）: 最近一次交战 / 对它开战役的回合}
+    hostile: dict = field(default_factory=dict)
 
 
 @dataclass(slots=True)
@@ -119,6 +120,7 @@ class Unit:
     ai_target: int | None = None
     carried_by: int | None = None  # 在哪艘船上（陆军，layer=cargo）/ 停在哪艘航母上（飞机）
     corps: int | None = None  # 所属军团（统帅将领的单位 ID）
+    sortie: dict | None = None  # 飞机出击中：{stage: outbound|return, target, base, carrier, turn}
     name: str = ""  # 将领姓名
     rank: int = 0  # 将领星级（★1…★5，出生时抽签）
     title: str = ""  # 将领统率的军团番号（第 N 军团）

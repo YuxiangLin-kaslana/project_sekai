@@ -2727,6 +2727,9 @@ def decide_unit(ctx, unit, plan, guards, claimed):
     if "found_city" in ut.tags:
         _settler(ctx, unit, plan, claimed)
         return
+    if unit.sortie is not None:
+        unit.ai_goal = "出击任务中" if unit.sortie["stage"] == "outbound" else "返航中"
+        return
     if "general" in ut.tags:
         _general(ctx, unit, plan)
         return

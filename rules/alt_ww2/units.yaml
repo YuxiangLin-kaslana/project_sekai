@@ -135,7 +135,7 @@ armor:
   population: 1
   gold: 60
   upkeep: 3
-  requires_resources: [iron, oil]
+  requires_resources: [iron]   # 有石油另有燃料加成
   tags: [armored]
   modifiers:
     - { stat: strength, op: mul, value: 125, when: { defending: false } }   # 坦克进攻 +25%
@@ -243,7 +243,6 @@ fighter:
   population: 1
   gold: 50
   upkeep: 2
-  requires_resources: [aluminum]
   tags: [air_superiority]
   icon: fighter
 
@@ -261,6 +260,5 @@ bomber:
   population: 1
   gold: 70
   upkeep: 3
-  requires_resources: [aluminum]
   tags: [siege, suppress]
   icon: bomber

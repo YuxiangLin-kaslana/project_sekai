@@ -231,6 +231,8 @@ def _apply(ctx: StepContext, order: Order) -> None:
         return
 
     unit = _unit(ctx, nation, order.unit)
+    if unit.sortie is not None and not isinstance(order, (UnitManagement, Attack)):
+        raise Rejected("on_sortie", "飞机出击任务中（飞往目标 / 返航），完成前不能下别的命令")
     if unit.layer == "cargo" and not isinstance(order, (Disembark, UnitManagement, LeaveCorps)):
         raise Rejected("on_board", "在船上，先下船")
     if isinstance(order, UnitManagement):

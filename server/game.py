@@ -362,6 +362,7 @@ def _snapshot(game: Game, rules: Ruleset) -> dict:
                 "ai_goal": u.ai_goal,
                 "carried_by": ref("unit", u.carried_by) if u.carried_by is not None else None,
                 "corps": ref("unit", u.corps) if u.corps is not None else None,
+                "sortie": u.sortie["stage"] if u.sortie else None,
                 **({"name": u.name, "rank": u.rank, "title": u.title} if u.rank else {}),
                 "destination": _cr(s, u.destination) if u.destination is not None else None,
                 "task": (

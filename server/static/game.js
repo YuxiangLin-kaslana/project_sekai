@@ -2419,6 +2419,10 @@ export function playEvents(events, before) {
       const duration = Math.min(1500, 320 + e.path.length*140);
       G.effects.push({type:'movement', path:e.path, unit, count,
         start:now+(combats.some(c=>c.attacker===e.unit)?650:0), duration});
+    } else if ((e.type === 'air_sortie' || e.type === 'air_returned') && e.source != null && e.source !== e.tile) {
+      // 飞机起飞飞往目标上空 / 返航降落：飞机牌沿直线飞过去
+      const unit = old.get(e.unit) ?? G.units.get(e.unit);
+      if (unit) G.effects.push({type:'movement', path:[e.source, e.tile], unit, count:1, start:now, duration:900});
     } else if (e.type === 'facility_built') {
       G.effects.push({type:'label',tile:e.tile,text:`${G.rules.buildings[e.facility]?.name??'设施'}竣工`,start:now+150,duration:1500});
     } else if (e.type === 'pillaged') {

@@ -788,6 +788,8 @@ const EVENT_TEXT = {
   production_blocked: (e) => `${cityName(e.city)} 生产受阻：${e.reason}`,
   embarked: (e) => `${unitName(e.unit_type)} 登上${unitName(e.ship_type)}`,
   disembarked: (e) => `${unitName(e.unit_type)} 下船登陆`,
+  air_sortie: (e) => `${unitName(e.unit_type)} 起飞出击，飞往目标上空（下回合攻击，再下回合返航）`,
+  air_returned: (e) => `${unitName(e.unit_type)} 返航降落`,
   road_demolished: (e) => `${game.nationOf(e.nation)?.name ?? ''} 拆掉了 ${e.edges.length} 段道路`,
   pillaged: (e) => `${game.nationOf(e.nation)?.name ?? e.nation} 破坏了${e.city ? cityName(e.city) + '的' : ''}${e.target}，掠走 ${e.loot} 金`,
   city_unrest: (e) => `${cityName(e.city)} 陷入动荡：稳定度降到 ${e.stability}${e.reasons?.length ? `（${e.reasons.join('、')}）` : ''}`,
@@ -951,6 +953,7 @@ function renderLegend() {
 
 function unitStatus(u) {
   if (u.task) return `施工中：${game.G.rules.buildings[u.task.facility].name}（还剩 ${u.task.turns_left} 回合）`;
+  if (u.sortie) return u.sortie === 'outbound' ? '出击中：在目标上空，下回合攻击' : '返航中：下回合降落';
   if (u.destination) return `行军中 → (${u.destination[0]}, ${u.destination[1]})`;
   if (u.fortified) return "驻守";
   const corps = u.corps != null ? game.G.units.get(u.corps) : null;
@@ -1331,7 +1334,7 @@ function tacticalCard(actor) {
   }
   if(unit)buttons.appendChild(commandButton('移动','move',()=>setCommandMode('move'),commandBusy||move<=0));
   const air=unit&&def.domain==='air';
-  if(!unit||def.category==='military')buttons.appendChild(commandButton(air?'出击':'攻击','attack',()=>setCommandMode('attack'),commandBusy||!!actor.attack_blocked,actor.attack_blocked??(air?'起飞 → 攻击作战半径内的目标 → 返航降落，用掉本回合':'')));
+  if(!unit||def.category==='military')buttons.appendChild(commandButton(air?'出击':'攻击','attack',()=>setCommandMode('attack'),commandBusy||!!actor.attack_blocked,actor.attack_blocked??(air?'出击三回合：这回合起飞飞到目标上空，下回合攻击，再下回合返航降落；在空中会挨防空炮、被敌机拦截':'')));
   if(unit){
     if(def.tags?.includes('found_city'))buttons.appendChild(commandButton('建立城市','group',()=>executeCommand(actorOrder('found_city')),commandBusy||!!game.G.tactics?.found_city_blocked,game.G.tactics?.found_city_blocked??''));
     buttons.appendChild(commandButton(actor.managed?'接管单位':'交回单位 AI','group',()=>executeCommand(actorOrder('unit_management',{enabled:!actor.managed})),commandBusy));

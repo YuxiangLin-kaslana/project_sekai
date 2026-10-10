@@ -50,33 +50,54 @@ def record_combat(ctx):
             mark(parse_ref(e["nation"], "nation"), owner(e.get("target")))
         elif e["type"] == "city_captured":
             mark(parse_ref(e["nation"], "nation"), parse_ref(e["previous"], "nation"))
-    dealt = {}
+    dealt, taken, hurt = {}, {}, {}
+
+    def hit(src, dst, amount):
+        """src 打了 dst amount 点：记 src 的战果、dst 的损失、dst 的国家挨了 src 兵种多少打。"""
+        if not amount:
+            return
+        if src:
+            dealt[src] = dealt.get(src, 0) + amount
+        if dst:
+            taken[dst] = taken.get(dst, 0) + amount
+            if src:
+                key = (dst[1], src[0])
+                hurt[key] = hurt.get(key, 0) + amount
+
     for e in ctx.log.events:
-        if e["type"] != "combat":
-            continue
-        a, d = who(e.get("attacker")), who(e.get("defender"))
-        if a:
-            hit = e.get("damage", 0) + sum(x.get("damage", 0) for x in e.get("area") or ())
-            dealt[a] = dealt.get(a, 0) + hit
-        if d and e.get("retaliation"):
-            dealt[d] = dealt.get(d, 0) + e["retaliation"]
+        if e["type"] == "combat":
+            a, d = who(e.get("attacker")), who(e.get("defender"))
+            hit(a, d, e.get("damage", 0))
+            for x in e.get("area") or ():
+                hit(a, who(x.get("target")), x.get("damage", 0))
+            hit(d, a, e.get("retaliation", 0))
+        elif e["type"] == "anti_air_fire":
+            hit(who(e.get("unit")), who(e.get("target")), e.get("damage", 0))
     alive = {}
     for u in s.units.values():
         if rules.units[u.type].category == "military":
             alive[(u.type, u.nation)] = alive.get((u.type, u.nation), 0) + rules.units[u.type].cost
     for nid, n in s.nations.items():
         record = {}
-        for kind, (hit, spent) in sorted((n.combat_record or {}).items()):
-            record[kind] = [hit * RECORD_DECAY, spent * RECORD_DECAY]
-        for (kind, owner), hit in dealt.items():
+        for kind, values in sorted((n.combat_record or {}).items()):
+            record[kind] = [v * RECORD_DECAY for v in (list(values) + [0.0])[:3]]
+        for (kind, owner), amount in dealt.items():
             if owner == nid:
-                record.setdefault(kind, [0.0, 0.0])[0] += hit
+                record.setdefault(kind, [0.0, 0.0, 0.0])[0] += amount
         for (kind, owner), cost in alive.items():
             if owner == nid:
-                record.setdefault(kind, [0.0, 0.0])[1] += cost / 100
+                record.setdefault(kind, [0.0, 0.0, 0.0])[1] += cost / 100
+        for (kind, owner), amount in taken.items():
+            if owner == nid:
+                record.setdefault(kind, [0.0, 0.0, 0.0])[2] += amount
         n.combat_record = {
-            k: [round(v[0], 2), round(v[1], 2)] for k, v in record.items() if v[1] >= 0.01
+            k: [round(x, 2) for x in v] for k, v in record.items() if v[1] >= 0.01 or v[2] >= 0.01
         }
+        pain = {k: v * RECORD_DECAY for k, v in (n.hurt_by or {}).items()}
+        for (owner, kind), amount in hurt.items():
+            if owner == nid:
+                pain[kind] = pain.get(kind, 0) + amount
+        n.hurt_by = {k: round(v, 2) for k, v in sorted(pain.items()) if v >= 0.5}
 
 
 def resolve(ctx):

@@ -216,14 +216,32 @@ def budget_for(state, rules, nation, cities):
             if ut.ranged_strength
             else "land"
         ] += 1
-    # 实战效率：同样的投入（存活支数 × 造价）谁打出的伤害多；只算投入够多的兵种，和平均比
-    record = {
-        k: v[0] / v[1]
-        for k, v in (nation.combat_record or {}).items()
-        if v[1] >= 5 and k in rules.units
-    }
-    mean = sum(record.values()) / len(record) if record else 0
-    effect = {k: v / mean for k, v in record.items()} if mean > 0 else {}
+
+    # 挨打来源：最近哪类外国兵种打我们最狠（按伤害折算成“支数”，和附近的威胁一起算）
+    def category(ut):
+        if ut.domain != "land":
+            return ut.domain
+        return "armor" if "armored" in ut.tags else "siege" if ut.ranged_strength else "land"
+
+    pain = Counter()
+    for kind, amount in (nation.hurt_by or {}).items():
+        if kind in rules.units:
+            pain[category(rules.units[kind])] += amount
+    total = sum(pain.values())
+    near = sum(threat_mix.values())
+    for k, v in pain.items():
+        threat_mix[k] += v / total * max(near, 6)
+    # 战损比：各兵种造成的伤害 ÷ 受到的伤害（逐回合衰减），只算打过够多仗的兵种；和全国平均比，
+    # 用对数（翻倍和减半对称），比平均好的多造、差的少造
+    import math as _math
+
+    ratio = {}
+    for k, v in (nation.combat_record or {}).items():
+        dealt_, _, taken_ = (list(v) + [0.0])[:3]
+        if k in rules.units and dealt_ + taken_ >= 40:
+            ratio[k] = (dealt_ + 10) / (taken_ + 10)
+    mean = _math.exp(sum(_math.log(r) for r in ratio.values()) / len(ratio)) if ratio else 0
+    effect = {k: _math.log2(r / mean) for k, r in ratio.items()} if mean else {}
     # 飞机：野战军的一成半；工兵：每条陆上战线一个
     land_army = sum(1 for u in units if rules.units[u.type].domain == "land")
     planes = sum(1 for u in units if rules.units[u.type].domain == "air")
@@ -585,7 +603,10 @@ def decide_city(state, rules, city, budget):
                     reason = "附近的外国军队里这类威胁多：造克制它们的兵"
             # 实战效率：同样的投入打出伤害多的兵种多造，打不出伤害的少造
             if u.id in budget.effect:
-                score += max(-20, min(30, 30 * (budget.effect[u.id] - 1)))
+                # 战损比是全国平均的 2 倍 +30，一半 −30（最多 ±45）
+                score += max(-45, min(45, 30 * budget.effect[u.id]))
+                if budget.effect[u.id] >= 0.6:
+                    reason = "这类部队战损比好（打出的伤害远多于挨的），多造"
             if score > 0:  # 打分为负 = 不值得造（比如侦察部队已经很多），不拿便宜兵种凑数
                 candidates.append((score, "unit:" + u.id, reason))
         if budget.engineer_want > 0:
