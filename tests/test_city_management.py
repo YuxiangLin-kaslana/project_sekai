@@ -185,6 +185,7 @@ def test_military_projects_reserve_one_shared_budget(board):
         s.grid.facility[t] = RULES.facility_index("farm")
     c2 = City(12, "城12", 1, s.grid.idx(8, 11), 3, buildings=list(c.buildings))
     s.cities[12] = c2
+    c.population = c2.population = 6  # 造兵后城里要留够劳作的人（KEEP_POP）
     for t in s.grid.within(c2.tile, 2):
         if s.grid.owner[t] < 0:
             s.grid.owner[t], s.grid.city_of[t] = 1, 12

@@ -301,6 +301,15 @@ def budget_for(state, rules, nation, cities):
     land_army = sum(1 for u in units if rules.units[u.type].domain == "land")
     planes = sum(1 for u in units if rules.units[u.type].domain == "air")
     air_want = max(0, round(0.15 * land_army) - planes) if strategy.get("posture") == "战争" else 0
+    queued_warships = sum(
+        1
+        for c in cities
+        for item in c.queue
+        if item.startswith("unit:")
+        and rules.units[item[5:]].domain == "sea"
+        and rules.units[item[5:]].category == "military"
+        and not {"carrier", "unarmed"} & set(rules.units[item[5:]].tags)
+    )
     # 金币补足建设：扣掉储备金和排队部队（含开拓团）要付的金币后，每多 150 金给一座城开，
     # 产出低、城外工程停摆的小城优先，已开的同档城市优先保留（避免来回开关）
     unit_gold = sum(
@@ -358,7 +367,8 @@ def budget_for(state, rules, nation, cities):
         air_sites,
         want_lift,
         frozenset(strategy.get("lift_seas") or (strategy.get("sea") or {}).get("seas") or ()),
-        strategy.get("naval_want", 0),
+        # 海军缺口减去已经在造的战舰（不然同一回合每座沿海城市都去造，大大超量）
+        max(0, strategy.get("naval_want", 0) - queued_warships),
         strategy.get("carrier_want", 0),
         want_general,
         strategy.get("engineer_want", 0),
@@ -455,6 +465,8 @@ def decide_city(state, rules, city, budget):
     net_food = y.food - city.population * FOOD_PER_POP
     threatened, defenders = budget.nearby.get(city.id, (0, 0))
     hungry = net_food < 0 or net_food == 0 and city.food < food_to_grow(city.population, rules) // 4
+    # 造单位后城里至少留这么多人：平时 KEEP_POP（大城三分之一），外国军队压境时可以抽到 2 人
+    keep = 2 if threatened > defenders else max(KEEP_POP, city.population // 3)
     poor = budget.margin <= 0 or nation.gold < budget.reserve
     weights = POLICIES[nation.policy]["weights"]
     alerts = []
@@ -596,8 +608,8 @@ def decide_city(state, rules, city, budget):
             ) or nation.gold < budget.reserve + u.gold:
                 continue
             left = city.population - u.population
-            if left < 1:
-                continue  # 规则：城市至少留 1 人
+            if left < keep:
+                continue  # 留够劳作的人：每个兵都永久占一个住房，抽干了城市就再也长不起来
             # 新陆军优先填补近城防务；海空兵种按现有编成补充，避免全造同一兵种。
             power = max(u.strength, u.ranged_strength or 0)
             score = power * 80 / max(1, u.cost) + (45 if nation.policy == "military" else 10)
@@ -645,8 +657,9 @@ def decide_city(state, rules, city, budget):
                 score += 60
                 reason = "有飞机、有靠海的战线目标：造航空母舰，让飞机从海上出击"
             if lift:
-                # 跨海作战缺运力：载得越多越值（在沿海城市才造得出舰船）
-                score += 30 + 20 * min(u.carry, budget.want_lift)
+                # 跨海作战缺运力：载得越多越值（在沿海城市才造得出舰船）。每条船都占一个人口，
+                # 运输船（载 4）一个人口运 4 支，比驱逐舰（载 1）划算得多
+                score += 40 + 35 * min(u.carry, budget.want_lift) - (20 if u.carry < 2 else 0)
                 reason = f"跨海作战还缺运兵船运力 {budget.want_lift}，优先造运兵舰船"
             if is_line(u) and budget.want_melee > 0:
                 # 战线缺近战（守城、边境哨也占着近战）：不按全国近战 / 远程比例扣分
@@ -690,7 +703,7 @@ def decide_city(state, rules, city, budget):
                     production_problem(state, rules, city, "unit:" + u.id, budget.have)
                     or _spawn_tile(state, rules, city, u.id) is None
                     or nation.gold < budget.reserve + u.gold
-                    or city.population - u.population < 1
+                    or city.population - u.population < 1  # 开拓者：扩张优先，留 1 人就行
                 ):
                     continue
                 score = (180 if budget.expanding else 70) + y.production - 40 / city.population
@@ -714,7 +727,7 @@ def decide_city(state, rules, city, budget):
                     production_problem(state, rules, city, "unit:" + u.id, budget.have)
                     or _spawn_tile(state, rules, city, u.id) is None
                     or nation.gold < budget.reserve + u.gold
-                    or city.population - u.population < 1
+                    or city.population - u.population < keep
                 ):
                     continue
                 candidates.append(
@@ -771,6 +784,12 @@ def decide_city(state, rules, city, budget):
                 budget.engineer_want -= 1
             if item.startswith("unit:") and "found_city" in rules.units[item[5:]].tags:
                 budget.settler_want -= 1
+            if item.startswith("unit:"):
+                picked = rules.units[item[5:]]
+                if picked.domain == "sea" and not {"carrier", "unarmed"} & set(picked.tags):
+                    budget.naval_want -= 1  # 一座城在造了，别的城少造一艘
+                if picked.carry:
+                    budget.want_lift -= picked.carry
             intents.append((CityOrder(issuer=issuer, city=cid, queue=[item]), "production", reason))
             report["reason"] = reason
         else:
@@ -815,6 +834,7 @@ def decide_city(state, rules, city, budget):
         future_city = replace(city, population=city.population + 1)
         future_yields = city_yields(state, rules, future_city) if net_food > 0 else None
         checked = set()
+        harbor = any(coastal(state.grid, t) for t in city_tiles(state, city))
         facilities = {
             rules.facility_at(int(state.grid.facility[t])).id
             for t in city_tiles(state, city)
@@ -841,7 +861,15 @@ def decide_city(state, rules, city, budget):
             checked.add(signature)
             for fid in facility_options(state, rules, city.nation, tile):
                 b = rules.buildings[fid]
-                military_site = not any(getattr(b.yields, k) for k in YIELD_KEYS)
+                if b.exclusive and "ships" not in b.enables and harbor:
+                    continue  # 沿海城市：商业中心和港口收入一样，港口还能造船，二选一选港口
+                # 驻军设施：没有产出、不开采资源、不加住房（矿区、油田的产出来自资源本身，不算）
+                military_site = (
+                    not any(getattr(b.yields, k) for k in YIELD_KEYS)
+                    and not b.extracts
+                    and not b.housing
+                    and not b.jobs
+                )
                 defensive_site = any(
                     m.target == "tile" and m.stat == "defense" and m.value > 0 for m in b.modifiers
                 )
@@ -877,8 +905,8 @@ def decide_city(state, rules, city, budget):
                     and res.kind == "strategic"
                     and res.id in b.extracts
                     and res.id not in budget.have
-                    and any(getattr(d, k) for k in YIELD_KEYS)  # 有人劳作才算供应
                 ):
+                    # 有人劳作才算供应：托管城市会优先给战略资源的采集区派人（assign_jobs）
                     # 本国还没有的战略资源：能解锁的兵种越多、作战加成越多越值
                     unlocks = sum(res.id in u.requires_resources for u in rules.units.values())
                     score += 30 + 15 * unlocks + 20 * len(res.combat)
@@ -989,6 +1017,20 @@ def _urgent_development(state, rules, city, budget):
         t = min(broken, key=lambda t: (not rules.facility_at(int(g.facility[t])).air_base, t))
         b = rules.facility_at(int(g.facility[t]))
         return b.id, t, f"修复被炸坏的{b.name}（修好前不能用）"
+    # 造兵要用的战略资源（铁、石油、铝、橡胶）：辖区里还没开发的，修完被炸坏的设施就先建采集区
+    key = frozenset(r for u in rules.units.values() for r in u.requires_resources)
+    for t in sorted(city_tiles(state, city)):
+        res = rules.resource_at(int(g.resource[t]))
+        if res is None or res.id not in key or g.facility[t]:
+            continue
+        for b in rules.buildings.values():
+            if b.placement == "tile" and res.id in b.extracts:
+                if facility_problem(state, rules, city.nation, t, b) is None:
+                    return (
+                        b.id,
+                        t,
+                        f"开采{res.name}（{'、'.join(u.name for u in rules.units.values() if res.id in u.requires_resources)}要用）",
+                    )
     plan = budget.airfield
     if plan and plan.get("city") == city.id and not g.facility[plan["tile"]]:
         return plan["facility"], plan["tile"], plan["reason"]

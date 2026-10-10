@@ -1085,10 +1085,31 @@ def landing_site(ctx, nid, target, dist=None):
     }
 
 
-def _can_ferry(ctx, nation, cities):
-    """本国有沿海城市，并且已有运兵舰船、或战略资源够造。"""
+def _shipyard(ctx, city) -> bool:
+    """这座城能造舰船：有能用的港口，或者沿海、还能建港口（没被商业中心占掉二选一的名额）。"""
+    from engine.systems.cities import production_problem
+
     s, rules, g = ctx.state, ctx.rules, ctx.state.grid
-    if not any(coastal(g, c.tile) for c in cities):
+    ship = next(
+        (u.id for u in rules.units.values() if u.domain == "sea" and not u.requires_resources),
+        None,
+    )
+    if ship is not None and production_problem(s, rules, city, "unit:" + ship) is None:
+        return True
+    ports = [b for b in rules.buildings.values() if "ships" in b.enables]
+    if not ports or not any(coastal(g, t) for t in s.territory_index().get(city.id, [])):
+        return False
+    group = ports[0].exclusive
+    return not any(
+        (b := rules.facility_at(int(g.facility[t]))) is not None and group and b.exclusive == group
+        for t in s.territory_index().get(city.id, [])
+    )
+
+
+def _can_ferry(ctx, nation, cities):
+    """本国有能造舰船的沿海城市（有港口，或还能建港口），并且已有运兵舰船、或战略资源够造。"""
+    s, rules = ctx.state, ctx.rules
+    if not any(_shipyard(ctx, c) for c in cities):
         return False
     if any(u.nation == nation.id and rules.units[u.type].carry for u in s.units.values()):
         return True
