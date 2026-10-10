@@ -58,10 +58,11 @@ def geography(state, rules):
     scale = city_scale(g)
     # 开局设置“地区承载倍数”：每片承载区能建的城市数按百分比放大 / 缩小
     boost = g.tuning.get("capacity", 100) / 100
+    per_city = rules.cities.capacity_per_city
     capacity = [
         min(
             round(12 * max(1, boost)),
-            round(max(int(v / (18 * scale * scale)), int(a >= 20 * scale * scale)) * boost),
+            round(max(int(v / (per_city * scale * scale)), int(a >= 20 * scale * scale)) * boost),
         )
         for v, a in zip(potential, area, strict=True)
     ]

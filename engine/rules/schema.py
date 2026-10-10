@@ -285,6 +285,9 @@ class CityConfig(_Strict):
     dense_distance: int = Field(3, ge=2)
     sparse_distance: int = Field(7, ge=3)
     regional_capacity: bool = True
+    capacity_per_city: int = Field(
+        18, ge=4, le=100
+    )  # 承载区每 (这么多 × 100 × s²) 点地块潜力给一个建城名额
     center_housing: int = Field(3, ge=0)  # 市中心本身给的住房
     # 人口从 n 长到 n+1 要的存粮：growth[0] + growth[1]·n + n^growth[2]
     growth: tuple[int, int, float] = (15, 6, 1.8)

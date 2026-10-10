@@ -9,9 +9,10 @@ cities:
   max_radius: 5           # 仅用于压力测试初始填充
   territory_cap: 4        # 人口增长时辖区半径最多 4 格（按地图尺度放大：128×80 约 6 格，800×460 约 38 格）
   coastal_waters: 2       # 辖区只划离城 2 格以内的近岸海面（同样按地图尺度放大），外海不算领土
-  min_distance: 6         # 两座城市之间至少隔 6 格（按地图尺度放大）
-  dense_distance: 6       # 富饶地区也至少隔 6 格（原来 3 格，城市挤在一起）
-  sparse_distance: 7      # 贫瘠地区隔 7 格
+  min_distance: 5         # 两座城市之间至少隔 5 格（按地图尺度放大）
+  dense_distance: 4       # 富饶地区（周边潜力 ≥60）城市更密：隔 4 格
+  sparse_distance: 7      # 贫瘠地区（周边潜力 <28）稀疏：隔 7 格
+  capacity_per_city: 14   # 承载区每 1400 点地块潜力（× s²）一个建城名额：名额跟着地力走
   center_yields: { food: 3, production: 3, gold: 2, science: 1 }   # 市中心本身：3 粮食、3 生产力（另有少量税收和科研）
   center_housing: 3        # 市中心给 3 住房；人口上限 = 住房 − 被征召走的人口
   growth: [8, 3, 1.3]      # 长一口人要 8 + 3n + n^1.3 存粮（人口就是兵源，比默认曲线平）
