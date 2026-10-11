@@ -391,7 +391,7 @@ def play_actions(game_id: str, body: TurnSubmit) -> dict:
     except ValidationError as e:
         raise HTTPException(422, e.errors(include_url=False)) from e
     with game.lock:
-        if body.expected_hash is not None and body.expected_hash != game.state.state_hash():
+        if body.expected_hash is not None and body.expected_hash != game.state_hash():
             raise HTTPException(409, "对局已经变化，请刷新后重新选择")
         result = advance(game, orders, game.rules, autoplay=False, immediate=True)
         return {**snapshot(game, game.rules), "rejected": result["rejected"]}
@@ -413,7 +413,7 @@ def game_tactics(game_id: str, actor: str, col: int | None = None, row: int | No
             raise HTTPException(404, "单位或城市不存在") from e
         result = {
             "actor": actor,
-            "state_hash": s.state_hash(),
+            "state_hash": game.state_hash(),
             **tactics(s, game.rules, entity),
             "combat_strength": strength(s, game.rules, entity),
             "ranged_strength": strength(s, game.rules, entity, ranged=True)
@@ -594,7 +594,7 @@ def city_options(game_id: str, city: str) -> dict:
                             "facilities": buildings,
                         }
                     )
-        return {"state_hash": game.state.state_hash(), "city": city, "options": options}
+        return {"state_hash": game.state_hash(), "city": city, "options": options}
 
 
 @app.post("/api/games/{game_id}/road-plan")
@@ -617,7 +617,7 @@ def road_preview(game_id: str, body: RoadPreview) -> dict:
         except IndexError as e:
             raise HTTPException(422, str(e)) from e
         proposal = plan(s, game.rules, city, tile)
-        return {"state_hash": s.state_hash(), "production": city.production, **proposal}
+        return {"state_hash": game.state_hash(), "production": city.production, **proposal}
 
 
 def _asset_version(name: str) -> str:

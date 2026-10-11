@@ -19,8 +19,8 @@ import pickle
 import threading
 
 MAX_WORKERS = 15
-MIN_JOBS = 3  # 至少这么多个国家有 AI 才分进程
-MIN_UNITS = 120  # 至少这么多支 AI 部队才分进程
+MIN_JOBS = 2  # 至少这么多个国家有 AI 才分进程
+MIN_UNITS = 40  # 至少这么多支 AI 部队才分进程（开局几十支部队时也用上多核）
 
 _enabled = False
 _pool = None
@@ -204,8 +204,8 @@ def _get_pool(n, rules):
             from concurrent.futures import ProcessPoolExecutor
 
             ctx = mp.get_context("spawn")
-            # 工作进程继承环境变量：Numba 只开 1 个线程（多个进程已经占满核了）
-            os.environ["NUMBA_NUM_THREADS"] = "1"
+            # 工作进程里 Numba 只开 1 个线程（_init 里设，多个进程已经占满核了）。不改本进程的环境变量：
+            # 本进程的 Numba 线程起来以后再改，下一次编译内核会报错（Windows 首次运行要现场编译）
             _pool = ProcessPoolExecutor(
                 max_workers=n, mp_context=ctx, initializer=_init, initargs=(rules,)
             )

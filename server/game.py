@@ -81,6 +81,17 @@ class Game:
     lock: threading.RLock = field(default_factory=threading.RLock)
     stress: dict | None = None
     rules: Ruleset | None = None  # 这局用的剧本
+    _hash: tuple | None = (
+        None  # (局面对象, 哈希)：局面每次结算都换成新对象，按对象缓存（大地图一次几百毫秒）
+    )
+
+    def state_hash(self, known: str | None = None) -> str:
+        """当前局面的哈希（同一个局面对象只算一次；known：step 已经算好的）。"""
+        if self._hash is not None and self._hash[0] is self.state:
+            return self._hash[1]
+        h = known or self.state.state_hash()
+        self._hash = (self.state, h)
+        return h
 
 
 class GameStore:
@@ -138,6 +149,7 @@ def advance(
             orders = list(orders) + random_walk_orders(game.state, rules, skip=given)
         result = step(game.state, orders, rules, immediate=immediate)
         game.state = result.state
+        game.state_hash(result.state_hash)  # step 已经算过哈希：记下来，快照和各接口不用再算
         game.events = result.events
         if game.stress is not None:
             game.stress["last_action_ms" if immediate else "last_turn_ms"] = round(
@@ -537,7 +549,7 @@ def _snapshot(game: Game, rules: Ruleset) -> dict:
         "turn": s.turn,
         # 世界大事记（最近 80 条，新的在前）：首都陷落、灭国、内战、将领叛变、反霸同盟……
         "chronicle": list(reversed(s.chronicle[-80:])),
-        "state_hash": s.state_hash(),
+        "state_hash": game.state_hash(),
         "nations": nations,
         "cities": cities,
         "units": units,
