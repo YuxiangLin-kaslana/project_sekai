@@ -110,6 +110,9 @@ def test_coalition_forms_against_a_hegemon():
         found_city(s, RULES, i, s.grid.idx(3 + 12 * (i - 1), 9))
     for _ in range(30):
         s.add_unit(Unit(s.new_id(), "armor", 1, s.grid.idx(5, 6), "surface"))
+    for i in range(2, 7):  # 其余各国也有点兵：同盟加起来够霸主的四分之一
+        for _ in range(3):
+            s.add_unit(Unit(s.new_id(), "armor", i, s.grid.idx(3 + 12 * (i - 1), 6), "surface"))
     ctx = ctx_of(s)
     upheaval._coalition(ctx)
     assert all(diplomacy.at_war(s, m, 1) for m in range(2, 7))
@@ -150,3 +153,19 @@ def test_a_unified_empire_decays_and_its_far_cities_drift_away():
     assert s.chronicle[-1]["kind"] == "decay"
     hit = {cid for cid, why in war_pressures(ctx).items() if "decay" in why}
     assert cities[-1].id in hit and cities[0].id not in hit  # 离首都最远的城先离心
+
+
+
+def test_a_decaying_empire_breaks_into_several_warlords():
+    s = board(nations=1, width=120)
+    cities = [found_city(s, RULES, 1, s.grid.idx(3 + 7 * k, 5), capital=k == 0) for k in range(16)]
+    s.nations[1].capital = cities[0].id
+    s.nations[1].decay = RULES.stability.decay_start + 100
+    for c in cities[4:]:
+        c.stability = 20
+    ctx = ctx_of(s)
+    assert upheaval._civil_war(ctx, 1)
+    warlords = [n for n in s.nations if n != 1 and s.nation_cities(n)]
+    assert len(warlords) >= 2  # 军阀割据：同时分裂出好几个
+    assert len(s.nation_cities(1)) >= len(cities) // 2  # 合计最多分走一半
+    assert diplomacy.at_war(s, warlords[0], warlords[1])  # 军阀之间互相敌对

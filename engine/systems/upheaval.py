@@ -38,6 +38,8 @@ CIVIL_MAX_SHARE = 0.45
 CIVIL_RADIUS = 9  # 分裂地区：离起事城市这么多格以内（按地图尺度放大）
 DECAY_CIVIL_SHARE = 0.2  # 离心中的帝国：动荡城占两成就可能内战
 DECAY_CIVIL_ODDS = 6
+WARLORDS = 3  # 大一统之后的衰落：同时割据的军阀数
+WARLORD_SHARE = 0.5  # 军阀合计最多分走这么多的城
 
 DEFECT_RANK = 3
 DEFECT_CORPS = 8
@@ -51,6 +53,7 @@ UPHEAVAL_COOLDOWN = 150
 
 HEGEMON_SHARE = 0.35
 COALITION_MIN_NATIONS = 6
+COALITION_WEIGHT = 0.25  # 同盟各国兵力合计至少是霸主的这么多
 COALITION_MAX = 2  # 600 回合里最多这么多次反霸同盟（残局不再拖）
 COALITION_COOLDOWN = 150
 COALITION_START = 100  # 开局这么多回合内不触发（扩张期）
@@ -221,51 +224,95 @@ def _civil_war(ctx, nid) -> bool:
     share, odds = (DECAY_CIVIL_SHARE, DECAY_CIVIL_ODDS) if drifting else (CIVIL_SHARE, CIVIL_ODDS)
     if len(shaky) < share * len(cities) or not chance(ctx, odds, "civil", nid):
         return False
-    seed = max(shaky, key=lambda c: (g.distance(c.tile, capital.tile), -c.id))
     radius = max(2, round(CIVIL_RADIUS * city_scale(g)))
-    reach = g.distance(seed.tile, capital.tile) / 2
-    near = sorted(
-        (
-            c
-            for c in cities
-            if c.id != capital.id
-            and g.distance(c.tile, seed.tile) <= radius
-            and g.distance(c.tile, capital.tile) > reach
-        ),
-        key=lambda c: (g.distance(c.tile, seed.tile), c.id),
-    )
-    group = near[: max(2, int(CIVIL_MAX_SHARE * len(cities)))]
-    if len(group) < 2:
+    # 一般的内战分裂出一片；大一统之后的衰落是军阀割据：同时分裂出最多 WARLORDS 片，合计最多一半的城
+    factions = WARLORDS if drifting else 1
+    limit = max(2, int((WARLORD_SHARE if drifting else CIVIL_MAX_SHARE) * len(cities)))
+    taken: set[int] = set()
+    groups = []
+    for _ in range(factions):
+        pool = [c for c in shaky if c.id not in taken]
+        if not pool or len(taken) >= limit:
+            break
+        seed = max(
+            pool,
+            key=lambda c: (
+                min((g.distance(c.tile, gr[0].tile) for gr in groups), default=0),
+                g.distance(c.tile, capital.tile),
+                -c.id,
+            ),
+        )
+        reach = g.distance(seed.tile, capital.tile) / 2
+        near = sorted(
+            (
+                c
+                for c in cities
+                if c.id != capital.id
+                and c.id not in taken
+                and g.distance(c.tile, seed.tile) <= radius
+                and g.distance(c.tile, capital.tile) > reach
+            ),
+            key=lambda c: (g.distance(c.tile, seed.tile), c.id),
+        )
+        room = limit - len(taken)
+        group = near[: max(2, min(room, limit // factions + 1))]
+        if len(group) < 2:
+            continue
+        groups.append(group)
+        taken.update(c.id for c in group)
+    if not groups:
         return False
-    region = {c.id for c in group}
-    units = [
-        u
-        for u in s.units.values()
-        if u.nation == nid and u.layer != "cargo" and int(g.city_of[u.tile]) in region
-    ]
     from engine.systems.secession import secede
 
-    seat = max(group, key=lambda c: (c.population, -c.id))
-    new = secede(ctx, nid, group, seat, units, gold=40 * len(group), why="内战倒戈")
+    made = []
+    for group in groups:
+        region = {c.id for c in group}
+        units = [
+            u
+            for u in s.units.values()
+            if u.nation == nid and u.layer != "cargo" and int(g.city_of[u.tile]) in region
+        ]
+        seat = max(group, key=lambda c: (c.population, -c.id))
+        new = secede(ctx, nid, group, seat, units, gold=40 * len(group), why="内战倒戈")
+        made.append((new, group, seat, units))
+        ctx.log.add(
+            "civil_war",
+            nation=ref("nation", new),
+            previous=ref("nation", nid),
+            name=s.nations[new].name,
+            cities=[ref("city", c.id) for c in group],
+            units=len(units),
+            tile=seat.tile,
+        )
+    # 军阀之间也互相敌对（各自为王）
+    from engine.systems import diplomacy
+
+    for a, *_ in made:
+        for b, *_ in made:
+            if a < b:
+                diplomacy._set(s, a, b, "war", progress=s.turn)
     nation.upheaval_turn = s.turn
     nation.decay //= 2  # 分裂之后腐败减半，进入下一轮兴衰
-    ctx.log.add(
-        "civil_war",
-        nation=ref("nation", new),
-        previous=ref("nation", nid),
-        name=s.nations[new].name,
-        cities=[ref("city", c.id) for c in group],
-        units=len(units),
-        tile=seat.tile,
-    )
-    record(
-        s,
-        "civil_war",
-        f"{nation.name}爆发内战：{len(group)}座城市在{seat.name}宣布脱离，组建{s.nations[new].name}，"
-        f"带走{len(units)}支部队",
-        (nid, new),
-        seat.tile,
-    )
+    if len(made) == 1:
+        new, group, seat, units = made[0]
+        record(
+            s,
+            "civil_war",
+            f"{nation.name}爆发内战：{len(group)}座城市在{seat.name}宣布脱离，组建{s.nations[new].name}，"
+            f"带走{len(units)}支部队",
+            (nid, new),
+            seat.tile,
+        )
+    else:
+        parts = "、".join(f"{s.nations[n].name}（{len(gr)}城）" for n, gr, _, _ in made)
+        record(
+            s,
+            "civil_war",
+            f"{nation.name}土崩瓦解，军阀割据：{parts}各自称雄，"
+            f"共带走{sum(len(u) for *_, u in made)}支部队",
+            (nid, *[n for n, *_ in made]),
+            made[0][2].tile,
+        )
     return True
 
 
@@ -368,8 +415,10 @@ def _coalition(ctx) -> None:
         if share < HEGEMON_SHARE or s.turn - hegemon.coalition_turn < COALITION_COOLDOWN:
             continue
         members = [n for n in alive if n != hid and len(s.nation_cities(n)) >= 2]
-        if len(members) < 2:
-            continue
+        if len(members) < 2 or sum(pw.get(m, 0) for m in members) < COALITION_WEIGHT * pw.get(
+            hid, 0
+        ):
+            continue  # 同盟加起来连霸主的四分之一都不到：结了也没用
         hegemon.coalition_turn = s.turn
         # 同盟内部：停战、结盟（关系值拉到结盟线以上）
         for i, a in enumerate(members):

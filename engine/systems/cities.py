@@ -570,38 +570,38 @@ def city_yields(
     return result
 
 
-def supported(state: GameState, city: City) -> int:
-    """这座城供养着几个活着的单位：单位是从人口里抽出来的，照样吃粮、耗生产力（住房另算，见 drafted）。
-    供养城丢了：由本国首都供养。开局就有的单位（没有供养城）不用供养。"""
+def _support_index(state: GameState) -> dict[int, list[int]]:
+    """{城市: [它供养的单位 ID]}。供养城丢了（被攻占、分裂出去）的单位改由离它最近的本国城市供养
+    （负担分散到各地，不全压给首都）；开局就有的单位（没有供养城）不用供养。按单位、城市归属缓存。"""
     key = (len(state.units), state.next_id, tuple((c.id, c.nation) for c in state.cities.values()))
     if state._support is None or state._support[0] != key:
-        count: dict[int, int] = {}
-        for u in state.units.values():
+        index: dict[int, list[int]] = {}
+        by_nation: dict[int, list] = {}
+        for c in state.cities.values():
+            by_nation.setdefault(c.nation, []).append(c)
+        g = state.grid
+        for u in sorted(state.units.values(), key=lambda u: u.id):
             if u.home is None:
                 continue
             home = state.cities.get(u.home)
             if home is None or home.nation != u.nation:
-                capital = state.nations[u.nation].capital if u.nation in state.nations else None
-                home = state.cities.get(capital) if capital is not None else None
-            if home is not None:
-                count[home.id] = count.get(home.id, 0) + 1
-        state._support = (key, count)
-    return state._support[1].get(city.id, 0)
+                own = by_nation.get(u.nation)
+                if not own:
+                    continue
+                home = min(own, key=lambda c: (g.distance(c.tile, u.tile), c.id))
+            index.setdefault(home.id, []).append(u.id)
+        state._support = (key, index)
+    return state._support[1]
+
+
+def supported(state: GameState, city: City) -> int:
+    """这座城供养着几个活着的单位：单位是从人口里抽出来的，照样吃粮、耗生产力（住房另算，见 drafted）。"""
+    return len(_support_index(state).get(city.id, ()))
 
 
 def supported_units(state: GameState, city: City) -> list:
-    """这座城供养的活着的单位（供养城丢了的由首都供养）。"""
-    out = []
-    capital = state.nations[city.nation].capital
-    for u in state.units.values():
-        if u.home is None or u.nation != city.nation:
-            continue
-        home = state.cities.get(u.home)
-        if home is None or home.nation != u.nation:
-            home = state.cities.get(capital) if capital is not None else None
-        if home is not None and home.id == city.id:
-            out.append(u)
-    return sorted(out, key=lambda u: u.id)
+    """这座城供养的活着的单位。"""
+    return [state.units[i] for i in _support_index(state).get(city.id, ()) if i in state.units]
 
 
 def heads(state: GameState, city: City) -> int:
