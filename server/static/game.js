@@ -2771,20 +2771,35 @@ function drawLevelBadges(ctx, v) {
   ctx.restore();
 }
 
+// 动画速度：1 = 正常，2.5 = 快速（自动模拟用），0 = 不播放动画
+let animSpeed = 1;
+export function setAnimSpeed(x) { animSpeed = x; }
+// 本回合的动画还要多久播完（毫秒）；自动模拟等动画播完再进下一回合
+export function animationRemaining() {
+  const now = performance.now();
+  return G.effects.reduce((m, e) => Math.max(m, e.start + e.duration - now), 0);
+}
+const COMBAT_SPREAD = 1600; // 一回合的战斗动画最多错开这么久（正常速度）：战斗再多也不排到十几秒后
+
 export function playEvents(events, before) {
+  // 新的一回合：上一回合没播完的动画直接结束，不和这一回合混在一起
+  G.effects = [];
+  if (animSpeed <= 0) return;
+  const k = 1 / animSpeed;
   const now = performance.now();
   const old = new Map((before?.units ?? []).map(u => [u.id,u]));
   const combats = events.filter(e=>e.type==='combat');
   const destroyed = new Set(events.filter(e=>e.type==='unit_destroyed').map(e=>e.unit));
   const grouped = new Set();
+  const stagger = Math.min(240, COMBAT_SPREAD / Math.max(1, combats.length)) * k;
   let combatIndex = 0;
   for (const e of events) {
     if (e.type === 'combat') {
-      G.effects.push({type:'combat', ...e, start:now+combatIndex++*240, duration:1450,
+      G.effects.push({type:'combat', ...e, start:now+combatIndex++*stagger, duration:1450*k,
         attackerOld:old.get(e.attacker), defenderOld:old.get(e.defender)});
     } else if (e.type === 'unit_destroyed') {
       const c = combats.find(c=>c.attacker===e.unit||c.defender===e.unit);
-      G.effects.push({...e, type:'loss', unit:old.get(e.unit), start:now+(c?510:0), duration:1400});
+      G.effects.push({...e, type:'loss', unit:old.get(e.unit), start:now+(c?510*k:0), duration:1400*k});
     } else if (e.type === 'unit_moved' && e.path?.length > 1 && !destroyed.has(e.unit)) {
       const unit = old.get(e.unit);
       if (!unit) continue;
@@ -2792,27 +2807,32 @@ export function playEvents(events, before) {
       if (grouped.has(key)) continue;
       grouped.add(key);
       const count = unit.formation == null ? 1 : [...old.values()].filter(u=>u.formation===unit.formation).length;
-      const duration = Math.min(1500, 320 + e.path.length*140);
+      const duration = Math.min(1500, 320 + e.path.length*140) * k;
       G.effects.push({type:'movement', path:e.path, unit, count,
-        start:now+(combats.some(c=>c.attacker===e.unit)?650:0), duration});
+        start:now+(combats.some(c=>c.attacker===e.unit)?650*k:0), duration});
     } else if ((e.type === 'air_sortie' || e.type === 'air_returned') && e.source != null && e.source !== e.tile) {
       // 飞机起飞飞往目标上空 / 返航降落：飞机牌沿直线飞过去
       const unit = old.get(e.unit) ?? G.units.get(e.unit);
-      if (unit) G.effects.push({type:'movement', path:[e.source, e.tile], unit, count:1, start:now, duration:900});
+      if (unit) G.effects.push({type:'movement', path:[e.source, e.tile], unit, count:1, start:now, duration:900*k});
     } else if (e.type === 'facility_built') {
-      G.effects.push({type:'label',tile:e.tile,text:`${G.rules.buildings[e.facility]?.name??'设施'}竣工`,start:now+150,duration:1500});
+      G.effects.push({type:'label',tile:e.tile,text:`${G.rules.buildings[e.facility]?.name??'设施'}竣工`,start:now+150*k,duration:1500*k});
     } else if (e.type === 'pillaged') {
-      G.effects.push({type:'label', tile:e.tile, text:`破坏 · ${e.target}`, start:now+200, duration:1600});
+      G.effects.push({type:'label', tile:e.tile, text:`破坏 · ${e.target}`, start:now+200*k, duration:1600*k});
     } else if (e.type === 'city_independence') {
-      G.effects.push({type:'label', tile:e.tile, text:`独立 · ${e.name}`, start:now+400, duration:2600});
+      G.effects.push({type:'label', tile:e.tile, text:`独立 · ${e.name}`, start:now+400*k, duration:2600*k});
     } else if (e.type === 'battle_plan' || e.type === 'battle_ended') {
-      if (e.tile != null) G.effects.push({type:'label', tile:e.tile, text:e.type==='battle_plan'?`开战 · ${e.name}`:`${e.name} · ${e.result}`, start:now+300, duration:2200});
+      if (e.tile != null) G.effects.push({type:'label', tile:e.tile, text:e.type==='battle_plan'?`开战 · ${e.name}`:`${e.name} · ${e.result}`, start:now+300*k, duration:2200*k});
     } else if (e.type === 'level_up' || e.type === 'city_captured') {
       G.effects.push({type:'label', tile:e.tile, text:e.type==='level_up'?`晋升 · Lv.${e.level}`:'城市占领',
-        start:now+550, duration:1600});
+        start:now+550*k, duration:1600*k});
     }
   }
-  G.effects = G.effects.slice(-100);
+  // 移动、战斗、损失动画全部保留（丢了单位就会瞬移）；文字标签太多时只留最近的
+  const labels = G.effects.filter(e=>e.type==='label');
+  if (labels.length > 60) {
+    const keep = new Set(labels.slice(-60));
+    G.effects = G.effects.filter(e=>e.type!=='label' || keep.has(e));
+  }
 }
 
 const reducedMotion = matchMedia('(prefers-reduced-motion: reduce)');

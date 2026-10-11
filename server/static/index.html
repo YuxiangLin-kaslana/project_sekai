@@ -551,7 +551,7 @@
         <details class="fold" data-fold="sim">
           <summary>自动模拟与国家 AI<small id="sim-summary"></small></summary>
           <div class="management-panel" id="simulation-panel" hidden>
-            <div class="btn-row"><button type="button" class="primary" id="auto-sim" aria-pressed="false">开启自动模拟</button><select id="sim-speed" aria-label="模拟速度"><option value="1500">正常 · 等待 1.5 秒</option><option value="4000">慢速 · 等待 4 秒</option><option value="150">快速 · 等待 0.15 秒</option></select></div>
+            <div class="btn-row"><button type="button" class="primary" id="auto-sim" aria-pressed="false">开启自动模拟</button><select id="sim-speed" aria-label="模拟速度" title="自动模拟等这一回合的动画播完再进下一回合；动画播放时服务器已经在算下一回合"><option value="fast" selected>快速动画 · 每回合 1–2 秒</option><option value="normal">正常动画 · 每回合 2–4 秒</option><option value="turbo">极速 · 跳过动画</option></select></div>
             <p class="hint" id="simulation-status">默认关闭。开启后由国家自行建设、开拓和作战；暂停保留当前进度。</p>
             <div class="btn-row"><button type="button" id="ai-all">全部国家交给 AI</button><button type="button" id="ai-stop">全部国家暂停 AI</button></div>
           </div>
@@ -1088,14 +1088,19 @@ function cityAlerts(events) {
   }
 }
 
-async function nextTurn() {
+// 自动模拟的速度：动画速度倍率（0 = 不播放）、动画播完后再停多久（毫秒）
+const SIM_MODES = { fast: { anim: 2.5, pause: 600 }, normal: { anim: 1, pause: 900 }, turbo: { anim: 0, pause: 150 } };
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+async function nextTurn(pending = null) {
   if (!gameId) return;
-  if (commandBusy || worldBusy) return false;
+  if (pending) {
+    while (commandBusy || worldBusy) await sleep(50); // 预先算好的回合一定要套上，不然和服务器对不上
+  } else if (commandBusy || worldBusy) return false;
   commandBusy = true;
   const before = game.G.snap;
   $("next-turn").disabled = true;
   try {
-    const res = await api(`/api/games/${encodeURIComponent(gameId)}/turn`, {autoplay: false});
+    const res = await (pending ?? api(`/api/games/${encodeURIComponent(gameId)}/turn`, {autoplay: false}));
     game.setGame(res, null, world.width, world.height);
     game.playEvents(res.events, before);
     cityAlerts(res.events);
@@ -1132,7 +1137,7 @@ async function nextTurn() {
 }
 
 function stopSimulation() {
-  autoSim=false; ++simulationEpoch;
+  autoSim=false; ++simulationEpoch; game.setAnimSpeed(1);
   clearTimeout(simulationTimer); simulationTimer=null;
   if($('auto-sim')){$('auto-sim').textContent='开启自动模拟';$('auto-sim').setAttribute('aria-pressed','false');}
 }
@@ -1148,12 +1153,20 @@ async function toggleSimulation() {
   if(id!==gameId||!game.G.snap.nations.every(n=>n.ai_enabled))return;
   autoSim=true; const epoch=++simulationEpoch;
   renderGame();
+  // 每一轮：服务器先算下一回合（和本回合的动画同时进行），等动画播完、停一小会儿，再把新回合套上并播放它的动画
   const tick=async()=>{
     if(!autoSim||epoch!==simulationEpoch||id!==gameId)return;
-    if(!commandBusy&&!worldBusy&&document.visibilityState==='visible')await nextTurn();
-    if(autoSim&&epoch===simulationEpoch)simulationTimer=setTimeout(tick,Number($('sim-speed').value));
+    if(commandBusy||worldBusy||document.visibilityState!=='visible'){simulationTimer=setTimeout(tick,300);return;}
+    const mode=SIM_MODES[$('sim-speed').value]??SIM_MODES.fast;
+    const pending=api(`/api/games/${encodeURIComponent(gameId)}/turn`,{autoplay:false});
+    pending.catch(()=>{});
+    await sleep((mode.anim?game.animationRemaining():0)+mode.pause);
+    game.setAnimSpeed(mode.anim);
+    await nextTurn(pending);
+    if(autoSim&&epoch===simulationEpoch)simulationTimer=setTimeout(tick,0);
+    else game.setAnimSpeed(1);
   };
-  simulationTimer=setTimeout(tick,Number($('sim-speed').value));
+  simulationTimer=setTimeout(tick,0);
 }
 
 function yieldsHtml(y) {
