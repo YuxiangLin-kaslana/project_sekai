@@ -27,8 +27,8 @@ from engine.systems.settlement import city_scale
 
 PARTISAN_TURNS = 30
 PARTISAN_STABILITY = 50
-PARTISAN_ODDS = 8  # 满足条件的城每回合 1/8 的概率冒出游击队
-PARTISAN_CAP = 4
+PARTISAN_ODDS = 12  # 满足条件的城每回合 1/12 的概率冒出游击队
+PARTISAN_CAP = 3
 
 CIVIL_MIN = 10
 CIVIL_STABILITY = 40
@@ -40,15 +40,16 @@ CIVIL_RADIUS = 9  # 分裂地区：离起事城市这么多格以内（按地图
 DEFECT_RANK = 3
 DEFECT_CORPS = 8
 DEFECT_MIN = 8
-DEFECT_STABILITY = 55
-DEFECT_ODDS = 60
+DEFECT_STABILITY = 60
+DEFECT_ODDS = 40
 DEFECT_RADIUS = 6
 DEFECT_CITIES = 3
 
 UPHEAVAL_COOLDOWN = 150
 
 HEGEMON_SHARE = 0.35
-COALITION_MIN_NATIONS = 5
+COALITION_MIN_NATIONS = 6
+COALITION_MAX = 2  # 一局最多这么多次反霸同盟（残局不再拖）
 COALITION_COOLDOWN = 150
 COALITION_START = 100  # 开局这么多回合内不触发（扩张期）
 
@@ -334,6 +335,8 @@ def _coalition(ctx) -> None:
         return
     alive = [n for n in sorted(s.nations) if s.nation_cities(n)]
     if len(alive) < COALITION_MIN_NATIONS:
+        return
+    if sum(e["kind"] == "coalition" for e in s.chronicle) >= COALITION_MAX:
         return
     from engine.systems import diplomacy
 
