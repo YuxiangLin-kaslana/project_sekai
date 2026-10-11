@@ -968,7 +968,7 @@ const EVENT_KIND = {
   city_founded: 'build', building_completed: 'build', facility_built: 'build', unit_created: 'build',
   level_up: 'build', gold_assist: 'build', facility_repaired: 'build',
   facility_bombed: 'war', unit_captured: 'war', nation_eliminated: 'alert', base_fire: 'war', district_captured: 'war',
-  partisans: 'war', civil_war: 'alert', surrendered: 'alert', general_defected: 'alert', coalition: 'alert',
+  partisans: 'war', civil_war: 'alert', surrendered: 'alert', city_revolt: 'alert', general_defected: 'alert', coalition: 'alert',
   tech_researched: 'build', road_built: 'build',
   war_declared: 'alert', peace_signed: 'alert', alliance_formed: 'alert', alliance_broken: 'alert', diplomatic_offer: 'alert',
 };
@@ -998,6 +998,7 @@ const EVENT_TEXT = {
   road_planned: (e) => `${cityName(e.city)} 把修路排进生产队列（${e.path.length - 1} 格，${e.cost} 生产力）`,
   base_fire: (e) => `${game.nationOf(e.nation)?.name ?? ''}的${game.G.rules.buildings[e.facility]?.name ?? '军事基地'}炮击敌军：敌方损失 ${e.damage}${e.target_hp <= 0 ? '，被消灭' : ''}`,
   district_captured: (e) => `${game.nationOf(e.nation)?.name ?? e.nation} 占领了${game.nationOf(e.previous)?.name ?? ''}的${game.G.rules.buildings[e.facility]?.name ?? '区域'}${e.tiles?.length > 1 ? `，连同 ${e.tiles.length - 1} 格土地` : ''}，划归 ${cityName(e.city)}`,
+  city_revolt: (e) => `${cityName(e.city)} 爆发起义，赶走${game.nationOf(e.previous)?.name ?? ''}的占领军，重归${game.nationOf(e.nation)?.name ?? ''}`,
   surrendered: (e) => `${game.nationOf(e.nation)?.name ?? ''}向${game.nationOf(e.winner)?.name ?? ''}投降，${e.cities.length} 座城市并入`,
   partisans: (e) => `${cityName(e.city)} 附近冒出${game.nationOf(e.nation)?.name ?? ''}的游击队，袭扰${game.nationOf(e.occupier)?.name ?? ''}的占领军后方`,
   civil_war: (e) => `内战爆发：${e.cities.length} 座城市脱离${game.nationOf(e.previous)?.name ?? ''}，组建${e.name}，带走 ${e.units} 支部队`,

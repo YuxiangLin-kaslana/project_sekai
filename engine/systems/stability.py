@@ -197,7 +197,66 @@ def resolve(ctx: StepContext) -> None:
     for cid in sorted(s.cities):
         city = s.cities[cid]
         if city.stability <= 0:
-            _independence(ctx, city)
+            owner = city.captured_from
+            if (
+                owner is not None
+                and s.turn - city.captured_turn < REVOLT_TURNS
+                and s.nation_cities(owner)
+                and at_war(s, owner, city.nation)
+            ):
+                _revolt(ctx, city, owner)  # 刚被占领的城：起义归附原主，不独立成小国
+            else:
+                _independence(ctx, city)
+
+
+REVOLT_TURNS = 60  # 被攻占后这么多回合内稳定度降到 0：起义归附原主（原主还在、还在交战）
+
+
+def _revolt(ctx: StepContext, city, owner: int) -> None:
+    """起义：刚被占领的城市不服新主，稳定度降到 0 时倒向原主——城里的占领军被起义军消灭，
+    辖区归还原主（不独立成新的小国，前线来回拉锯）。"""
+    s, rules = ctx.state, ctx.rules
+    occupier = city.nation
+    for u in list(s.units_at(city.tile)):
+        if u.nation == occupier:
+            ctx.log.add(
+                "unit_destroyed",
+                unit=ref("unit", u.id),
+                tile=u.tile,
+                unit_type=u.type,
+                nation=ref("nation", u.nation),
+                reason="城中起义",
+            )
+            s.remove_unit(u.id)
+    city.nation, city.stability, city.capital = owner, rules.stability.independent, False
+    city.captured_turn, city.captured_from, city.drafted = s.turn, occupier, 0
+    city.queue, city.production, city.managed = [], 0, True
+    city.management = {"status": "pending", "reason": "起义归附，按方针重新安排"}
+    if city.construction is not None:
+        city.construction.nation = owner
+    s.grid.owner[s.grid.city_of == city.id] = owner
+    if s.nations[occupier].capital == city.id:
+        rest = s.nation_cities(occupier)
+        s.nations[occupier].capital = rest[0].id if rest else None
+        if rest:
+            rest[0].capital = True
+    s._network_cache = None
+    s._settlement_usage = None
+    s._closed_cache.clear()
+    s.invalidate_paths()
+    s._worked_cache.clear()
+    s._yield_cache.clear()
+    s._support = None
+    from engine.systems.territory import rebalance
+
+    rebalance(s, (owner, occupier))
+    ctx.log.add(
+        "city_revolt",
+        city=ref("city", city.id),
+        tile=city.tile,
+        nation=ref("nation", owner),
+        previous=ref("nation", occupier),
+    )
 
 
 def _independence(ctx: StepContext, city) -> None:

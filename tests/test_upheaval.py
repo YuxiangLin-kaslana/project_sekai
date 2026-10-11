@@ -168,3 +168,24 @@ def test_a_decaying_empire_breaks_into_several_warlords():
     assert len(warlords) >= 2  # 军阀割据：同时分裂出好几个
     assert len(s.nation_cities(1)) >= len(cities) // 2  # 合计最多分走一半
     assert diplomacy.at_war(s, warlords[0], warlords[1])  # 军阀之间互相敌对
+
+
+def test_a_freshly_conquered_city_at_zero_stability_revolts_back_to_its_old_owner():
+    from engine.step import step
+
+    s = board(nations=2, width=60)
+    found_city(s, RULES, 1, s.grid.idx(50, 5), capital=True)  # 原主还有首都
+    c = found_city(s, RULES, 1, s.grid.idx(5, 5))
+    home2 = found_city(s, RULES, 2, s.grid.idx(25, 5), capital=True)
+    s.nations[1].capital = next(x.id for x in s.nation_cities(1) if x.capital)
+    s.nations[2].capital = home2.id
+    diplomacy._set(s, 1, 2, "war")
+    c.nation, c.captured_from, c.captured_turn, c.stability = 2, 1, s.turn - 5, 0
+    s.grid.owner[s.grid.city_of == c.id] = 2
+    s._territory_cache = None
+    occupier = s.add_unit(Unit(s.new_id(), "infantry", 2, c.tile, "surface"))
+    out = step(s, [], RULES)
+    after = out.state.cities[c.id]
+    assert after.nation == 1 and occupier.id not in out.state.units  # 起义归附原主，占领军被消灭
+    assert any(e["type"] == "city_revolt" for e in out.events)
+    assert not any(e["type"] == "city_independence" for e in out.events)
