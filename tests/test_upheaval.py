@@ -155,7 +155,6 @@ def test_a_unified_empire_decays_and_its_far_cities_drift_away():
     assert cities[-1].id in hit and cities[0].id not in hit  # 离首都最远的城先离心
 
 
-
 def test_a_decaying_empire_breaks_into_several_warlords():
     s = board(nations=1, width=120)
     cities = [found_city(s, RULES, 1, s.grid.idx(3 + 7 * k, 5), capital=k == 0) for k in range(16)]

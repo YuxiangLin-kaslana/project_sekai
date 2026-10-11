@@ -571,24 +571,29 @@ def city_yields(
 
 
 def _support_index(state: GameState) -> dict[int, list[int]]:
-    """{城市: [它供养的单位 ID]}。供养城丢了（被攻占、分裂出去）的单位改由离它最近的本国城市供养
-    （负担分散到各地，不全压给首都）；开局就有的单位（没有供养城）不用供养。按单位、城市归属缓存。"""
+    """{城市: [它供养的单位 ID]}。供养城丢了（被攻占、分裂出去）的单位分摊给本国人口多、负担轻的城市
+    （不全压给首都，也不压给前线）；开局就有的单位（没有供养城）不用供养。按单位、城市归属缓存。"""
     key = (len(state.units), state.next_id, tuple((c.id, c.nation) for c in state.cities.values()))
     if state._support is None or state._support[0] != key:
         index: dict[int, list[int]] = {}
         by_nation: dict[int, list] = {}
         for c in state.cities.values():
             by_nation.setdefault(c.nation, []).append(c)
-        g = state.grid
+        orphans = []
         for u in sorted(state.units.values(), key=lambda u: u.id):
             if u.home is None:
                 continue
             home = state.cities.get(u.home)
             if home is None or home.nation != u.nation:
-                own = by_nation.get(u.nation)
-                if not own:
-                    continue
-                home = min(own, key=lambda c: (g.distance(c.tile, u.tile), c.id))
+                orphans.append(u)
+                continue
+            index.setdefault(home.id, []).append(u.id)
+        for u in orphans:
+            own = by_nation.get(u.nation)
+            if not own:
+                continue
+            # 人口减去已经供养的单位最多的城（负担最轻）
+            home = max(own, key=lambda c: (c.population - len(index.get(c.id, ())), -c.id))
             index.setdefault(home.id, []).append(u.id)
         state._support = (key, index)
     return state._support[1]

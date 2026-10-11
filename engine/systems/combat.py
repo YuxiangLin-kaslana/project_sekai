@@ -36,6 +36,7 @@ from engine.systems.context import StepContext
 from engine.systems.progression import gain, level, unit_strength
 
 FUEL_SHORTAGE = 30  # 没有石油：坦克、飞机（fuel 单位）战斗力 −30%
+DECAY_STRENGTH = 25  # 大一统之后的腐败：军纪废弛，战斗力最多 −25%（腐败超过起点后每 4 点 −1%）
 FLAK_FACTOR = 30  # 一门高射炮对来袭飞机的火力：FLAK_FACTOR × 防空火力 ÷ 飞机战斗力（6–40）
 FLAK_CAP = 70  # 飞一段航线最多被防空火力打掉这么多生命
 
@@ -316,6 +317,14 @@ def strength(
             # 坦克、飞机靠燃料：本国没有石油供应，战斗力 −FUEL_SHORTAGE%
             _note(notes, "缺石油燃料", -FUEL_SHORTAGE)
             value = value * (100 - FUEL_SHORTAGE) // 100
+        # 大一统之后的腐败：军纪废弛，战斗力最多 −DECAY_STRENGTH%（分裂出去的新政权没有这个减益）
+        n = state.nations.get(actor.nation)
+        cfg = rules.stability
+        if n is not None and cfg.decay and n.decay > cfg.decay_start:
+            pct = min(DECAY_STRENGTH, (n.decay - cfg.decay_start) // 4)
+            if pct:
+                _note(notes, "军纪废弛", -pct)
+                value = value * (100 - pct) // 100
         # 科技加成（techs.yaml 的 strength）
         from engine.systems.techs import strength_bonuses
 
