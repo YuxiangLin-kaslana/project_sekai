@@ -44,3 +44,19 @@ def test_starving_city_with_one_resident_disbands_a_unit():
     out = step(s, [], RULES)
     assert any(e["type"] == "unit_destroyed" and e["reason"] == "缺粮解散" for e in out.events)
     assert supported(out.state, out.state.cities[c.id]) < 12
+
+
+def test_rebalance_gives_far_tiles_to_the_nearest_own_city():
+    from engine.systems.cities import found_city
+    from engine.systems.territory import rebalance
+
+    s, c = board()
+    g = s.grid
+    other = found_city(s, RULES, 1, g.idx(10, 4))
+    t = g.idx(9, 4)  # 紧挨着 other，却划在远处的 c 名下（比如占领时划错了城）
+    g.owner[t], g.city_of[t] = 1, c.id
+    near = g.idx(6, 4)  # 离 c 近：不动
+    g.owner[near], g.city_of[near] = 1, c.id
+    s._territory_cache = None
+    assert rebalance(s, [1]) >= 1
+    assert int(g.city_of[t]) == other.id and int(g.city_of[near]) == c.id

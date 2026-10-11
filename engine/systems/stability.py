@@ -234,3 +234,6 @@ def _independence(ctx: StepContext, city) -> None:
         cities=[ref("city", c.id) for c in group],
         tile=city.tile,
     )
+    from engine.systems.territory import rebalance
+
+    rebalance(s, (nid, old))  # 独立的城和原国家：领土在各自的城市之间重新分

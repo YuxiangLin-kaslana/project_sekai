@@ -1219,7 +1219,9 @@ function districtList(city) {
     const have = rows.filter((d) => d.def === b).length + (city.construction?.facility === id && !city.construction.repair ? 1 : 0);
     return `<span title="${next ? `人口到 ${next[0]} 可以建 ${next[1]} 个` : "已经是最高一档"}">${esc(b.name)} ${have}/${most}</span>`;
   });
-  let html = `<h3>区域 <small>${districts.length}${tiered.length ? " · " + tiered.join(" · ") : ""}</small></h3><div class="settlement-buildings">${districts.map(tag).join("") || '<span class="empty">还没有区域</span>'}</div>`;
+  const working = rows.reduce((n, d) => n + d.workers, 0), posts = rows.reduce((n, d) => n + (d.damaged ? 0 : d.def.jobs ?? 0), 0);
+  let html = `<p class="hint">劳作：在岗 ${working} 人 / 人口 ${city.population} · 岗位 ${posts} 个${posts > working ? `（空 ${posts - working} 个）` : ""}。住宅区不用人；其他区域每个岗位 +2 产出，改良设施有人才产出。地图拉近后每格下方的小牌子是在岗人数。</p>`;
+  html += `<h3>区域 <small>${districts.length}${tiered.length ? " · " + tiered.join(" · ") : ""}</small></h3><div class="settlement-buildings">${districts.map(tag).join("") || '<span class="empty">还没有区域</span>'}</div>`;
   if (improvements.length) html += `<h3>改良设施 <small>${improvements.length}</small></h3><div class="settlement-buildings">${improvements.map(tag).join("")}</div>`;
   return html;
 }

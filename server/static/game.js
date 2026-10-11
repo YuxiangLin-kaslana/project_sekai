@@ -173,6 +173,9 @@ export function setGame(snap, rules, W, H) {
   G.cities = new Map(snap.cities.map((c) => [c.id, c]));
   G.units = new Map(snap.units.map((u) => [u.id, u]));
   G.cityAt = new Map(snap.cities.map((c) => [c.tile, c]));
+  // 劳作：格子 → 在这里干活的人数（改良设施 1 人，区域 0–3 人）
+  G.workers = new Map();
+  for (const c of snap.cities) for (const [t, n] of Object.entries(c.jobs ?? {})) if (n) G.workers.set(+t, n);
   G.ownerOf = new Int16Array(W * H).fill(-1);
   G.cityOf = new Int32Array(W * H).fill(-1);
   if (!G.water || G.water.length !== W * H) G.water = new Int8Array(W * H).fill(-1);
@@ -512,6 +515,7 @@ function drawFacilities(ctx, v) {
     eachCopy(v, wx, wy, z * 1.8, (x, y) => {
       drawFacilityTile(ctx, b.icon, x, y, z, c, info, t);
       if (G.damaged.has(t)) drawWrecked(ctx, x, y, z);
+      if (z >= 14 && (b.jobs ?? 0) > 0) drawWorkers(ctx, x, y, z, G.workers.get(t) ?? 0, b.jobs);
     });
   }
 }
@@ -1637,6 +1641,25 @@ const ART_KEY = {
   quarry: (c, info) => `${info?.color}`,
   fishing: (c, info) => `${info?.color}`,
 };
+
+// 劳作标记：格子下方一个小牌子，人形 + “在岗 / 岗位”；没人干活的改良设施（不产出）标灰
+function drawWorkers(ctx, x, y, z, n, jobs) {
+  const fs = Math.max(9, Math.min(13, z * 0.22));
+  const label = jobs > 1 ? `${n}/${jobs}` : n ? "" : "0";
+  ctx.save();
+  ctx.font = `600 ${fs}px ${FONT}`;
+  const w = fs * 1.1 + (label ? ctx.measureText(label).width + fs * 0.35 : 0), h = fs * 1.35;
+  const bx = x - w / 2, by = y + z * 0.5;
+  ctx.beginPath(); roundRect(ctx, bx, by, w, h, h / 2);
+  ctx.fillStyle = n ? "rgba(32,46,40,0.85)" : "rgba(70,62,58,0.75)"; ctx.fill();
+  // 人形
+  const px = bx + fs * 0.6, py = by + h * 0.5, r = fs * 0.2;
+  ctx.fillStyle = n ? "#ffe7a6" : "#a99f95";
+  ctx.beginPath(); ctx.arc(px, py - r * 1.1, r, 0, Math.PI * 2); ctx.fill();
+  ctx.beginPath(); ctx.ellipse(px, py + r * 1.2, r * 1.4, r * 1.1, 0, Math.PI, 0); ctx.fill();
+  if (label) { ctx.textBaseline = "middle"; ctx.fillText(label, px + fs * 0.45, py + 0.5); }
+  ctx.restore();
+}
 
 export function drawFacilityTile(ctx, icon, x, y, z, c, info, seed) {
   const custom = scenarioIcon(icon);

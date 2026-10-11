@@ -13,6 +13,21 @@ from engine.systems.diplomacy import at_war
 
 
 def resolve(ctx) -> None:
+    _occupy(ctx)
+    # 这回合有土地易手（攻下城市、占领区域）的国家：把领土在自己的城市之间重新分一次，不留飞地
+    from engine.ids import parse_ref
+    from engine.systems.territory import rebalance
+
+    touched = set()
+    for e in ctx.log.events:
+        if e["type"] in ("city_captured", "district_captured"):
+            touched.add(parse_ref(e["nation"], "nation"))
+            touched.add(parse_ref(e["previous"], "nation"))
+    if touched:
+        rebalance(ctx.state, touched)
+
+
+def _occupy(ctx) -> None:
     s, rules, g = ctx.state, ctx.rules, ctx.state.grid
     expanders = {rules.facility_index(b.id): b for b in rules.buildings.values() if b.capturable}
     if not expanders:
