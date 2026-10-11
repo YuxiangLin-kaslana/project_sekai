@@ -313,48 +313,48 @@ def test_shared_movement_table_matches_human_planner(board, domain, kind):
                 )
 
 
-def test_ai_flanks_an_enemy_that_is_already_engaged(board):
+def test_ai_moves_up_and_attacks_in_the_same_turn(board):
+    """文明 6 式先走再打：离敌军两三格的部队本回合走到旁边、接着攻击（攻击花 1 点移动力）。"""
     board.nations[1].ai_enabled = True
+    board.nations[1].strategy = {"posture": "战争"}
     g = board.grid
     add(board, "infantry", 1, (5, 10))  # 城市守军
-    enemy = add(board, "infantry", 2, (16, 10))
-    pin = add(board, "infantry", 1, (15, 10))
-    pin.managed = False  # 人工控制，原地贴住敌军
-    flanker = add(board, "infantry", 1, (16, 13))
+    enemy = add(board, "infantry", 2, (16, 10), hp=60)
+    striker = add(board, "infantry", 1, (16, 13), hp=180)
     result = step(board, [], RULES)
-    moved = result.state.units[flanker.id]
-    assert moved.ai_goal.startswith("包抄")
-    assert moved.tile in g.neighbors_of(enemy.tile) and moved.tile != pin.tile
+    moved = result.state.units[striker.id]
+    assert moved.tile in g.neighbors_of(enemy.tile)
+    hits = [
+        e for e in result.events if e["type"] == "combat" and e["attacker"] == f"unit:{striker.id}"
+    ]
+    assert hits  # 同一回合走到旁边并攻击（回合结束移动力已重置，看战斗事件）
+    assert result.state.units.get(enemy.id) is None or result.state.units[enemy.id].hp < 60
 
 
-def test_war_opens_a_front_line_with_arrows_and_ends_on_capture(board):
+def test_war_draws_a_front_line_along_the_contact_and_takes_the_city(board):
+    """钢铁雄心式战线：沿两国控制范围的接触线划一段战线，兵力占优就进攻，部队各自站位推进、
+    不集结不抱团，拿下对面最近的敌城。"""
     board.nations[1].ai_enabled = True
     board.nations[1].strategy = {"posture": "战争"}  # 跳过扩张期
     for xy in [(5, 10), (6, 10), (6, 11), (7, 10)]:
         add(board, "infantry", 1, xy)
     add(board, "artillery", 1, (6, 9))
-    result = step(board, [], RULES)
-    strategy = result.state.nations[1].strategy
-    front = strategy["fronts"][0]
-    plan = front["battle"]
     enemy = board.nation_cities(2)[0]
-    assert plan["target"] == enemy.id and plan["name"] == f"{enemy.name}战役"
-    assert strategy["battles"] == [plan]
-    kinds = [a["kind"] for a in plan["arrows"]]
-    assert kinds == ["main"]  # 苏式战役图：战线 + 主攻箭头，没有集结点、包围钳形
-    main = plan["arrows"][0]
-    assert main["to"] == enemy.tile and main["from"] == plan["stage"]
-    # 战线：目标城外 d 步、朝本国一侧的一排格子
-    line = front["line"]
-    assert len(line["tiles"]) >= 2
-    assert all(board.grid.distance(t, enemy.tile) == line["d"] for t in line["tiles"])
-    assert any(e["type"] == "battle_plan" for e in result.events)
-
-    won = result.state.clone()
-    won.cities[enemy.id].nation = 1
-    later = step(won, [], RULES)
-    ended = [e for e in later.events if e["type"] == "battle_ended"]
-    assert ended and ended[0]["result"] == "攻占"
+    first = step(board, [], RULES)
+    strategy = first.state.nations[1].strategy
+    front = strategy["fronts"][0]
+    assert front["kind"] == "land" and front["enemy"] == 2 and front["objective"] == enemy.id
+    assert front["stance"] == "进攻" and strategy["mode"] == "进攻"
+    assert len(front["tiles"]) > 5 and not strategy["battles"]  # 一条线，不是某城战役
+    # 部队各自去战线上的位置：不挤在同一格
+    spots = [u.tile for u in first.state.units.values() if u.nation == 1 and u.type == "infantry"]
+    assert len(set(spots)) >= 3
+    s = first.state
+    for _ in range(30):
+        s = step(s, [], RULES).state
+        if s.cities[enemy.id].nation == 1:
+            break
+    assert s.cities[enemy.id].nation == 1
 
 
 def test_ai_shells_a_fortified_position_then_assaults_it(board):
@@ -409,6 +409,9 @@ def test_territory_claims_only_coastal_waters():
 
 
 def test_ai_expands_first_and_only_then_goes_to_war(board):
+    from engine.systems import diplomacy
+
+    board.relations[diplomacy.key(1, 2)] = {"status": "peace", "since": 0}
     board.nations[1].ai_enabled = True
     for xy in [(5, 10), (6, 10)]:
         add(board, "infantry", 1, xy)
@@ -416,8 +419,9 @@ def test_ai_expands_first_and_only_then_goes_to_war(board):
     plan = s.nations[1].strategy
     assert plan["posture"] == "扩张" and plan["mode"] == "扩张" and plan["fronts"] == []
     assert plan["settlements"]  # 还有好地方可以建城
-    # 外国军队打进本国领土：扩张期结束，转入战争
+    # 外国军队打进本国领土（两国开战）：扩张期结束，转入战争，沿接触线划出战线
     s.nations[1].strategy["turn"] = -10
+    s.relations[diplomacy.key(1, 2)] = {"status": "war", "since": 1}
     g = s.grid
     inside = [t for t in g.within(board.nation_cities(1)[0].tile, 2) if int(g.owner[t]) == 1]
     for t in [t for t in inside if not s.units_at(t) and s.city_at(t) is None][:3]:
@@ -480,33 +484,35 @@ def test_ai_generals_take_command_of_nearby_field_troops(board):
     assert any(e["type"] == "corps_assigned" for e in result.events)
     led = [u for u in troops if result.state.units[u.id].corps == boss.id]
     assert led and len(led) <= generals.capacity(RULES, boss.rank)
-    # 军团独立：自己一条战线（自己挑目标），只带自己军团的部队；国家战线不调动军团成员
-    fronts = step(result.state, [], RULES).state.nations[1].strategy["fronts"]  # 下一回合编进战线
-    own = next(f for f in fronts if f.get("corps_front") == boss.id)
-    assert own["corps"] == [boss.id] and {u.id for u in led} == set(own["units"])
+    # 军团整支跟着将领编进离它最近的那段战线，不拆散到别的段
+    fronts = step(result.state, [], RULES).state.nations[1].strategy["fronts"]
+    own = next(f for f in fronts if boss.id in f.get("corps", ()))
+    assert {u.id for u in led} <= set(own["units"])
     for f in fronts:
         if f is not own:
             assert not {u.id for u in led} & set(f["units"])
 
 
 def test_front_line_moves_forward_toward_the_target(board):
+    """进攻的战线跟着部队往前压：战线离目标城越来越近（控制范围随部队推进）。"""
     board.nations[1].ai_enabled = True
     board.nations[1].strategy = {"posture": "战争"}
+    g = board.grid
     enemy = board.nation_cities(2)[0]
     for k in range(12):
         add(board, "infantry", 1, (12 + k % 4, 8 + k // 4 * 2))
     for k in range(4):
         add(board, "artillery", 1, (11, 8 + k))
     add(board, "infantry", 1, (4, 10))  # 城市守军
-    s, seen = board, []
-    for _ in range(25):
+    s, gaps = board, []
+    for _ in range(12):
         s = step(s, [], RULES).state
-        front = s.nations[1].strategy["fronts"][0]
-        seen.append((front["mode"], front["line"]["d"]))
-        if front["mode"] == "围城" or s.cities[enemy.id].nation == 1:
+        if s.cities[enemy.id].nation == 1:
             break
-    depths = [d for mode, d in seen if mode in ("推进", "围城")]
-    assert depths and min(depths) < max(depths)  # 战线一步步往前推
+        front = s.nations[1].strategy["fronts"][0]
+        assert front["stance"] == "进攻"
+        gaps.append(min(g.distance(t, enemy.tile) for t in front["tiles"]))
+    assert s.cities[enemy.id].nation == 1 or gaps[-1] < gaps[0]
 
 
 def test_a_nation_that_loses_its_last_city_disappears(board):

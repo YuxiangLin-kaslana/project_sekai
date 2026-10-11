@@ -100,8 +100,9 @@ CAPTURE_HP = 40  # 城防低于它时近战部队上前贴城，准备占领
 SIEGE_PATIENCE = 12  # 围城这么多回合城防还没掉 40 点，就放弃这座城
 GATHER_PATIENCE = 20  # 战线这么多回合都站不稳（没往前推），就暂时放弃这个目标
 APPROACH_PATIENCE = 30  # 进入围城后这么多回合还没接敌（远程进射程 / 城防开始掉），就放弃
-WAR_MODES = ("备战", "推进", "围城", "整编", "装船", "航渡")
-MODE_RANK = {"围城": 6, "航渡": 5, "推进": 4, "装船": 3, "整编": 2, "备战": 1}
+# 战争中的模式：陆上战线（controllers/frontline.py）只有进攻 / 防守；跨海作战仍按备战 → 装船 → 航渡 → 推进 → 围城
+WAR_MODES = ("进攻", "防守", "备战", "推进", "围城", "整编", "装船", "航渡")
+MODE_RANK = {"围城": 6, "航渡": 5, "进攻": 5, "推进": 4, "装船": 3, "防守": 2, "整编": 2, "备战": 1}
 LOCKED = ("推进", "整编", "围城", "装船", "航渡")  # 打起来以后不换目标（推进、轰击、运兵不白费）
 ENCIRCLE_MAX_GAPS = 4  # 敌军四周最多还差几格没占就值得去围（多了一回合填不满）
 ENCIRCLE_TARGETS = 10  # 每国每回合最多同时组织几处野战包围
@@ -933,7 +934,16 @@ def _siege_type(rules, have):
 
 
 def choose_target(
-    ctx, nation, cities, components, current=None, skip=None, taken=(), overseas=True, origin=None
+    ctx,
+    nation,
+    cities,
+    components,
+    current=None,
+    skip=None,
+    taken=(),
+    overseas=True,
+    origin=None,
+    land=True,
 ):
     """按"价值 − 代价"挑战争目标城市，返回 (城市, 说明)。current：现有目标（仍是敌城时），
     只有新目标明显更好（高出 SWITCH_MARGIN）才换。taken：其他战线的目标城格子——不重复挑，
@@ -956,6 +966,8 @@ def choose_target(
         if components[c.tile] not in ours:
             far.append(c)  # 在别的陆地上：要跨海登陆
             continue
+        if not land:
+            continue  # 陆上的敌城归钢铁雄心式战线（controllers/frontline.py）
         d = land_steps(ctx, nation.id).get(c.tile)
         if d is None:
             continue  # 陆路走不到
@@ -1647,7 +1659,16 @@ def plan_nation(ctx, nation, units):
             settlement=sites[0] if sites else None,
             settlements=sites,
         )
-    fronts = plan_fronts(ctx, nation, p, units, cities, components, replan)
+    # 陆上：钢铁雄心式战线（接触线上分段、分兵、攻守），不分平时战时——有人打进来照样守；
+    # 跨海目标（以及陆上没有接触线时）仍按目标城作战
+    from controllers import frontline
+
+    land = frontline.build(ctx, nation, p, units, cities, components, _ai(ctx).get("guards", {}))
+    on_land = {uid for f in land for uid in [*f["units"], *f["corps"]]}
+    rest = [u for u in units if u.id not in on_land]
+    fronts = land + plan_fronts(
+        ctx, nation, p, rest, cities, components, replan, overseas_only=bool(land)
+    )
     p["fronts"] = fronts
     _navy_plan(ctx, nation, p, units, cities)
     _fleet_plans(ctx, nation, p, units, cities)
@@ -1664,7 +1685,7 @@ def plan_nation(ctx, nation, units):
         border_posts=_ai(ctx).get("posts", {}).get(nation.id, 0),
         moves=[],
     )
-    if p["posture"] == "扩张":
+    if p["posture"] == "扩张" and not fronts:
         sites = p.get("settlements") or []
         p["mode"] = "扩张"
         p["reason"] = (
@@ -1682,7 +1703,12 @@ def plan_nation(ctx, nation, units):
         p["mode"] = lead["mode"]
         p["reason"] = (
             f"{len(fronts)} 条战线："
-            + "；".join(f"{f['battle']['name']}{f['mode']}" for f in fronts)
+            + "；".join(
+                f"{f['battle']['name']}{f['mode']}"
+                if f.get("battle")
+                else f"战线{f['id']}{f['mode']}"
+                for f in fronts
+            )
             if len(fronts) > 1
             else lead["reason"]
         )
@@ -1768,11 +1794,13 @@ def _end_front(ctx, nation, f, city):
     )
 
 
-def plan_fronts(ctx, nation, p, units, cities, components, replan):
-    """开几条战线、各打哪座城、部队怎么分。战线数随野战陆军规模（每 FRONT_UNITS 支一条）和将领数增加，
-    最多 MAX_FRONTS 条；各条战线的目标尽量分散到不同方向，同时最多一条跨海战线。"""
+def plan_fronts(ctx, nation, p, units, cities, components, replan, overseas_only=False):
+    """跨海作战（以及陆上没有接触线时的兜底）：开几条战线、各打哪座城、部队怎么分。战线数随野战陆军
+    规模（每 FRONT_UNITS 支一条）和将领数增加，最多 MAX_FRONTS 条；各条战线的目标尽量分散到不同方向，
+    同时最多一条跨海战线。overseas_only：陆上已经有钢铁雄心式战线（controllers/frontline.py），这里只打
+    跨海目标，军团跟陆上战线走。"""
     s, rules = ctx.state, ctx.rules
-    every = [dict(f) for f in p.get("fronts") or []]
+    every = [dict(f) for f in p.get("fronts") or [] if f.get("kind") != "land"]
     fronts = [f for f in every if not f.get("corps_front")]
     corps_old = {f["corps_front"]: f for f in every if f.get("corps_front")}
     skip = p["skip"]
@@ -1802,6 +1830,8 @@ def plan_fronts(ctx, nation, p, units, cities, components, replan):
         if at_war(s, c.nation, nation.id) and skip.get(str(c.id), -1) <= s.turn
     }
     gens = [g for g in gens if g.layer != "cargo" and int(components[g.tile]) in enemy_land]
+    if overseas_only:
+        gens = []  # 军团跟着陆上战线
     commanded = {gen.id for gen in gens}
     pool = [u for u in units if _front_pool(ctx, u) and u.corps not in commanded]
     troops = [u for u in pool if _troop(ctx, u)]
@@ -1821,7 +1851,9 @@ def plan_fronts(ctx, nation, p, units, cities, components, replan):
                 # 别的战线的目标（已经定下的，加上还没轮到的）：不重复、不扎堆
                 others = kept + fronts[i + 1 :]
                 taken = [s.cities[o["target_city"]].tile for o in others]
-                new, why = choose_target(ctx, nation, cities, components, t, skip, taken)
+                new, why = choose_target(
+                    ctx, nation, cities, components, t, skip, taken, land=not overseas_only
+                )
                 if new is None:
                     _end_front(ctx, nation, f, t)
                     continue
@@ -1842,7 +1874,9 @@ def plan_fronts(ctx, nation, p, units, cities, components, replan):
             fronts.remove(drop)
         while len(fronts) < want:
             taken = [s.cities[o["target_city"]].tile for o in fronts]
-            new, why = choose_target(ctx, nation, cities, components, None, skip, taken)
+            new, why = choose_target(
+                ctx, nation, cities, components, None, skip, taken, land=not overseas_only
+            )
             if new is None:
                 break
             fronts.append(_new_front(p, new, why))
@@ -2755,7 +2789,7 @@ def _navy(ctx, unit, plan, target):
     if (
         target is not None
         and target.nation != unit.nation
-        and mode in ("推进", "整编", "围城")
+        and mode in ("进攻", "推进", "整编", "围城")
         and seas & set(plan.get("bombard_seas") or ())
     ):
         if is_siege(rules, unit) and _siege(ctx, unit, plan, target):
@@ -2813,7 +2847,7 @@ def _carrier(ctx, unit, plan, target):
     if (
         target is not None
         and target.nation != unit.nation
-        and plan.get("mode") in ("推进", "整编", "围城", "航渡")
+        and plan.get("mode") in ("进攻", "推进", "整编", "围城", "航渡")
         and seas & set(plan.get("bombard_seas") or ())
     ):
         why = f"航母开到 {target.name} 外海，舰载机从航母出击"
@@ -3536,7 +3570,13 @@ def decide_unit(ctx, unit, plan, guards, claimed):
         return
     if line and mode != "围城" and health(rules, unit) >= 60 and _raid_airfield(ctx, unit):
         return
-    if line and mode != "围城" and health(rules, unit) >= 50 and _flank(ctx, unit):
+    if plan.get("kind") == "land":
+        # 钢铁雄心式陆上战线：先走再打、进攻推进 / 围城、防守驻守（controllers/frontline.py）
+        from controllers import frontline
+
+        if frontline.decide(ctx, unit, plan):
+            return
+    elif line and mode != "围城" and health(rules, unit) >= 50 and _flank(ctx, unit):
         return
     if target is not None and target.nation != unit.nation:
         if mode == "围城" and _siege(ctx, unit, plan, target):
@@ -3630,9 +3670,12 @@ def decide_unit(ctx, unit, plan, guards, claimed):
 def resolve_attacks(ctx):
     """按优先级提交攻击：远程 → 近战 → 占领。目标本回合会走开的换成留在原地的目标；
     占领只在城防已空（或本回合的远程轰击预计能打空）时提交。"""
+    from controllers import frontline
+
     s, rules = ctx.state, ctx.rules
     ai = _ai(ctx)
     ai["damage"] = {}
+    moved = ai.get("approach", {})
     for priority, _, actor, tile, reason in sorted(ai["intents"], key=lambda x: x[:2]):
         if isinstance(actor, City):
             if actor.id not in s.cities:
@@ -3640,8 +3683,11 @@ def resolve_attacks(ctx):
         elif actor.id not in s.units:
             continue
         if not stays(ctx, tile, actor):
-            choice = attack_choice(ctx, actor, only_static=True)
+            # 先走再打的部队这回合已经要走了：目标走开就算了，不在原地另挑
+            choice = None if actor.id in moved else attack_choice(ctx, actor, only_static=True)
             if choice is None:
+                if actor.id in moved:
+                    continue
                 if isinstance(actor, City):
                     continue
                 if not actor.fortified:
@@ -3654,7 +3700,7 @@ def resolve_attacks(ctx):
                 continue
             tile = choice[0]
         target = combat.target_at(s, rules, actor, tile)
-        info, problem = combat.preview(s, rules, actor, tile)
+        info, problem = frontline.preview(ctx, actor, tile)
         if problem or (target is None and not info.get("facility_strike")):
             continue
         if target is None:

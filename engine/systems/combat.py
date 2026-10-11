@@ -780,17 +780,27 @@ def tactics(state, rules, actor) -> dict:
 def preview_from(state, rules, actor, spot: int, left: int, tile: int):
     """actor 先走到 spot（剩 left 的移动力，单位 1/MOVE_STEPS 点）再打 tile 的预览（文明 6 式先走后打）。
     临时把单位挪过去算完再挪回来，状态不变。"""
-    old = (actor.tile, actor.moves_left, actor.road_credit, actor.facing, actor.fortified)
+    old = (
+        actor.tile,
+        actor.moves_left,
+        actor.road_credit,
+        actor.facing,
+        actor.fortified,
+        actor.destination,
+    )
     try:
         if spot != actor.tile:
             state.move_unit(actor, spot)
             actor.fortified = False
         actor.moves_left, actor.road_credit = divmod(left, MOVE_STEPS)
+        actor.destination = None  # 走到了：这回合已经下了去 spot 的移动指令也按到达算
         return preview(state, rules, actor, tile)
     finally:
         if actor.tile != old[0]:
             state.move_unit(actor, old[0])
-        actor.moves_left, actor.road_credit, actor.facing, actor.fortified = old[1:]
+        (actor.moves_left, actor.road_credit, actor.facing, actor.fortified, actor.destination) = (
+            old[1:]
+        )
 
 
 def approach_targets(state, rules, actor, limit: int = 24) -> list[dict]:
@@ -815,7 +825,11 @@ def approach_targets(state, rules, actor, limit: int = 24) -> list[dict]:
 
     def hostile(t: int) -> bool:
         city = state.city_at(t)
-        if city is not None and city.nation != actor.nation and at_war(state, city.nation, actor.nation):
+        if (
+            city is not None
+            and city.nation != actor.nation
+            and at_war(state, city.nation, actor.nation)
+        ):
             return True
         return any(
             u.nation != actor.nation

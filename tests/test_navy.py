@@ -200,7 +200,8 @@ def test_ai_ferries_an_army_across_the_sea_and_takes_the_island_city():
         if s.cities[enemy.id].nation == 1:
             break
     assert seen["embarked"] >= 6 and seen["disembarked"] >= 6
-    assert modes.index("航渡") < modes.index("围城")
+    # 登陆以后，岛上的部队按陆上战线（钢铁雄心式）打：航渡之后转为进攻
+    assert modes.index("航渡") < modes.index("进攻")
     assert s.cities[enemy.id].nation == 1
 
 
