@@ -117,3 +117,20 @@ def test_coalition_forms_against_a_hegemon():
     assert s.chronicle[-1]["kind"] == "coalition"
     upheaval._coalition(ctx)
     assert sum(e["kind"] == "coalition" for e in s.chronicle) == 1  # 冷却期内不再触发
+
+
+def test_tiny_nations_surrender_when_unification_is_near():
+    s = board(nations=2, width=80)
+    for k in range(8):
+        found_city(s, RULES, 1, s.grid.idx(3 + 7 * k, 3), capital=k == 0)
+    last = found_city(s, RULES, 2, s.grid.idx(70, 9), capital=True)
+    s.nations[2].capital = last.id
+    diplomacy._set(s, 1, 2, "war")
+    s.relations[diplomacy.key(1, 2)]["since"] = s.turn - 50
+    for _ in range(10):
+        s.add_unit(Unit(s.new_id(), "armor", 1, s.grid.idx(5, 6), "surface"))
+    soldier = s.add_unit(Unit(s.new_id(), "infantry", 2, last.tile, "surface"))
+    ctx = ctx_of(s)
+    upheaval._surrender(ctx)
+    assert last.nation == 1 and soldier.id not in s.units
+    assert s.chronicle[-1]["kind"] == "surrender"

@@ -53,6 +53,12 @@ COALITION_MAX = 2  # 一局最多这么多次反霸同盟（残局不再拖）
 COALITION_COOLDOWN = 150
 COALITION_START = 100  # 开局这么多回合内不触发（扩张期）
 
+SURRENDER_CITIES = 3  # 只剩这么多座城以下的小国
+SURRENDER_HEGEMON = 0.6  # 霸主拥有全世界这么多的城
+SURRENDER_POWER = 6  # 霸主兵力是它的这么多倍以上
+SURRENDER_WAR = 20  # 已经打了这么多回合
+SURRENDER_ODDS = 15
+
 CHRONICLE_MAX = 300
 
 
@@ -86,6 +92,7 @@ def resolve(ctx) -> None:
             continue
     _defections(ctx)
     _coalition(ctx)
+    _surrender(ctx)
 
 
 def _name(s, nid) -> str:
@@ -385,3 +392,71 @@ def _coalition(ctx) -> None:
             (hid, *members),
         )
         return  # 一回合最多一个反霸同盟
+
+
+# ---------------------------------------------------------------- 投降并入
+
+
+def _surrender(ctx) -> None:
+    """统一在望：霸主拥有全世界 SURRENDER_HEGEMON 以上的城时，只剩 SURRENDER_CITIES 座城以下、和它打了
+    SURRENDER_WAR 回合以上、兵力不到它 1/SURRENDER_POWER 的小国，每回合 1/SURRENDER_ODDS 的概率投降：
+    城市并入霸主，军队就地解散。"""
+    s, rules = ctx.state, ctx.rules
+    alive = [n for n in sorted(s.nations) if s.nation_cities(n)]
+    if len(alive) < 2:
+        return
+    count = {n: len(s.nation_cities(n)) for n in alive}
+    total = sum(count.values())
+    hid = max(alive, key=lambda n: (count[n], -n))
+    if count[hid] < SURRENDER_HEGEMON * total:
+        return
+    from engine.systems import diplomacy
+    from engine.systems.combat import city_max_hp
+
+    pw = diplomacy.power(s, rules)
+    for nid in alive:
+        if nid == hid or count[nid] > SURRENDER_CITIES or not at_war(s, nid, hid):
+            continue
+        since = diplomacy.relation(s, nid, hid).get("since", s.turn)
+        if s.turn - since < SURRENDER_WAR or pw.get(hid, 0) < SURRENDER_POWER * pw.get(nid, 0):
+            continue
+        if not chance(ctx, SURRENDER_ODDS, "surrender", nid):
+            continue
+        loser, winner = s.nations[nid], s.nations[hid]
+        cities = s.nation_cities(nid)
+        for u in sorted((u for u in s.units.values() if u.nation == nid), key=lambda u: u.id):
+            if u.id in s.units:
+                s.remove_unit(u.id)  # 军队就地解散
+        for c in cities:
+            c.nation, c.capital, c.queue, c.production = hid, False, [], 0
+            c.captured_turn, c.captured_from, c.drafted = s.turn, None, 0
+            c.hp = max(c.hp, city_max_hp(rules, c) // 2)
+            c.managed = True
+            c.management = {"status": "pending", "reason": "投降并入，按新国家方针重新安排"}
+            if c.construction is not None:
+                c.construction.nation = hid
+            s.grid.owner[s.grid.city_of == c.id] = hid
+        loser.capital = None
+        s._network_cache = None
+        s._settlement_usage = None
+        s._closed_cache.clear()
+        s.invalidate_paths()
+        s._worked_cache.clear()
+        s._yield_cache.clear()
+        s._support = None
+        from engine.systems.territory import rebalance
+
+        rebalance(s, (hid,))
+        ctx.log.add(
+            "surrendered",
+            nation=ref("nation", nid),
+            winner=ref("nation", hid),
+            cities=[ref("city", c.id) for c in cities],
+        )
+        record(
+            s,
+            "surrender",
+            f"{loser.name}向{winner.name}投降，{len(cities)}座城市并入{winner.name}",
+            (nid, hid),
+            cities[0].tile if cities else None,
+        )
