@@ -36,6 +36,8 @@ CIVIL_SHARE = 0.3
 CIVIL_ODDS = 12
 CIVIL_MAX_SHARE = 0.45
 CIVIL_RADIUS = 9  # 分裂地区：离起事城市这么多格以内（按地图尺度放大）
+DECAY_CIVIL_SHARE = 0.2  # 离心中的帝国：动荡城占两成就可能内战
+DECAY_CIVIL_ODDS = 6
 
 DEFECT_RANK = 3
 DEFECT_CORPS = 8
@@ -214,7 +216,10 @@ def _civil_war(ctx, nid) -> bool:
     ):
         return False
     shaky = [c for c in cities if c.stability < CIVIL_STABILITY and c.id != capital.id]
-    if len(shaky) < CIVIL_SHARE * len(cities) or not chance(ctx, CIVIL_ODDS, "civil", nid):
+    # 大一统之后陷入离心的帝国更容易内战（动荡城两成就够、概率翻倍）
+    drifting = nation.decay > ctx.rules.stability.decay_start
+    share, odds = (DECAY_CIVIL_SHARE, DECAY_CIVIL_ODDS) if drifting else (CIVIL_SHARE, CIVIL_ODDS)
+    if len(shaky) < share * len(cities) or not chance(ctx, odds, "civil", nid):
         return False
     seed = max(shaky, key=lambda c: (g.distance(c.tile, capital.tile), -c.id))
     radius = max(2, round(CIVIL_RADIUS * city_scale(g)))
@@ -477,6 +482,7 @@ def _decay(ctx) -> None:
     if not cfg.decay:
         return
     alive = [n for n in sorted(s.nations) if s.nation_cities(n)]
+    total = sum(len(s.nation_cities(n)) for n in alive)
     for nid in alive:
         n = s.nations[nid]
         if len(alive) == 1:
@@ -486,8 +492,9 @@ def _decay(ctx) -> None:
                 record(
                     s,
                     "decay",
-                    f"{n.name}一统天下{n.decay}年，承平日久，吏治腐败，四方离心",
+                    f"{n.name}一统天下已久，承平日久，吏治腐败，四方离心",
                     (nid,),
                 )
-        elif n.decay:
+        elif n.decay and len(s.nation_cities(nid)) < 0.6 * total:
+            # 不再是霸主（分裂后、或者有了强劲对手）：腐败慢慢消退；冒出一两个小国不算
             n.decay = max(0, n.decay - cfg.decay)

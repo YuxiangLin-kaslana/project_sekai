@@ -68,6 +68,9 @@ def garrisoned(state, rules, city) -> bool:
     )
 
 
+DECAY_FLOOR = 25  # 离心压力压到这里就停（低于动荡线 30，但不会单独压到 0 独立）
+
+
 def _drifting(s, cfg) -> set[int]:
     """大一统之后的离心：腐败超过 decay_start 的国家，离首都最远的一部分城市（腐败越重范围越大，最多六成）。"""
     out = set()
@@ -125,7 +128,8 @@ def war_pressures(ctx: StepContext) -> dict[int, list[str]]:
             and (s.turn + city.id) % 2 == 0
         ):
             reasons.append("overextension")
-        if city.id in drifting:
+        if city.id in drifting and city.stability > DECAY_FLOOR:
+            # 离心只把城市压到动荡区，不单独压到独立：攒成大面积动荡，一次爆发内战（大分裂）
             reasons.append("decay")
         if city.damaged_turn == s.turn:
             reasons.append("attacked")

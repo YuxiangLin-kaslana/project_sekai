@@ -69,16 +69,27 @@ def city_name(state, rules, nation_id: int) -> str:
 
 
 def nation_name(state, rules, culture: str, from_city: str | None = None) -> str:
-    """新国家的名字：本系列国名库里第一个没人用过的；用完了“城市名 + 共和国”。"""
+    """新国家的名字：本系列国名库里第一个没人用过的；用完了依次用“后 + 灭亡国家名”、“城市名 + 国号”、
+    “方位 + 国名”，都不重名。"""
     used = used_names(state)
     pool = _pool(rules, culture)
     for name in pool.nations if pool is not None else ():
         if name not in used and base_name(name) not in used:
             return name
+    # 国名库用完了：灭亡国家的名字加“后”复国；城市名加各种国号；方位前缀——都不重名
+    gone = {n.name for n in state.nations.values() if n.eliminated}
+    for name in pool.nations if pool is not None else ():
+        if name in gone and f"后{name}" not in used:
+            return f"后{name}"
     if from_city:
-        name = f"{from_city}共和国"
-        if name not in used:
-            return name
+        for suffix in ("共和国", "王国", "联邦", "公国", "自由邦", "民国", "联盟", "合众国"):
+            name = f"{from_city}{suffix}"
+            if name not in used:
+                return name
+    for prefix in ("北", "南", "东", "西", "新", "大"):
+        for name in pool.nations if pool is not None else ():
+            if f"{prefix}{name}" not in used:
+                return f"{prefix}{name}"
     k = len(state.nations) + 1
     while f"国家 {k}" in used:
         k += 1
