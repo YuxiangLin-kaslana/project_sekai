@@ -49,7 +49,7 @@ UPHEAVAL_COOLDOWN = 150
 
 HEGEMON_SHARE = 0.35
 COALITION_MIN_NATIONS = 6
-COALITION_MAX = 2  # 一局最多这么多次反霸同盟（残局不再拖）
+COALITION_MAX = 2  # 600 回合里最多这么多次反霸同盟（残局不再拖）
 COALITION_COOLDOWN = 150
 COALITION_START = 100  # 开局这么多回合内不触发（扩张期）
 
@@ -86,6 +86,7 @@ def resolve(ctx) -> None:
     if ctx.immediate:
         return
     _chronicle_events(ctx)
+    _decay(ctx)
     _partisans(ctx)
     for nid in sorted(s.nations):
         if s.nation_cities(nid) and _civil_war(ctx, nid):
@@ -242,6 +243,7 @@ def _civil_war(ctx, nid) -> bool:
     seat = max(group, key=lambda c: (c.population, -c.id))
     new = secede(ctx, nid, group, seat, units, gold=40 * len(group), why="内战倒戈")
     nation.upheaval_turn = s.turn
+    nation.decay //= 2  # 分裂之后腐败减半，进入下一轮兴衰
     ctx.log.add(
         "civil_war",
         nation=ref("nation", new),
@@ -343,7 +345,10 @@ def _coalition(ctx) -> None:
     alive = [n for n in sorted(s.nations) if s.nation_cities(n)]
     if len(alive) < COALITION_MIN_NATIONS:
         return
-    if sum(e["kind"] == "coalition" for e in s.chronicle) >= COALITION_MAX:
+    if (
+        sum(e["kind"] == "coalition" and s.turn - e["turn"] < 600 for e in s.chronicle)
+        >= COALITION_MAX
+    ):
         return
     from engine.systems import diplomacy
 
@@ -460,3 +465,29 @@ def _surrender(ctx) -> None:
             (nid, hid),
             cities[0].tile if cities else None,
         )
+
+
+# ---------------------------------------------------------------- 大一统之后的衰落
+
+
+def _decay(ctx) -> None:
+    """天下只剩一国：每回合积累腐败（stability.decay）；超过 decay_start 后远方城市开始离心
+    （stability.py 的 decay 压力），记一次大事记。还有别的国家时腐败慢慢消退。"""
+    s, cfg = ctx.state, ctx.rules.stability
+    if not cfg.decay:
+        return
+    alive = [n for n in sorted(s.nations) if s.nation_cities(n)]
+    for nid in alive:
+        n = s.nations[nid]
+        if len(alive) == 1:
+            before = n.decay
+            n.decay = min(5000, n.decay + cfg.decay)
+            if before <= cfg.decay_start < n.decay:
+                record(
+                    s,
+                    "decay",
+                    f"{n.name}一统天下{n.decay}年，承平日久，吏治腐败，四方离心",
+                    (nid,),
+                )
+        elif n.decay:
+            n.decay = max(0, n.decay - cfg.decay)

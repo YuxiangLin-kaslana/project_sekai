@@ -62,6 +62,7 @@ class Nation:
     culture: str = "west"  # 名字系列（东方 east / 西方 west）：城市名、将领名从这个系列的名字库取
     upheaval_turn: int = -1000  # 上一次内战 / 将领叛变的回合（冷却，见 engine/systems/upheaval.py）
     coalition_turn: int = -1000  # 上一次成为反霸同盟的目标的回合
+    decay: int = 0  # 大一统之后积累的腐败 / 离心（见 engine/systems/upheaval.py），远方城市因此不稳
 
 
 @dataclass(slots=True)

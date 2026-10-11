@@ -1620,7 +1620,7 @@ function markdownHtml(md) {
   }
   return out.join("");
 }
-const CHRONICLE_ICON = { capital: "🏛", eliminated: "☠", civil_war: "⚔", defection: "★", coalition: "🤝", independence: "⚑", great_war: "🔥", surrender: "🏳" };
+const CHRONICLE_ICON = { capital: "🏛", eliminated: "☠", civil_war: "⚔", defection: "★", coalition: "🤝", independence: "⚑", great_war: "🔥", surrender: "🏳", decay: "🍂" };
 function renderChronicle() {
   const el = $("chronicle"), list = game.G.snap?.chronicle ?? [];
   if (!el) return;

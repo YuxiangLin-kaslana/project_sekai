@@ -383,6 +383,11 @@ class StabilityConfig(_Strict):
         0, ge=0, le=100
     )  # 城市超过 empire_size 座、离首都 far 格以外：每两回合 −这么多
     empire_size: int = Field(10, ge=1, le=500)
+    # 大一统之后的衰落：天下只剩一国时每回合积累 1 点腐败；超过 decay_start 后，离首都最远的一部分城市
+    # （decay_start 之后每多 decay_spread 点多 100%，最多 60%）每回合 −decay（离心）
+    decay: int = Field(0, ge=0, le=100)
+    decay_start: int = Field(80, ge=0, le=5000)
+    decay_spread: int = Field(150, ge=1, le=5000)
     far: int = Field(10, ge=1, le=200)  # 按地图尺度放大
 
 

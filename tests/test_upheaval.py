@@ -134,3 +134,19 @@ def test_tiny_nations_surrender_when_unification_is_near():
     upheaval._surrender(ctx)
     assert last.nation == 1 and soldier.id not in s.units
     assert s.chronicle[-1]["kind"] == "surrender"
+
+
+def test_a_unified_empire_decays_and_its_far_cities_drift_away():
+    from engine.systems.stability import war_pressures
+
+    s = board(nations=1, width=80)
+    cities = [found_city(s, RULES, 1, s.grid.idx(3 + 7 * k, 5), capital=k == 0) for k in range(10)]
+    s.nations[1].capital = cities[0].id
+    ctx = ctx_of(s)
+    start = RULES.stability.decay_start
+    for _ in range(start + 1):
+        upheaval._decay(ctx)  # 天下只剩一国：每回合积累腐败
+    assert s.nations[1].decay == start + 1
+    assert s.chronicle[-1]["kind"] == "decay"
+    hit = {cid for cid, why in war_pressures(ctx).items() if "decay" in why}
+    assert cities[-1].id in hit and cities[0].id not in hit  # 离首都最远的城先离心

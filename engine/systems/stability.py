@@ -34,6 +34,7 @@ WAR_NAMES = {
     "weariness": "厌战",
     "conquest": "新占领",
     "overextension": "过度扩张",
+    "decay": "离心",
 }
 REASON_NAMES = {**SHORTAGE_NAMES, **WAR_NAMES}
 
@@ -67,6 +68,27 @@ def garrisoned(state, rules, city) -> bool:
     )
 
 
+def _drifting(s, cfg) -> set[int]:
+    """大一统之后的离心：腐败超过 decay_start 的国家，离首都最远的一部分城市（腐败越重范围越大，最多六成）。"""
+    out = set()
+    if not cfg.decay:
+        return out
+    for nid, n in s.nations.items():
+        if n.decay <= cfg.decay_start:
+            continue
+        cities = s.nation_cities(nid)
+        capital = s.cities.get(n.capital or -1)
+        if capital is None or len(cities) < 2:
+            continue
+        share = min(0.6, 0.1 + (n.decay - cfg.decay_start) / cfg.decay_spread)
+        far = sorted(
+            (c for c in cities if c.id != capital.id),
+            key=lambda c: (-s.grid.distance(c.tile, capital.tile), c.id),
+        )
+        out.update(c.id for c in far[: max(1, round(share * len(cities)))])
+    return out
+
+
 def war_pressures(ctx: StepContext) -> dict[int, list[str]]:
     """本回合各城的战争压力（attacked / occupied / encircled / weariness）。"""
     s, rules = ctx.state, ctx.rules
@@ -88,6 +110,7 @@ def war_pressures(ctx: StepContext) -> dict[int, list[str]]:
     cfg = rules.stability
     far = max(1, round(cfg.far * city_scale(s.grid)))
     sizes = Counter(c.nation for c in s.cities.values())
+    drifting = _drifting(s, cfg)
     out = {}
     for city in s.cities.values():
         reasons = []
@@ -102,6 +125,8 @@ def war_pressures(ctx: StepContext) -> dict[int, list[str]]:
             and (s.turn + city.id) % 2 == 0
         ):
             reasons.append("overextension")
+        if city.id in drifting:
+            reasons.append("decay")
         if city.damaged_turn == s.turn:
             reasons.append("attacked")
         if any(
