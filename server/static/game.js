@@ -31,7 +31,8 @@ export const G = {
   facilityAt: new Map(), // 格子 → 设施规则 ID
   owned: [], // [格子, 国家序号]
   selected: null, // { tile }：选中查看的格子
-  layers: { territory: true, cities: true, units: true, facilities: true, plans: true, areacap: true },
+  // 大区城市上限默认不显示（规划建城时再打开），地图上少一层数字
+  layers: { territory: true, cities: true, units: true, facilities: true, plans: true, areacap: false },
   political: false, // "国家"模式：底图不画地形，领土实心铺色，远景标国名
   diplomacy: false, // "外交"模式：在国家模式基础上，按视角国家的外交关系给各国上色，画出各国的交战 / 同盟连线
   diploNation: null, // 外交模式的视角国家（"nation:1"）
@@ -40,7 +41,7 @@ export const G = {
 };
 
 const POLITICAL_LABELS_BELOW = 6; // "国家"模式下缩放小于它时标国名、不画城市名牌
-const TERRAIN_MUTE = 0.3; // 有对局时地形底图去掉多少饱和度（0 = 不变，1 = 全灰）
+const TERRAIN_MUTE = 0.38; // 有对局时地形底图去掉多少饱和度（0 = 不变，1 = 全灰）
 
 function hexRgb(c) {
   if (!c.startsWith("#")) return (c.match(/[\d.]+/g) || [120, 120, 120]).slice(0, 3).map(Number);
@@ -209,6 +210,7 @@ export function setGame(snap, rules, W, H) {
   }
   G.constructionAt = new Map(snap.cities.filter(c=>c.construction).map(c=>[c.construction.tile,{...c.construction,city:c.id}]));
   G.stacks = new Map();
+  G.corpsGroups = null; // 军团（将领 + 成员），drawCorps 按需重算
   G.cargo = new Map(); // 船 / 航母 ID → 船上的陆军（不画在地图上）
   G.territoryOverview = new Map();
   G.roadsAt = new Map();
@@ -351,7 +353,7 @@ function isWaterTile(v, t) {
 
 function drawTerritory(ctx, v) {
   // The world overview uses a cached atlas; close views visit only visible hexes.
-  if (G.snap.stress && v.z < 3 && !v.atlas) {
+  if (v.z < 3 && !v.atlas) {
     const key = `${G.political}:${G.diplomacy && diplomacyPerspective()}`;
     let cv = G.territoryOverview.get(key);
     if (!cv) {
@@ -515,7 +517,8 @@ function drawFacilities(ctx, v) {
     eachCopy(v, wx, wy, z * 1.8, (x, y) => {
       drawFacilityTile(ctx, b.icon, x, y, z, c, info, t);
       if (G.damaged.has(t)) drawWrecked(ctx, x, y, z);
-      if (z >= 14 && (b.jobs ?? 0) > 0) drawWorkers(ctx, x, y, z, G.workers.get(t) ?? 0, b.jobs);
+      // 在岗人数牌只在拉近看建设时画（中景满地数字，压住部队和战线）
+      if (z >= 22 && (b.jobs ?? 0) > 0) drawWorkers(ctx, x, y, z, G.workers.get(t) ?? 0, b.jobs);
     });
   }
 }
@@ -1778,14 +1781,37 @@ function drawCityMarkers(ctx, v) {
   }
 }
 
+const CITY_PLATE_FULL = 7; // 缩放到这么近才画完整的城市名牌（等级、人口、血条、生产）；中景只标城名
 function drawCityPlates(ctx, v) {
   const z = v.z;
   if (z < (G.snap.stress ? 16 : LOD.cityPlate) || (G.political && z < POLITICAL_LABELS_BELOW)) return;
+  const compact = z < CITY_PLATE_FULL;
   for (const [,city] of visibleEntries(G.cityAt,v)) {
+    // 中景偏远的时候只标首都和大城，小城留个点（地图上不满屏都是名牌）
+    if (compact && z < 4.5 && !city.capital && city.population < 6) continue;
     const c = G.nations.get(city.nation).rgb;
     const [wx, wy] = center(city.tile);
-    eachCopy(v, wx, wy, 120, (x, y) => drawCityPlate(ctx, x, y, z, city, c));
+    eachCopy(v, wx, wy, 120, (x, y) => (compact ? drawCityLabel(ctx, x, y, z, city, c) : drawCityPlate(ctx, x, y, z, city, c)));
   }
+}
+
+// 中景的城市标签：只写城名（首都加粗、带星），城防受损时下面一条细血条
+function drawCityLabel(ctx, x, y, z, city, c) {
+  const fs = city.capital ? 12 : 11;
+  const text = city.capital ? `★ ${city.name}` : city.name;
+  const ly = y + Math.max(7, z * 0.95) + fs * 0.6;
+  ctx.save();
+  ctx.font = `${city.capital ? 700 : 600} ${fs}px ${FONT}`;
+  ctx.textAlign = 'center'; ctx.textBaseline = 'middle'; ctx.lineJoin = 'round';
+  ctx.lineWidth = 3.2; ctx.strokeStyle = 'rgba(14,18,22,0.85)'; ctx.strokeText(text, x, ly);
+  ctx.fillStyle = city.capital ? shade(c, 0.55) : '#f1e8d4'; ctx.fillText(text, x, ly);
+  const max = city.max_hp ?? 200;
+  if ((city.hp ?? max) < max) {
+    const w = Math.max(24, ctx.measureText(text).width * 0.8);
+    ctx.fillStyle = 'rgba(30,22,18,0.85)'; ctx.fillRect(x - w / 2, ly + fs * 0.7, w, 3);
+    ctx.fillStyle = '#dba283'; ctx.fillRect(x - w / 2, ly + fs * 0.7, w * Math.max(0, city.hp) / max, 3);
+  }
+  ctx.restore();
 }
 
 // ---------------------------------------------------------------- 兵种符号（北约军标风格）
@@ -2143,9 +2169,9 @@ function drawToken(ctx, x, y, z, units) {
     ctx.restore();
     return;
   }
-  // 远景小牌和城市名牌一样高（名牌：字号 10–14 + 上下边距 12），缩小地图时也看得清
-  const fs = Math.round(Math.max(10, Math.min(14, 9 + z * 0.12)));
-  const h = fs + 12;
+  // 远景小牌随缩放：最远处小一点（不盖满地形），拉近到中景和城市标签差不多高
+  const fs = Math.max(8, Math.min(12, 7 + z * 0.8));
+  const h = Math.round(fs + 6);
   const w = Math.round(h * 1.4);
   ctx.shadowColor = "rgba(0,0,0,0.45)";
   ctx.shadowBlur = 3;
@@ -2162,6 +2188,20 @@ function drawToken(ctx, x, y, z, units) {
   ctx.strokeStyle = "rgba(255,248,230,0.9)";
   ctx.stroke();
   const ink = inkOn(c);
+  const lead = military.find(u => u.corps != null && G.units.get(u.corps));
+  if (lead) {
+    // 军团番号角标：一眼分出哪几支是同一个军团
+    const no = corpsNumber(G.units.get(lead.corps));
+    const br = Math.max(6, h * 0.36);
+    ctx.save();
+    ctx.beginPath(); ctx.arc(x - w / 2, y - h / 2, br, 0, Math.PI * 2);
+    ctx.fillStyle = '#fbf3dc'; ctx.fill();
+    ctx.lineWidth = 1.6; ctx.strokeStyle = shade(c, -0.35); ctx.stroke();
+    ctx.fillStyle = '#1f1a12'; ctx.font = `800 ${Math.round(br * 1.15)}px ${FONT}`;
+    ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+    ctx.fillText(no, x - w / 2, y - h / 2 + 0.5);
+    ctx.restore();
+  }
   if (military.length > 1) {
     ctx.font = `700 ${Math.round(h * 0.78)}px ${FONT}`;
     ctx.textAlign = "center";
@@ -2324,9 +2364,11 @@ export function drawOver(ctx, v) {
   }
   // 地形模式在城市名牌出现之前（最远景）也标国名，观战时一眼看出谁在哪；画在城市和部队下面
   if (!G.political && G.layers.territory && v.z < LOD.cityPlate) drawNationLabels(ctx, v, true);
+  drawFronts(ctx, v);
   drawBattlePlans(ctx, v);
   drawDiplomacyLinks(ctx, v);
   if (G.layers.cities) drawCityMarkers(ctx, v);
+  if (G.layers.units) drawCorps(ctx, v);
   drawTactics(ctx, v);
   drawSelection(ctx, v);
   if (G.layers.units) {
@@ -2337,6 +2379,145 @@ export function drawOver(ctx, v) {
   if (G.layers.cities) drawCityPlates(ctx, v);
   drawEffects(ctx, v);
   if (G.political && v.z < POLITICAL_LABELS_BELOW && G.layers.territory) drawNationLabels(ctx, v);
+  if (G.layers.units) drawCorpsLabels(ctx, v);
+}
+
+// ---------------------------------------------------------------- 战线（钢铁雄心式）
+
+// 各国的陆上战线（controllers/frontline.py）：沿本国控制区和敌方控制区的交界画一道国家色粗线，
+// 画在本国这一侧（两国的线并排，一眼看出谁顶着谁）；进攻的一段线外侧带锯齿，并画一支指向目标城的进攻箭头
+const FRONT_INSET = 0.18;
+function drawFronts(ctx, v) {
+  if (!G.layers.plans || G.political) return;
+  const z = v.z;
+  const width = Math.max(2.4, Math.min(6, z * 0.13));
+  const tooth = Math.max(3, Math.min(10, z * 0.22));
+  for (const n of G.nations.values()) {
+    const fronts = (n.strategy?.fronts ?? []).filter(f => f.kind === 'land' && f.edges?.length);
+    if (!fronts.length) continue;
+    const color = shade(n.rgb, 0.08);
+    for (const f of fronts) {
+      const attack = f.stance === '进攻';
+      const line = new Path2D(), teeth = new Path2D();
+      const r = z * (1 - FRONT_INSET);
+      for (const [t, mask] of f.edges) {
+        const [wx, wy] = center(t);
+        eachCopy(v, wx, wy, z * 1.5, (x, y) => {
+          for (let d = 0; d < 6; d++) {
+            if (!(mask >> d & 1)) continue;
+            const [a, b] = EDGE_CORNERS[d];
+            const ax = x + CORNERS[a][0] * r, ay = y + CORNERS[a][1] * r;
+            const bx = x + CORNERS[b][0] * r, by = y + CORNERS[b][1] * r;
+            line.moveTo(ax, ay); line.lineTo(bx, by);
+            if (attack && z >= 2.5) {
+              // 锯齿朝敌方那一侧（这条边的外法线方向）
+              const mx = (ax + bx) / 2, my = (ay + by) / 2, ang = EDGE_ANGLE[d];
+              const ux = (bx - ax) / (Math.hypot(bx - ax, by - ay) || 1), uy = (by - ay) / (Math.hypot(bx - ax, by - ay) || 1);
+              teeth.moveTo(mx - ux * tooth * 0.55, my - uy * tooth * 0.55);
+              teeth.lineTo(mx + Math.cos(ang) * tooth, my + Math.sin(ang) * tooth);
+              teeth.lineTo(mx + ux * tooth * 0.55, my + uy * tooth * 0.55);
+              teeth.closePath();
+            }
+          }
+        });
+      }
+      ctx.save();
+      ctx.lineCap = 'round'; ctx.lineJoin = 'round';
+      ctx.strokeStyle = 'rgba(18,14,10,0.78)'; ctx.lineWidth = width + 2.6; ctx.stroke(line);
+      ctx.strokeStyle = color; ctx.lineWidth = width; ctx.stroke(line);
+      if (attack) {
+        ctx.fillStyle = color; ctx.fill(teeth);
+        ctx.strokeStyle = 'rgba(18,14,10,0.6)'; ctx.lineWidth = 1; ctx.stroke(teeth);
+      }
+      ctx.restore();
+      if (attack && f.arrow) drawPlanArrow(ctx, v, { kind: 'main', from: f.arrow[0], to: f.arrow[1] }, n.rgb, 0.62, false);
+    }
+  }
+}
+
+// ---------------------------------------------------------------- 军团
+
+// 军团：将领 + 编进来的部队。按快照算一次
+function corpsGroups() {
+  if (G.corpsGroups) return G.corpsGroups;
+  const groups = new Map();
+  for (const u of G.units.values()) {
+    if (u.rank && u.layer === 'surface' && unitDef(u)?.domain === 'land') groups.set(u.id, { gen: u, members: [] });
+  }
+  for (const u of G.units.values()) {
+    if (u.corps != null && u.id !== u.corps && u.layer === 'surface' && groups.has(u.corps)) groups.get(u.corps).members.push(u);
+  }
+  G.corpsGroups = [...groups.values()].filter(g => g.members.length);
+  return G.corpsGroups;
+}
+function corpsNumber(gen) {
+  return (gen.title || '').replace(/[^0-9]/g, '') || String(gen.id % 100);
+}
+
+// 军团的作战区域：成员所在格往外扩一圈，淡淡铺一层国家色，外缘描一圈虚线——远看就知道哪一团兵是一个军团
+function drawCorps(ctx, v) {
+  if (v.z >= 14) return; // 近景看兵牌上的番号就够了
+  const z = v.z;
+  for (const { gen, members } of corpsGroups()) {
+    const c = G.nations.get(gen.nation)?.rgb;
+    if (!c) continue;
+    const zone = new Set();
+    for (const u of [gen, ...members]) {
+      zone.add(u.tile);
+      for (let d = 0; d < 6; d++) { const n = neighbor(u.tile, d); if (n >= 0) zone.add(n); }
+    }
+    const fill = new Path2D(), edge = new Path2D();
+    for (const t of zone) {
+      const [wx, wy] = center(t);
+      eachCopy(v, wx, wy, z * 2, (x, y) => {
+        hexPath(fill, x, y, z + 0.4);
+        for (let d = 0; d < 6; d++) {
+          if (zone.has(neighbor(t, d))) continue;
+          const [a, b] = EDGE_CORNERS[d];
+          edge.moveTo(x + CORNERS[a][0] * z, y + CORNERS[a][1] * z);
+          edge.lineTo(x + CORNERS[b][0] * z, y + CORNERS[b][1] * z);
+        }
+      });
+    }
+    ctx.save();
+    ctx.fillStyle = rgba(c, 0.2); ctx.fill(fill);
+    ctx.setLineDash([Math.max(3, z * 0.35), Math.max(2, z * 0.22)]);
+    ctx.lineWidth = Math.max(1.6, Math.min(3, z * 0.08));
+    ctx.strokeStyle = 'rgba(18,14,10,0.55)'; ctx.stroke(edge);
+    ctx.lineWidth = Math.max(1, Math.min(2.2, z * 0.06));
+    ctx.strokeStyle = shade(c, 0.35); ctx.stroke(edge);
+    ctx.restore();
+  }
+}
+
+// 军团番号牌：将领头上一块国家色的牌子“第 N 军团 ★★ · 兵数”，画在最上层
+function drawCorpsLabels(ctx, v) {
+  const z = v.z;
+  const fs = Math.round(Math.max(10, Math.min(13, 9 + z * 0.15)));
+  ctx.save();
+  ctx.font = `700 ${fs}px ${FONT}`;
+  ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+  for (const { gen, members } of corpsGroups()) {
+    const c = G.nations.get(gen.nation)?.rgb;
+    if (!c) continue;
+    const text = `${gen.title || '军团'} ${'★'.repeat(Math.max(1, gen.rank))} · ${members.length}`;
+    const [wx, wy] = center(gen.tile);
+    eachCopy(v, wx, wy, 120, (x, y) => {
+      const w = ctx.measureText(text).width + 14, h = fs + 8;
+      const ly = y - Math.max(z * 1.15, 14) - h / 2;
+      ctx.shadowColor = 'rgba(0,0,0,0.45)'; ctx.shadowBlur = 4; ctx.shadowOffsetY = 1;
+      ctx.beginPath(); roundRect(ctx, x - w / 2, ly - h / 2, w, h, 4);
+      ctx.fillStyle = shade(c, -0.12); ctx.fill();
+      ctx.shadowColor = 'transparent';
+      ctx.lineWidth = 2.2; ctx.strokeStyle = 'rgba(16,13,9,0.85)'; ctx.stroke();
+      ctx.lineWidth = 1; ctx.strokeStyle = 'rgba(255,240,200,0.9)'; ctx.stroke();
+      ctx.fillStyle = inkOn(c); ctx.fillText(text, x, ly + 0.5);
+      // 牌子下面一根细杆指到将领所在格
+      ctx.beginPath(); ctx.moveTo(x, ly + h / 2); ctx.lineTo(x, y - z * 0.3);
+      ctx.strokeStyle = 'rgba(16,13,9,0.7)'; ctx.lineWidth = 1.4; ctx.stroke();
+    });
+  }
+  ctx.restore();
 }
 
 // ---------------------------------------------------------------- 作战计划箭头（战役图风格）

@@ -203,7 +203,9 @@ def pick_nations(rules, seed: int, count: int) -> list[dict]:
     taken = set()
     cands = []
     for tpl in rules.nations.values():
-        cands.append({"name": tpl.name, "color": tpl.color, "template": tpl.id, "culture": tpl.culture})
+        cands.append(
+            {"name": tpl.name, "color": tpl.color, "template": tpl.id, "culture": tpl.culture}
+        )
         taken |= {tpl.name, base_name(tpl.name)}
     for culture in sorted(rules.names):
         for name in rules.names[culture].nations:
@@ -214,7 +216,9 @@ def pick_nations(rules, seed: int, count: int) -> list[dict]:
     cultures = sorted(rules.names) or list(CULTURES)
     while len(picked) < count:
         k = len(picked)
-        picked.append({"name": None, "color": None, "template": None, "culture": cultures[k % len(cultures)]})
+        picked.append(
+            {"name": None, "color": None, "template": None, "culture": cultures[k % len(cultures)]}
+        )
     colors: list[str] = []
     for p in picked:
         p["color"] = distinct_color(colors, p["color"], rng)

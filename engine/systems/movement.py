@@ -451,7 +451,10 @@ def resolve(ctx: StepContext) -> None:
                     u.carried_by = carrier.id if carrier is not None else None
         if engaged and len(walked) > 1:
             for u in members:
-                u.engaged_turn, u.destination = state.turn, None  # 停在控制区里：目的地作废，可以就地攻击
+                u.engaged_turn, u.destination = (
+                    state.turn,
+                    None,
+                )  # 停在控制区里：目的地作废，可以就地攻击
         if unit.tile == dest:
             for u in members:
                 u.destination = None
