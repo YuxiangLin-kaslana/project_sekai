@@ -315,29 +315,35 @@ def test_ruined_city_requires_capture_and_cannot_award_ranged_xp(board):
     assert captured.state.units[infantry.id].hp == 1
 
 
-def test_melee_moves_into_the_hex_and_keeps_fighting_there(board):
+def test_melee_attacks_from_the_adjacent_hex_and_only_advances_into_an_emptied_hex(board):
     a = add(board, "infantry", 1, 3, 3)
     b = add(board, "infantry", 2, 4, 3, hp=100)
     b.facing = 3  # 面朝进攻方（西）：正面交战
     first = action(board, order(a, "attack", to=[4, 3]))
     assert not first.rejected
     s = first.state
-    # 近战只在同一格交战：进攻方开进了目标格，双方都活着就成了交战格
-    assert s.units[a.id].tile == s.units[b.id].tile == s.grid.idx(4, 3)
-    # 下一回合在格子里自动接着打
-    nxt = step(s, [], RULES)
-    fights = [e for e in nxt.events if e["type"] == "combat" and e.get("reason") == "同格交战"]
-    assert fights
-    # 每国在一格里最多 2 个军事单位：第三支开不进去
-    s = first.state.clone()
-    c = add(s, "infantry", 1, 3, 3)
-    d = add(s, "infantry", 1, 5, 3)
-    assert not action(s, order(c, "attack", to=[4, 3])).rejected
-    s = action(s, order(c, "attack", to=[4, 3])).state
-    if s.units.get(b.id) is not None and s.units[b.id].tile == s.grid.idx(4, 3):
-        s.units[d.id].moves_left, s.units[d.id].attacked_turn = 2, -1
-        full = action(s, order(d, "attack", to=[4, 3]))
-        assert any("已满" in r["message"] for r in full.rejected)
+    # 敌我不能同格：守军还活着，进攻方留在自己的格子里
+    assert s.units[a.id].tile == board.grid.idx(3, 3) and s.units[b.id].tile == board.grid.idx(4, 3)
+    assert not any(e["type"] == "combat" and e.get("reason") == "同格交战" for e in first.events)
+    # 只能打相邻的格子
+    far = add(s, "infantry", 1, 1, 3)
+    assert action(s, order(far, "attack", to=[4, 3])).rejected
+    # 守军快死了：一击打光后开进那一格
+    s = s.clone()
+    s.units[b.id].hp = 1
+    s.units[a.id].moves_left, s.units[a.id].attacked_turn = 2, -1
+    won = action(s, order(a, "attack", to=[4, 3]))
+    assert b.id not in won.state.units and won.state.units[a.id].tile == board.grid.idx(4, 3)
+
+
+def test_a_hex_holds_at_most_three_surface_units(board):
+    from engine.systems.stacking import has_room
+
+    t = board.grid.idx(5, 5)
+    for kind in ("infantry", "artillery", "engineer"):
+        add(board, kind, 1, 5, 5)
+    assert not has_room(board, RULES, t, "military", 1)  # 军事、平民合计已经 3 个
+    assert not has_room(board, RULES, t, "civilian", 1)
 
 
 def test_melee_cannot_enter_a_walled_city_until_its_defense_is_gone(board):
@@ -562,8 +568,8 @@ def test_units_can_pass_through_a_full_friendly_hex_but_not_stop_there(board):
     for col in range(12):
         g.terrain[g.idx(col, 3)] = list(RULES.terrain).index("plains")  # 一条一格宽的走廊
     walker = add(board, "infantry", 1, 1, 3)
-    for _ in range(2):
-        add(board, "infantry", 1, 2, 3)  # 走廊上本方已满的一格
+    for _ in range(3):
+        add(board, "infantry", 1, 2, 3)  # 走廊上本方已满的一格（一格最多 3 个单位）
     result = action(board, order(walker, "move", to=[3, 3]))
     assert not result.rejected
     assert result.state.units[walker.id].tile == g.idx(3, 3)

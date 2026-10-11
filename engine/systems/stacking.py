@@ -33,17 +33,30 @@ def stack_count(
     )
 
 
+def surface_limit(state: GameState, rules: Ruleset, tile: int) -> int:
+    """这一格地表单位（军事 + 平民）合计最多几个：城里按 cities.max_units，城外按 stacking.total（0 = 不限）。"""
+    if state.city_at(tile) is not None:
+        return rules.cities.max_units
+    return rules.stacking.total or 10**6
+
+
 def has_room(
-    state: GameState, rules: Ruleset, tile: int, cls: StackClass, nation: int | None = None
+    state: GameState,
+    rules: Ruleset,
+    tile: int,
+    cls: StackClass,
+    nation: int | None = None,
+    adding: int = 1,
 ) -> bool:
-    if cls != "air" and state.city_at(tile) is not None:
-        # 城里最多 cities.max_units 个地表单位（军事、平民合计）
+    if cls != "air":
         here = sum(
             1 for u in state.units_at(tile, "surface") if nation is None or u.nation == nation
         )
-        if here >= rules.cities.max_units:
+        if here + adding > surface_limit(state, rules, tile):
             return False
-    return stack_count(state, rules, tile, cls, nation) < stack_limit(state, rules, tile, cls)
+    return stack_count(state, rules, tile, cls, nation) + adding <= stack_limit(
+        state, rules, tile, cls
+    )
 
 
 def crowding_factor(state: GameState, rules: Ruleset, tile: int) -> int:

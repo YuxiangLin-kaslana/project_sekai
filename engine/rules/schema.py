@@ -315,6 +315,9 @@ class IndustryConfig(_Strict):
 class StackingConfig(_Strict):
     limits: StackLimits = StackLimits(military=4, civilian=2, air=3)
     city_bonus: StackLimits = StackLimits(military=2, civilian=1, air=2)  # 城市所在格的加成
+    total: int = Field(
+        0, ge=0
+    )  # 每格（每个国家）地表单位合计上限（军事 + 平民），0 = 不限；城市另按 cities.max_units
     crowding_from: int = Field(2, ge=1)  # 同格军事单位超过这么多个开始拥挤
     crowding_penalty: int = Field(10, ge=0, le=100)  # 每多一个，全格战斗力 −这么多 %
 

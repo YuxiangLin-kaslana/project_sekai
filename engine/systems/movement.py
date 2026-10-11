@@ -16,7 +16,7 @@ from engine.systems import zoc
 from engine.systems.cities import coastal
 from engine.systems.context import StepContext
 from engine.systems.roads import crosses_river
-from engine.systems.stacking import stack_count, stack_limit
+from engine.systems.stacking import has_room as stack_room
 
 
 def group_members(state, unit):
@@ -102,9 +102,7 @@ def has_room(state: GameState, rules: Ruleset, unit: Unit, tile: int) -> bool:
         return True
     ut = rules.units[unit.type]
     count = len(group_members(state, unit))
-    return stack_count(state, rules, tile, ut.stack_class, unit.nation) + count <= stack_limit(
-        state, rules, tile, ut.stack_class
-    )
+    return stack_room(state, rules, tile, ut.stack_class, unit.nation, adding=count)
 
 
 def air_radius(grid, ut) -> int:

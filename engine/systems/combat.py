@@ -1,10 +1,10 @@
 """确定性战斗。射程预览和结算用同一套检查。
 
-- 每国在一格里最多 2 个军事单位（堆叠上限），只要不在行军、不在编队里，每个单位都可以各自攻击。
-- 近战只在同一格里交战：近战攻击 = 开进相邻的敌军格，在格子里交战；打完不论胜负都留在那格。
-  双方部队同处一格（交战格）时，以后每回合在格子里自动接着打，直到一方被消灭或撤出。
-  城防还在的敌国城市不能开进去，近战只能从相邻格强攻城墙；城防打空后才能开进城与守军交战，
-  守军打光即占领。
+- 一个格子最多放 3 个地表单位（stacking.total；城里按 cities.max_units），只要不在行军、不在编队里，
+  每个单位都可以各自攻击。
+- 敌我单位不能同格：近战只打相邻的格子，攻击方留在自己的格子里；目标格的敌方军事单位打光了才开进去
+  （剩下的敌方平民被消灭，_advance）。城防还在的敌国城市只能从相邻格强攻城墙；城防打空后近战开进去占领。
+  （旧存档里如果还有敌我同格的交战格，每回合在格里接着打完，_skirmish。）
 - 带 area_damage 标签的远程单位（炮兵、战列舰）炮击整格：目标格里的每个敌方军事单位
   （和敌国城市）都按各自的防御力受到伤害。
 - 被包围的单位、城市战斗力打折（见 engine/systems/encirclement.py）。
@@ -544,11 +544,6 @@ def preview(state, rules, actor, tile) -> tuple[dict | None, str | None]:
         return None, "这里没有可攻击的敌方军事单位或城市"
     if isinstance(target, Unit) and rules.units[target.type].category != "military":
         # 平民（含将领）没有战斗力：打中就消灭
-        if kind == "melee":
-            from engine.systems.stacking import has_room
-
-            if not has_room(state, rules, tile, rules.units[actor.type].stack_class, actor.nation):
-                return None, "那一格本方已满，开不进去"
         return {
             "tile": tile,
             "target": ref("unit", target.id),
@@ -615,13 +610,6 @@ def preview(state, rules, actor, tile) -> tuple[dict | None, str | None]:
             "modifiers": [],
             "area": [],
         }, None
-    if kind == "melee" and isinstance(target, Unit):
-        # 近战要开进目标格交战：本方在那一格不能超过堆叠上限
-        from engine.systems.stacking import has_room
-
-        ut = rules.units[actor.type]
-        if not has_room(state, rules, tile, ut.stack_class, actor.nation):
-            return None, "目标格本方部队已满，不能再开进去交战"
     gun = kind == "torpedo" and not (
         isinstance(target, Unit) and rules.units[target.type].domain == "sea"
     )
@@ -985,6 +973,27 @@ def _skirmish(ctx: StepContext) -> None:
         _settle(ctx, tile)
 
 
+def _advance(ctx: StepContext, actor, start: int, tile: int) -> None:
+    """近战打完：目标格里已经没有敌方军事单位、本方还放得下，就开进去（剩下的敌方平民被消灭）。"""
+    s, rules = ctx.state, ctx.rules
+    if s.units.get(actor.id) is not actor or actor.tile == tile or s.city_at(tile) is not None:
+        return
+    here = s.units_at(tile, actor.layer)
+    if any(u.nation != actor.nation and _military(rules, u) for u in here):
+        return
+    if any(u.nation != actor.nation and not _war(s, u.nation, actor.nation) for u in here):
+        return
+    from engine.systems.stacking import has_room
+
+    if not has_room(s, rules, tile, rules.units[actor.type].stack_class, actor.nation):
+        return
+    for stranded in list(here):
+        if stranded.nation != actor.nation:
+            _destroy(ctx, stranded, tile, "被消灭")
+    s.move_unit(actor, tile)
+    ctx.log.add("unit_moved", unit=ref("unit", actor.id), path=[start, tile])
+
+
 def _settle(ctx: StepContext, tile: int) -> None:
     """交战格打完：只剩一个国家的军队时，城防已空的敌国城市被占领，留在格里的敌方平民投降。"""
     s, rules = ctx.state, ctx.rules
@@ -1160,11 +1169,8 @@ def _resolve(ctx: StepContext) -> None:
             _lost_aboard(ctx, actor)
             s.remove_unit(actor.id)
         elif info["kind"] == "melee" and isinstance(target, Unit):
-            # 近战 = 开进目标格交战：不论胜负都留在那一格（敌军还在就成了交战格）
-            if s.units.get(actor.id) is actor and actor.tile != tile:
-                s.move_unit(actor, tile)
-                ctx.log.add("unit_moved", unit=ref("unit", actor.id), path=[start, tile])
-            _settle(ctx, tile)
+            # 近战从相邻格打，敌我不同格：目标格的敌人打光了才开进去（留下的敌方平民被消灭）
+            _advance(ctx, actor, start, tile)
         elif info["kind"] == "melee" and dead_target:
             enemies = [
                 u

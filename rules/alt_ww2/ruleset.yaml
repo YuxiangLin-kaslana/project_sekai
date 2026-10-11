@@ -31,10 +31,11 @@ industry:                 # 有煤又有铁（都在开采）：全国工厂产�
   buildings: [factory]
   percent: 15
 
-stacking:                 # 企划书 5.2（初始草案）
-  limits: { military: 2, civilian: 2, air: 3 }      # 每格（每个国家）：地表军事 / 地表平民 / 空域
-  city_bonus: { military: 0, civilian: 1, air: 2 }  # 城市所在格的上限加成（军事单位同样最多 2 个）
-  crowding_from: 2        # 同格军事单位超过 2 个开始拥挤
+stacking:                 # 一个格子最多放 3 个单位（地表的军事 + 平民合计）；敌我不能同格（近战从相邻格打）
+  limits: { military: 3, civilian: 3, air: 3 }      # 每格：地表军事 / 地表平民 / 空域（飞机在空中另算）
+  city_bonus: { military: 0, civilian: 0, air: 2 }  # 城市所在格：飞机多停 2 架；地表单位按城里最多 4 个（cities.max_units）
+  total: 3                # 地表单位合计最多 3 个
+  crowding_from: 3        # 同格军事单位超过 3 个才拥挤（上限就是 3，不会拥挤）
   crowding_penalty: 10    # 每多 1 个，该格所有单位战斗力 −10%
 
 encirclement:             # 包围 = 断补给：四周能站人的相邻格都是敌军、敌国城市，或没有本方部队的敌方控制区
