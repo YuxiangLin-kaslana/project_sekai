@@ -24,7 +24,8 @@ def test_cities_draw_from_their_series_then_borrow_nation_names():
     s.nations = {1: Nation(1, "测试国", "#aa3333", "tianshu", culture="east")}
     template = RULES.nations["tianshu"].cities
     picked = [names.city_name(s, RULES, 1) for _ in range(len(template) + 3)]
-    assert picked[: len(template)] == template  # 先用模板自带的
+    assert picked[0] == template[0]  # 先用模板自带的：首都打头，其余按种子打乱
+    assert sorted(picked[: len(template)]) == sorted(template)
     assert all(p in RULES.names["east"].cities for p in picked[len(template) :])  # 再用东方城市名库
     # 城市名库全被占了：借还没用上的东方国名（去掉后缀）
     pool = RULES.names["east"]
@@ -39,10 +40,27 @@ def test_new_nations_and_generals_follow_the_series():
     g = HexGrid.empty(20, 10, wrap_x=False)
     s = GameState(1, 1, RULES.id, g)
     s.nations = {1: Nation(1, RULES.names["east"].nations[0], "#aa3333", None, culture="east")}
-    assert names.nation_name(s, RULES, "east") == RULES.names["east"].nations[1]  # 用过的跳过
+    picked = names.nation_name(s, RULES, "east")
+    assert picked in RULES.names["east"].nations[1:]  # 本系列里随机挑，用过的跳过
     import numpy as np
 
     assert (
         names.person_name(s, RULES, "west", np.random.default_rng(1)) in RULES.names["west"].people
     )
     assert names.base_name("大夏帝国") == "大夏" and names.base_name("东吴国") == "东吴"
+
+
+def test_nations_names_and_colors_change_with_the_seed_and_stay_distinct():
+    a = names.pick_nations(RULES, 1, 12)
+    b = names.pick_nations(RULES, 2, 12)
+    assert a == names.pick_nations(RULES, 1, 12)  # 同一种子同一套
+    assert [p["name"] for p in a] != [p["name"] for p in b]  # 换种子换一批
+    for picks in (a, b):
+        assert len({p["name"] for p in picks}) == 12
+        labs = [names._lab(p["color"]) for p in picks]
+        gaps = [names._delta(x, y) for i, x in enumerate(labs) for y in labs[i + 1 :]]
+        assert min(gaps) >= 15  # 不撞色
+    # 名字库来的国家（没有模板）也会出现：国家不再总是模板那几个
+    seen = {p["name"] for seed in range(20) for p in names.pick_nations(RULES, seed, 8)}
+    assert seen & set(RULES.names["east"].nations + RULES.names["west"].nations)
+    assert len(seen) > 30

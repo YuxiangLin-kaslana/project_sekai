@@ -1,15 +1,23 @@
-"""起名：城市名、国名、将领姓名（规则集的国家模板 + names.yaml 名字库）。
+"""起名：城市名、国名、将领姓名、国家颜色（规则集的国家模板 + names.yaml 名字库）。
 
-- 名字分系列（东方 / 西方）：每个国家属于一个系列（Nation.culture，开局从国家模板来；模板用完后
-  新国家东西方交替；独立出来的国家跟原国家）。
-- 城市名：先用国家模板自带的城市名，用完了从本系列的城市名库里取没人用过的（各国从库里不同位置开始取，
-  名字分散）；城市名库也用完了，借本系列还没用上的国名（去掉“帝国 / 王国……”后缀）当城市名。
-- 国名：本系列国名库里第一个没人用过的；用完了就“城市名 + 共和国”（城名、国名在同一系列里互用）。
+全部按对局种子随机（engine/rng.py 的 RngTree，同一种子永远得到同一套名字，换种子就换一批）：
+- 开局国家（pick_nations）：国家模板（自带国名、配色、城市名）和名字库里的国名混在一起洗牌，取前 N 个；
+  名字分系列（东方 / 西方），名字库来的国家属于它所在的系列，独立出来的国家跟原国家。
+- 国家颜色（distinct_color）：模板配色和不够分明的颜色换掉——在候选色里挑和已有各国颜色差得最远的
+  （CIELAB 色差），相邻国家不撞色。
+- 城市名：模板自带的城市名（首都固定是第一个，其余打乱）用完后，从本系列城市名库的随机位置往后取没人
+  用过的；城市名库也用完了，借本系列还没用上的国名（去掉“帝国 / 王国……”后缀）当城市名。
+- 新国家（独立、内战）：本系列国名库里随机挑一个没人用过的；用完了依次用“后 + 灭亡国家名”、
+  “城市名 + 国号”、“方位 + 国名”。
 - 将领：本系列的人名库里随机抽（同一局里尽量不重名）。
 全局不重名：已经有城市、国家用了的名字不再取。
 """
 
 from __future__ import annotations
+
+import colorsys
+
+from engine.rng import RngTree
 
 SUFFIXES = (
     "神圣同盟", "联合王国", "人民国", "大公国", "选侯国", "自由邦", "共和国", "合众国", "议会国",
@@ -41,10 +49,22 @@ def _pool(rules, culture):
     return pool
 
 
+def _template_cities(state, rules, nation) -> list[str]:
+    """模板自带的城市名：首都（第一个）不动，其余按种子打乱。"""
+    if nation.template not in rules.nations:
+        return []
+    names = list(rules.nations[nation.template].cities)
+    if len(names) > 2:
+        rng = RngTree(state.seed, "names", "template-cities", nation.id).generator()
+        rest = names[1:]
+        names = names[:1] + [rest[i] for i in rng.permutation(len(rest))]
+    return names
+
+
 def city_name(state, rules, nation_id: int) -> str:
     nation = state.nations[nation_id]
     used = used_names(state)
-    names = rules.nations[nation.template].cities if nation.template in rules.nations else []
+    names = _template_cities(state, rules, nation)
     while nation.city_names_used < len(names):
         name = names[nation.city_names_used]
         nation.city_names_used += 1
@@ -54,7 +74,9 @@ def city_name(state, rules, nation_id: int) -> str:
     if pool is not None:
         cities = pool.cities
         if cities:
-            start = (nation_id * 97) % len(cities)  # 各国从库里不同的位置开始取
+            # 各国从库里按种子随机的位置开始取：换一局就换一批城市名
+            rng = RngTree(state.seed, "names", "cities", nation_id).generator()
+            start = int(rng.integers(0, len(cities)))
             for i in range(len(cities)):
                 name = cities[(start + i) % len(cities)]
                 if name not in used:
@@ -65,17 +87,23 @@ def city_name(state, rules, nation_id: int) -> str:
                 return name
     k = nation.city_names_used
     nation.city_names_used += 1
+    while f"{base_name(nation.name)[:4]}{k + 1}号城" in used:
+        k += 1
     return f"{base_name(nation.name)[:4]}{k + 1}号城"
 
 
 def nation_name(state, rules, culture: str, from_city: str | None = None) -> str:
-    """新国家的名字：本系列国名库里第一个没人用过的；用完了依次用“后 + 灭亡国家名”、“城市名 + 国号”、
-    “方位 + 国名”，都不重名。"""
+    """新国家的名字：本系列国名库里随机挑一个没人用过的（按种子和当前国家数，可复现）；用完了依次用
+    “后 + 灭亡国家名”、“城市名 + 国号”、“方位 + 国名”，都不重名。"""
     used = used_names(state)
     pool = _pool(rules, culture)
-    for name in pool.nations if pool is not None else ():
-        if name not in used and base_name(name) not in used:
-            return name
+    free = [
+        n for n in (pool.nations if pool is not None else ())
+        if n not in used and base_name(n) not in used
+    ]  # fmt: skip
+    if free:
+        rng = RngTree(state.seed, "names", "nation", state.turn, len(state.nations)).generator()
+        return free[int(rng.integers(0, len(free)))]
     # 国名库用完了：灭亡国家的名字加“后”复国；城市名加各种国号；方位前缀——都不重名
     gone = {n.name for n in state.nations.values() if n.eliminated}
     for name in pool.nations if pool is not None else ():
@@ -109,3 +137,86 @@ def person_name(state, rules, culture: str, rng) -> str | None:
         if name not in taken:
             return name
     return people[start]
+
+
+# ---------------------------------------------------------------- 国家颜色
+
+DISTINCT = 26.0  # 两国颜色的 CIELAB 色差小于它就算撞色
+
+
+def _lab(color: str) -> tuple[float, float, float]:
+    """#rrggbb → CIELAB（D65）。"""
+    rgb = [int(color[k : k + 2], 16) / 255 for k in (1, 3, 5)]
+    lin = [c / 12.92 if c <= 0.04045 else ((c + 0.055) / 1.055) ** 2.4 for c in rgb]
+    x = (0.4124 * lin[0] + 0.3576 * lin[1] + 0.1805 * lin[2]) / 0.95047
+    y = 0.2126 * lin[0] + 0.7152 * lin[1] + 0.0722 * lin[2]
+    z = (0.0193 * lin[0] + 0.1192 * lin[1] + 0.9505 * lin[2]) / 1.08883
+
+    def f(t: float) -> float:
+        return t ** (1 / 3) if t > 0.008856 else 7.787 * t + 16 / 116
+
+    fx, fy, fz = f(x), f(y), f(z)
+    return 116 * fy - 16, 500 * (fx - fy), 200 * (fy - fz)
+
+
+def _delta(a, b) -> float:
+    return sum((p - q) ** 2 for p, q in zip(a, b, strict=True)) ** 0.5
+
+
+def _hex(r: float, g: float, b: float) -> str:
+    return f"#{round(r * 255):02x}{round(g * 255):02x}{round(b * 255):02x}"
+
+
+def _palette() -> list[str]:
+    """候选色：色相每 10° 一个，三档明暗 × 两档饱和度（太灰、太亮、太暗的不要，地图上不显眼）。"""
+    out = []
+    for i in range(36):
+        for light, sat in ((0.42, 0.62), (0.52, 0.58), (0.62, 0.5), (0.36, 0.45)):
+            out.append(_hex(*colorsys.hls_to_rgb(i / 36, light, sat)))
+    return out
+
+
+PALETTE = _palette()
+
+
+def distinct_color(taken: list[str], prefer: str | None = None, rng=None) -> str:
+    """一个和 taken 里各色都分得开的颜色：prefer（模板配色）够分明就用它，否则在候选色里挑和已有
+    颜色差得最远的（差不多远的里按 rng 随机挑，开局不总是同一套配色）。"""
+    labs = [_lab(c) for c in taken]
+    if prefer and all(_delta(_lab(prefer), lab) >= DISTINCT for lab in labs):
+        return prefer
+    if not labs:
+        return prefer or PALETTE[int(rng.integers(0, len(PALETTE))) if rng is not None else 0]
+    scored = sorted(((min(_delta(_lab(c), lab) for lab in labs), c) for c in PALETTE), reverse=True)
+    best = scored[0][0]
+    close = [c for d, c in scored if d >= best * 0.9]  # 和最远的差不多远的都算
+    return close[int(rng.integers(0, len(close)))] if rng is not None else close[0]
+
+
+# ---------------------------------------------------------------- 开局国家
+
+
+def pick_nations(rules, seed: int, count: int) -> list[dict]:
+    """开局的 count 个国家：{name, color, template, culture}。国家模板（自带配色、城市名）和名字库里的
+    国名一起按种子洗牌取前 count 个；颜色保证互相分得开。不够时剩下的 name 为 None（由调用方再起名）。"""
+    rng = RngTree(seed, "names", "nations").generator()
+    taken = set()
+    cands = []
+    for tpl in rules.nations.values():
+        cands.append({"name": tpl.name, "color": tpl.color, "template": tpl.id, "culture": tpl.culture})
+        taken |= {tpl.name, base_name(tpl.name)}
+    for culture in sorted(rules.names):
+        for name in rules.names[culture].nations:
+            if name not in taken and base_name(name) not in taken:
+                cands.append({"name": name, "color": None, "template": None, "culture": culture})
+                taken |= {name, base_name(name)}
+    picked = [cands[i] for i in rng.permutation(len(cands))[:count]]
+    cultures = sorted(rules.names) or list(CULTURES)
+    while len(picked) < count:
+        k = len(picked)
+        picked.append({"name": None, "color": None, "template": None, "culture": cultures[k % len(cultures)]})
+    colors: list[str] = []
+    for p in picked:
+        p["color"] = distinct_color(colors, p["color"], rng)
+        colors.append(p["color"])
+    return picked

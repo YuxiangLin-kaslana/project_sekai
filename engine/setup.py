@@ -96,22 +96,19 @@ def new_game(world: World, rules: Ruleset, tuning: dict | None = None) -> GameSt
     grid.facility[:] = 0
     state = GameState(turn=1, seed=world.params.seed, ruleset_id=rules.id, grid=grid)
 
-    from engine.systems.names import CULTURES, nation_name
+    from engine.systems.names import nation_name, pick_nations
     from engine.systems.techs import start_techs
 
-    templates = list(rules.nations.values())
-    for k in range(len(world.starts)):
-        tpl = templates[k] if k < len(templates) else None
+    # 国家：模板和名字库的国名按种子洗牌后取（换种子就换一批国家、配色），见 engine/systems/names.py
+    for pick in pick_nations(rules, state.seed, len(world.starts)):
         nid = state.new_id()
-        # 模板用完后：新国家东西方交替，国名从名字库取
-        culture = tpl.culture if tpl else CULTURES[k % len(CULTURES)]
         state.nations[nid] = Nation(
             id=nid,
-            name=tpl.name if tpl else nation_name(state, rules, culture),
-            color=tpl.color if tpl else _generated_color(k),
-            template=tpl.id if tpl else None,
+            name=pick["name"] or nation_name(state, rules, pick["culture"]),
+            color=pick["color"],
+            template=pick["template"],
             gold=rules.start.gold * grid.tuning.get("start_gold", 100) // 100,
-            culture=culture,
+            culture=pick["culture"],
             techs=start_techs(rules) if rules.techs else None,  # 开局科技
         )
 

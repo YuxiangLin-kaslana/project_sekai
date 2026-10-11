@@ -64,7 +64,10 @@ def test_new_game_places_nations(world, state):
         assert capital.tile == start and capital.capital and capital.nation == nid
         assert "palace" in capital.buildings
         assert capital.population == RULES.cities.capital_population
-        assert n.name == list(RULES.nations.values())[nid - 1].name
+        # 国名、配色按种子从模板和名字库里抽（见 engine/systems/names.py）
+        pool = {t.name for t in RULES.nations.values()}
+        pool |= {x for p in RULES.names.values() for x in p.nations}
+        assert n.name in pool
         mine = [u for u in state.units.values() if u.nation == nid]
         assert {"infantry", "recon", "engineer", "settler", "fighter"} <= {u.type for u in mine}
         territory = (state.grid.city_of == capital.id).sum()
@@ -249,7 +252,9 @@ def test_settler_founds_city(state):
     assert settler.id not in s.units
     city = s.city_at(spot)
     assert city is not None and city.nation == nid and not city.capital
-    assert city.name == list(RULES.nations.values())[nid - 1].cities[1]
+    nation = s.nations[nid]
+    own = RULES.nations[nation.template].cities if nation.template else []
+    assert city.name in own or city.name in RULES.names[nation.culture].cities
     # 离这座新城太近的地方不能再建城
     near = next(t for t in g.within(spot, 2) if t != spot and not g.is_water[t])
     assert found_city_problem(s, RULES, nid, near) is not None

@@ -12,9 +12,9 @@ def secede(
     新政权和原国家交战，和其他国家沿用原国家的关系（交战的继续交战，其余和平）；继承原国家的科技。"""
     s, rules = ctx.state, ctx.rules
     cfg, g = rules.stability, s.grid
-    from engine.setup import _generated_color
+    from engine.rng import RngTree
     from engine.systems import diplomacy
-    from engine.systems.names import nation_name
+    from engine.systems.names import distinct_color, nation_name
     from engine.systems.territory import rebalance
 
     nid = max(s.nations) + 1
@@ -22,7 +22,11 @@ def secede(
     nation = Nation(
         nid,
         name or nation_name(s, rules, culture, from_city=seat.name),
-        _generated_color(nid + 7),
+        # 新国家的颜色：和现存各国都分得开（不和原国家、邻国撞色）
+        distinct_color(
+            [n.color for n in s.nations.values() if not n.eliminated],
+            rng=RngTree(s.seed, "names", "color", nid).generator(),
+        ),
         None,
         capital=seat.id,
         gold=gold,
