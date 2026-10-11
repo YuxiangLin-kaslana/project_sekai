@@ -354,6 +354,9 @@ class TacticsConfig(_Strict):
     flank: int = Field(30, ge=0, le=200)  # 侧击：从目标侧面打，+这么多 %（看目标的朝向）
     rear: int = Field(80, ge=0, le=300)  # 背击：从目标背后打，+这么多 %
     river: int = Field(50, ge=0, le=90)  # 隔着河进攻 −这么多 %（飞机不受影响）
+    # 攻击花的移动力（点，文明 6 式）：先移动、再攻击，移动后剩下的移动力不少于它才能打；攻击用掉剩下的全部
+    # 移动力，一回合只能打一次。走进敌方控制区要停下，但还留着这点移动力可以攻击
+    attack_cost: int = Field(1, ge=0, le=5)
 
 
 class StabilityConfig(_Strict):

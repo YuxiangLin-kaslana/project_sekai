@@ -432,6 +432,8 @@ def _apply(ctx: StepContext, order: Order) -> None:
             raise Rejected("bad_target", "找不到可走的路线，或沿途容量不足")
         if min(u.moves_left * MOVE_STEPS + u.road_credit for u in members) <= 0:
             raise Rejected("bad_target", "移动力已用完")
+        if any(u.engaged_turn == state.turn for u in members):
+            raise Rejected("bad_target", "已经走进敌方控制区，这回合不能再移动（还能就地攻击）")
         for u in members:
             u.destination, u.fortified, u.task = tile, False, None
             ctx.moving.add(u.id)

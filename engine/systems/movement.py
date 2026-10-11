@@ -200,6 +200,13 @@ def _planner(state, rules, unit, cost=None):
     return ut, blocked, enter
 
 
+def attack_steps(rules, unit) -> int:
+    """攻击要留的移动力（单位 1/MOVE_STEPS 点，规则集 tactics.attack_cost）：移动后剩下的不少于它才能攻击。
+    满移动力还不到这么多的单位（很慢的单位）只要求满移动力。"""
+    ut = rules.units[unit.type]
+    return min(rules.tactics.attack_cost * MOVE_STEPS, max(1, ut.moves) * MOVE_STEPS)
+
+
 def local_step_problem(ctx, unit, a, b, final=True):
     """局部验证与人工路线相同的通行/归属/容量规则，避免 AI 每步扫描全图单位。
     final=False：只是路过（可以穿过本方已满的格子），不查堆叠容量。"""
@@ -265,6 +272,9 @@ def movement_map(state, rules, unit, cost=None) -> tuple[dict[int, int], dict[in
                 best[t], parents[t] = 0, unit.tile
         return best, parents
     heap = [(-budget, unit.tile)]
+    keep = attack_steps(rules, unit)
+    if unit.engaged_turn == state.turn:
+        return best, parents  # 这回合已经走进敌方控制区：不能再走（还能就地攻击）
     shut = closed_for(state, unit)
     stop = (
         None
@@ -284,7 +294,11 @@ def movement_map(state, rules, unit, cost=None) -> tuple[dict[int, int], dict[in
                 continue
             rest = max(0, left - c)
             if stop is not None and stop[n]:
-                rest = 0  # 走进交战国的控制区：必须停下
+                # 走进交战国的控制区：必须停下（不再往外走），但还留着攻击要的移动力（文明 6 式先走后打）
+                rest = min(rest, keep)
+                if rest > best.get(n, -1):
+                    best[n], parents[n] = rest, cur
+                continue
             if rest > best.get(n, -1):
                 best[n], parents[n] = rest, cur
                 heapq.heappush(heap, (-rest, n))
@@ -371,6 +385,7 @@ def resolve(ctx: StepContext) -> None:
             for u in state.units.values()
             if u.destination is not None
             and u.moves_left * MOVE_STEPS + u.road_credit > 0
+            and u.engaged_turn != state.turn
             and (not ctx.immediate or u.id in ctx.moving)
         ),
         key=lambda u: (u.nation, u.id),
@@ -395,7 +410,7 @@ def resolve(ctx: StepContext) -> None:
         budget = min(u.moves_left * MOVE_STEPS + u.road_credit for u in members)
         full = min(unit_moves(state.grid, rules.units[u.type]) * MOVE_STEPS for u in members)
         # 先按移动力走出本回合的一段（可以穿过本方已满的格子），再退回到最后一个能停下的格子
-        walked, left = [unit.tile], [budget]
+        walked, left, engaged = [unit.tile], [budget], False
         for tile in path[1:]:
             if local_step_problem(ctx, unit, walked[-1], tile, final=False):
                 break
@@ -412,11 +427,14 @@ def resolve(ctx: StepContext) -> None:
             walked.append(tile)
             left.append(budget)
             if zoc.stops(state, rules, unit, tile):
-                left[-1] = 0  # 走进交战国的控制区：必须停下
+                # 走进交战国的控制区：必须停下，本回合不能再走；但还留着攻击要的移动力，可以接着攻击
+                left[-1] = min(left[-1], min(attack_steps(rules, u) for u in members))
+                engaged = True
                 break
         while len(walked) > 1 and not has_room(state, rules, unit, walked[-1]):
             walked.pop()
             left.pop()
+            engaged = False  # 退回到控制区外的格子停下
         if len(walked) > 1:
             for u in members:
                 riders = state.aboard(u)  # 船上的陆军、航母上的飞机随船走
@@ -431,6 +449,9 @@ def resolve(ctx: StepContext) -> None:
                     land = not state.grid.is_water[walked[-1]]
                     carrier = None if land else carrier_at(state, rules, u.nation, walked[-1])
                     u.carried_by = carrier.id if carrier is not None else None
+        if engaged and len(walked) > 1:
+            for u in members:
+                u.engaged_turn, u.destination = state.turn, None  # 停在控制区里：目的地作废，可以就地攻击
         if unit.tile == dest:
             for u in members:
                 u.destination = None

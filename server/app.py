@@ -421,6 +421,10 @@ def game_tactics(game_id: str, actor: str, col: int | None = None, row: int | No
             else None,
         }
         if kind == "unit":
+            from engine.systems.combat import approach_targets
+
+            # 先移动再攻击能打到的目标（文明 6 式）：前端点了就连发“移动到 from + 攻击”
+            result["approach"] = approach_targets(s, game.rules, entity)
             from engine.systems.pillage import pillage_target
 
             target, problem = pillage_target(s, game.rules, entity)

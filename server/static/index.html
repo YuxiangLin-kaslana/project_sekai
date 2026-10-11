@@ -2040,8 +2040,10 @@ function tacticalCard(actor) {
       const target=game.G.units.get(info.target)??game.G.cities.get(info.target);
       const own=(info.retaliation??0)+(info.flak??0);
       preview.innerHTML=`<small>${KIND_TEXT[info.kind]??'远程攻击'}</small><b>${esc(target?.type?unitName(target.type):target?.name??'目标')}</b><div class="damage-preview"><span>敌方损失 <b>−${info.damage}</b></span><span>己方损失 <b>${own?'−'+own:'0'}</b></span></div>${modifierHtml(info)}<span>${info.flak?(info.damage?`进入敌方防空火力范围：先挨高射火力 −${info.flak}，带伤投弹`:`会被敌方高射炮击落（−${info.flak}）`):info.suppress&&target?.type?'炮击会压制守军：打中的部队失去驻守加成，近战随后冲锋更划算':target&&info.damage>=target.hp?(target.type?'预计消灭敌军':'城防将被摧毁'):'按当前生命、等级与地形结算'}</span>`;
-      const b=document.createElement('button');b.className='primary attack-confirm';b.textContent='执行攻击';b.disabled=commandBusy;
-      b.onclick=()=>executeCommand(actorOrder(unit?'attack':'city_attack',{to:[col,row]}));preview.appendChild(b);
+      if(info.from!=null)preview.insertAdjacentHTML('beforeend',`<span>先移动到 (${info.from%world.width}, ${Math.floor(info.from/world.width)})，再用剩下的移动力攻击</span>`);
+      const b=document.createElement('button');b.className='primary attack-confirm';b.textContent=info.from!=null?'移动并攻击':'执行攻击';b.disabled=commandBusy;
+      const attack=actorOrder(unit?'attack':'city_attack',{to:[col,row]});
+      b.onclick=()=>executeCommand(info.from!=null?[actorOrder('move',{to:[info.from%world.width,Math.floor(info.from/world.width)]}),attack]:attack);preview.appendChild(b);
     }
     box.appendChild(preview);
   }
@@ -2057,8 +2059,9 @@ async function tacticalClick(tile) {
       if(!t.move_paths?.[tile]){showCommandError('该格不在本回合移动范围内');return;}
       game.G.pending={kind:'move',tile};
     }else{
-      const info=t.targets.find(x=>x.tile===tile);
-      if(!info){showCommandError(t.obstructed.includes(tile)?'山脉或树林遮挡射线':'该格没有可攻击目标');return;}
+      // 站着就能打的目标；打不到的看能不能先走过去再打（文明 6 式：攻击花 1 点移动力，一回合打一次）
+      const info=t.targets.find(x=>x.tile===tile)??t.approach?.find(x=>x.tile===tile);
+      if(!info){showCommandError(t.obstructed.includes(tile)?'山脉或树林遮挡射线':'该格没有可攻击目标（走过去再打也够不着，或移动力不够）');return;}
       game.G.pending={kind:'attack',tile,info};
     }
     renderSelection();redraw();return;
@@ -2204,7 +2207,7 @@ init($("map"), {
       if (n) parts.push(`${n} 个单位`);
       if (parts.length) gameLine = `<br><span>${esc(parts.join(" · "))}</span>`;
     }
-    const target=game.G.tactics?.targets?.find(t=>t.tile===hover);
+    const target=game.G.tactics?.targets?.find(t=>t.tile===hover)??game.G.tactics?.approach?.find(t=>t.tile===hover);
     if(target&&game.G.actionMode==='attack'){const own=(target.retaliation??0)+(target.flak??0);const tactic=(target.modifiers??[]).filter(m=>m.side==='attacker'&&/侧击|跨河|出击/.test(m.label)).map(m=>`${m.label} ${m.value>0?'+':''}${m.value}%`).join(' · ');gameLine+=`<br><span style="color:#f2c199">敌方损失 −${target.damage} · 己方损失 ${own?'−'+own:'0'}${target.flak?'（含高射火力）':''}${tactic?' · '+tactic:''}</span>`;}
     tip.innerHTML = `<b>${esc(info.terrain.name)}</b> <span>· ${kind} ${info.areaNo}</span>` +
       (info.resource ? ` <span>· ${esc(info.resource.name)}</span>` : "") +

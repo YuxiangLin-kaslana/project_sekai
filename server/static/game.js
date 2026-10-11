@@ -2716,6 +2716,7 @@ function drawTactics(ctx, v) {
   const attacking = G.actionMode === 'attack';
   const moving = G.actionMode === 'move' || G.actionMode === 'inspect';
   const targetSet = new Set(t.targets.map(x => x.tile));
+  const approach = new Map((attacking ? t.approach ?? [] : []).map(x => [x.tile, x.from])); // 先走过去再打的目标
   const blocked = new Set(t.obstructed);
   if (moving) {
     for (const tile of t.move_tiles ?? []) tacticalHex(ctx, v, tile, 'rgba(95,186,211,.17)', 'rgba(145,221,239,.32)', .65);
@@ -2742,12 +2743,19 @@ function drawTactics(ctx, v) {
       ctx.moveTo(x,y-v.z*.56-r*1.5);ctx.lineTo(x,y-v.z*.56+r*1.5);ctx.stroke();
     });
   }
+  for (const [tile] of approach) {
+    if (targetSet.has(tile)) continue;
+    tacticalHex(ctx, v, tile, 'rgba(213,79,55,.12)', '#ed9a78', Math.max(1.4, v.z*.03), [Math.max(3, v.z*.12), Math.max(3, v.z*.1)]);
+  }
   const tile = G.pending?.tile ?? G.hoverTile;
   if (tile != null) {
     if (moving && t.move_paths?.[tile]) traceTiles(ctx, v, t.move_paths[tile], '#a7e7f2');
+    const actor = G.units.get(G.actor) ?? G.cities.get(G.actor);
     if (attacking && targetSet.has(tile)) {
-      const actor = G.units.get(G.actor) ?? G.cities.get(G.actor);
       if (actor) traceTiles(ctx, v, [actor.tile, tile], '#ffbc87', true);
+    } else if (attacking && approach.has(tile) && actor) {
+      traceTiles(ctx, v, [actor.tile, approach.get(tile)], '#a7e7f2');  // 先走到出发格
+      traceTiles(ctx, v, [approach.get(tile), tile], '#ffbc87', true);  // 再攻击
     }
   }
   ctx.restore();

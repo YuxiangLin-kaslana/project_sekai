@@ -146,7 +146,7 @@ def lock_reason(state, rules, actor) -> str | None:
     ):
         return "守城的近战部队不能出击（城里只有远程部队能攻击；要进攻先出城）"
     if actor.destination is not None:
-        return "行军中不能交战，先停下（驻守）"
+        return "行军途中（还没到目的地）不能交战，先停下或走到位"
     if ut.domain == "air":
         # 出击三回合：起飞飞到目标上空 → 攻击 → 返航降落（engine/systems/air.py）
         from engine.systems.movement import is_air_base
@@ -166,8 +166,14 @@ def lock_reason(state, rules, actor) -> str | None:
             return "本回合已经转场，下一回合再出击"
         if not is_air_base(state, rules, actor.nation, actor.tile):
             return "不在本国机场或航母上，不能起飞出击"
-    if actor.moves_left * MOVE_STEPS + actor.road_credit <= 0:
+    # 文明 6 式：可以先移动再攻击，但要留着攻击花的移动力（tactics.attack_cost），攻击用掉剩下的全部移动力
+    from engine.systems.movement import attack_steps
+
+    left = actor.moves_left * MOVE_STEPS + actor.road_credit
+    if left <= 0:
         return "移动力已用完，下一回合恢复"
+    if left < attack_steps(rules, actor):
+        return f"剩下的移动力不够攻击（攻击要 {rules.tactics.attack_cost} 点移动力）"
     return None
 
 
@@ -771,6 +777,68 @@ def tactics(state, rules, actor) -> dict:
     }
 
 
+def preview_from(state, rules, actor, spot: int, left: int, tile: int):
+    """actor 先走到 spot（剩 left 的移动力，单位 1/MOVE_STEPS 点）再打 tile 的预览（文明 6 式先走后打）。
+    临时把单位挪过去算完再挪回来，状态不变。"""
+    old = (actor.tile, actor.moves_left, actor.road_credit, actor.facing, actor.fortified)
+    try:
+        if spot != actor.tile:
+            state.move_unit(actor, spot)
+            actor.fortified = False
+        actor.moves_left, actor.road_credit = divmod(left, MOVE_STEPS)
+        return preview(state, rules, actor, tile)
+    finally:
+        if actor.tile != old[0]:
+            state.move_unit(actor, old[0])
+        actor.moves_left, actor.road_credit, actor.facing, actor.fortified = old[1:]
+
+
+def approach_targets(state, rules, actor, limit: int = 24) -> list[dict]:
+    """先移动、再攻击能打到的目标（不含站着就能打的）：[{from, left, ...预览}]。
+    每个目标挑剩余移动力最多的出发格；只算地面和海上部队（飞机按出击规则另算）。"""
+    if not isinstance(actor, Unit) or rules.units[actor.type].domain == "air":
+        return []
+    if lock_reason(state, rules, actor):
+        return []
+    from engine.systems.diplomacy import at_war
+    from engine.systems.movement import attack_steps, has_room, movement_map
+
+    best, _ = movement_map(state, rules, actor)
+    need = attack_steps(rules, actor)
+    spots = sorted(
+        (t for t, left in best.items() if t != actor.tile and left >= need),
+        key=lambda t: (-best[t], t),
+    )
+    spots = [t for t in spots if has_room(state, rules, actor, t)]
+    reach = attack_range(rules, actor, state.grid)
+    here = {t for t in state.grid.within(actor.tile, reach)}
+
+    def hostile(t: int) -> bool:
+        city = state.city_at(t)
+        if city is not None and city.nation != actor.nation and at_war(state, city.nation, actor.nation):
+            return True
+        return any(
+            u.nation != actor.nation
+            and rules.units[u.type].category == "military"
+            and at_war(state, u.nation, actor.nation)
+            for u in state.units_at(t)
+        )
+
+    out, seen = [], set()
+    for spot in spots:
+        for t in state.grid.within(spot, reach):
+            if t in seen or t == spot or t in here or not hostile(t):
+                continue
+            info, _ = preview_from(state, rules, actor, spot, best[spot], t)
+            if info is None:
+                continue
+            seen.add(t)
+            out.append({**info, "from": spot, "left": best[spot]})
+            if len(out) >= limit:
+                return out
+    return out
+
+
 def _capture(ctx, city, unit):
     s, rules = ctx.state, ctx.rules
     previous = city.nation
@@ -1043,9 +1111,8 @@ def _resolve(ctx: StepContext) -> None:
             ctx.log.reject(order.model_dump(mode="json"), "not_owner", "攻击者已不属于发令国")
             continue
         tile = s.grid.idx(*order.to)
+        # 先移动后攻击（文明 6 式）：这时部队已经走完，按走到的位置和剩下的移动力结算（lock_reason）
         info, problem = preview(s, rules, actor, tile)
-        if problem is None and not is_city and actor.id in ctx.moving:
-            problem = "本回合在行军，不能交战"
         if problem:
             if automatic_order:
                 ctx.log.add(

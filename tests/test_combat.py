@@ -117,13 +117,15 @@ def test_stacked_can_attack_but_groups_and_marching_units_cannot(board):
     s = action(s, order(a, "ungroup")).state
     assert all(u.formation is None for u in s.units.values())
     assert not action(s, order(a, "attack", to=[4, 3])).rejected
-    # 行军中（还有多回合目的地）不能交战；同一批指令里先移动再攻击也不行
+    # 行军中（还有多回合目的地、这回合没走到）不能交战
     s.units[a.id].destination = s.grid.idx(0, 0)
     assert "行军" in action(s, order(a, "attack", to=[4, 3])).rejected[0]["message"]
     s.units[a.id].destination = None
+    # 文明 6 式：同一批指令里先移动再攻击可以——(4,2) 挨着敌军，走进控制区停下，留着攻击要的移动力
     moved = action(s, order(b, "move", to=[4, 2]), order(b, "attack", to=[4, 3]))
-    # (4,2) 挨着敌军：走进控制区就停下、移动力清零，这回合也打不了
-    assert any("行军" in r["message"] or "移动力" in r["message"] for r in moved.rejected)
+    assert not moved.rejected
+    assert any(e["type"] == "combat" for e in moved.events)
+    assert moved.state.units[b.id].moves_left == 0  # 攻击用掉剩下的全部移动力
 
 
 def test_bombardment_hits_every_unit_in_the_hex(board):
@@ -760,7 +762,9 @@ def test_zone_of_control_stops_movement_but_not_tanks(board):
     foot.moves_left = 5
     best, _ = movement_map(board, RULES, foot)
     zone = board.grid.idx(5, 3)
-    assert zone in best and best[zone] == 0  # 能走进控制区，但进去就停下
+    keep = RULES.tactics.attack_cost * MOVE_STEPS
+    # 能走进控制区，进去就停下（不再往外走），只留着攻击要的移动力
+    assert zone in best and 0 < best[zone] <= keep
     beyond = board.grid.idx(7, 2)
     assert beyond not in best or best[beyond] < best.get(board.grid.idx(4, 2), 0)
     tank = add(board, "armor", 1, 3, 5)
@@ -872,3 +876,43 @@ def test_occupying_a_residential_district_takes_its_land(board):
     _capture(ctx, s.cities[theirs.id], s.units[soldier.id])
     assert int(s.grid.city_of[res]) == theirs.id and int(s.grid.owner[res]) == 1
     assert all(int(s.grid.city_of[t]) == theirs.id for t in claimed) and not s.land_home
+
+
+def test_civ6_move_then_attack_costs_movement_and_only_once_a_turn(board):
+    """文明 6 式：先移动再攻击，攻击花 tactics.attack_cost 点移动力、用掉剩下的全部；一回合只能打一次；
+    走进敌方控制区要停下，这回合不能再走，但可以就地攻击。"""
+    from engine.systems.combat import approach_targets
+
+    enemy = add(board, "infantry", 2, 6, 3)
+    foot = add(board, "infantry", 1, 3, 3)  # 隔着两格：走一格进控制区再打
+    keep = RULES.tactics.attack_cost * MOVE_STEPS
+    ups = approach_targets(board, RULES, foot)
+    hit = next(x for x in ups if x["tile"] == enemy.tile)
+    assert hit["left"] >= keep and board.grid.distance(hit["from"], enemy.tile) == 1
+    spot = [hit["from"] % 12, hit["from"] // 12]
+    res = action(board, order(foot, "move", to=spot), order(foot, "attack", to=[6, 3]))
+    assert not res.rejected and any(e["type"] == "combat" for e in res.events)
+    s = res.state
+    me = s.units[foot.id]
+    assert me.tile == hit["from"] and me.moves_left == 0 and me.road_credit == 0
+    assert s.units[enemy.id].hp < enemy.hp
+    # 一回合只打一次；打完不能再走
+    assert "已经攻击" in action(s, order(me, "attack", to=[6, 3])).rejected[0]["message"]
+    assert action(s, order(me, "move", to=[1, 1])).rejected
+    # 移动力不够：走得太远，剩下的不够攻击就打不了
+    far = add(board, "infantry", 1, 0, 3)
+    far.moves_left = 1
+    assert enemy.tile not in {x["tile"] for x in approach_targets(board, RULES, far)}
+    # 走进控制区停下后，这回合不能再移动，但可以就地攻击
+    g = board.grid
+    zone = g.idx(6, 4) if g.distance(g.idx(6, 4), enemy.tile) == 1 else g.idx(5, 4)
+    start = min(
+        t for t in g.within(zone, 2)
+        if g.distance(t, zone) == 2 and g.distance(t, enemy.tile) == 3 and not board.units_at(t)
+    )  # fmt: skip
+    probe = add(board, "infantry", 1, start % 12, start // 12)
+    s2 = action(board, order(probe, "move", to=[zone % 12, zone // 12])).state
+    p = s2.units[probe.id]
+    assert p.engaged_turn == s2.turn and p.moves_left * MOVE_STEPS + p.road_credit > 0
+    assert action(s2, order(p, "move", to=[3, 5])).rejected
+    assert not action(s2, order(p, "attack", to=[6, 3])).rejected
