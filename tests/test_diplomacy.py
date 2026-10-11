@@ -99,20 +99,66 @@ def test_new_games_start_at_peace_and_ai_goes_to_war_after_expanding():
     assert declared  # 扩张期结束后 AI 会主动宣战
 
 
-def test_relation_values_drive_war_alliance_and_breakups():
+def _ctx(s):
+    return StepContext(s, RULES, [], EventLog(s.turn), RngTree(s.seed, "t", s.turn))
+
+
+def test_relation_values_drive_war_alliance_and_breakups(monkeypatch):
     s = board(4)
     for n in s.nations.values():
         n.ai_enabled = True
-    ctx = StepContext(s, RULES, [], EventLog(s.turn), RngTree(s.seed, "t", 1))
-    diplomacy._set_value(s, 1, 2, -1)  # 跌破 0：开战
-    diplomacy._set_value(s, 3, 4, 101)  # 超过 100：结盟
-    diplomacy.resolve(ctx)
+        n.strategy = {"posture": "战争"}  # 扩张期结束、没地方建城了
+    monkeypatch.setattr(diplomacy, "WAR_CHANCE", 1.0)
+    for col in (3, 5):
+        add(s, "infantry", 1, col, 5)  # 1 国兵力占优
+    diplomacy._set_value(s, 1, 2, 0)  # 关系差（低于 WAR_AT）、兵力占优：宣战
+    # 3、4 都在和 2 打仗（敌人的敌人），关系值高：结盟
+    for x in (3, 4):
+        s.relations[diplomacy.key(x, 2)] = {"status": "war", "since": 0, "value": 0}
+    diplomacy._set_value(s, 3, 4, 100)
+    diplomacy.resolve(_ctx(s))
     assert diplomacy.at_war(s, 1, 2) and diplomacy.allied(s, 3, 4)
     # 同盟的关系值跌破 ALLY_BREAK：同盟解除，转为和平（有休战期）
-    diplomacy._set_value(s, 3, 4, diplomacy.ALLY_BREAK - 1)
-    diplomacy.resolve(ctx)
+    diplomacy._set_value(s, 3, 4, diplomacy.ALLY_BREAK - 5)
+    diplomacy.resolve(_ctx(s))
     assert diplomacy.status(s, 3, 4) == "peace"
     assert diplomacy.relation(s, 3, 4)["truce"] > s.turn
+
+
+def test_ai_does_not_start_wars_while_still_expanding_or_when_weaker(monkeypatch):
+    s = board(2)
+    for n in s.nations.values():
+        n.ai_enabled = True
+    monkeypatch.setattr(diplomacy, "WAR_CHANCE", 1.0)
+    diplomacy._set_value(s, 1, 2, -40)
+    s.nations[1].strategy = {"posture": "扩张", "settlements": [1]}  # 还有地方建城：先发展
+    diplomacy.resolve(_ctx(s))
+    assert not diplomacy.at_war(s, 1, 2)
+    s.nations[1].strategy = {"posture": "战争"}
+    for col in (13, 15, 16):
+        add(s, "infantry", 2, col, 5)  # 对方更强：不打
+    diplomacy.resolve(_ctx(s))
+    assert not diplomacy.at_war(s, 1, 2)
+
+
+def test_relations_recover_after_war_and_enemies_of_an_enemy_become_allies():
+    s = board(5)  # 5 国：不到“只剩几国、谁都不放过谁”的残局
+    for n in s.nations.values():
+        n.ai_enabled = True
+    # 打完仗的两国：关系不是一路往下掉，会慢慢恢复
+    diplomacy._set_value(s, 1, 3, 0)
+    # 3、4 都在和 2 打仗：敌人的敌人，关系一路升到结盟
+    for x in (3, 4):
+        s.relations[diplomacy.key(x, 2)] = {"status": "war", "since": 0, "value": 0}
+    formed = None
+    for turn in range(1, 61):
+        s.turn = turn
+        ctx = _ctx(s)
+        diplomacy.resolve(ctx)
+        if formed is None and diplomacy.allied(s, 3, 4):
+            formed = turn
+    assert diplomacy.value(s, 1, 3) > 25
+    assert formed is not None and formed > 5  # 不是当场结盟，是一起打了一阵之后
 
 
 def test_dominant_side_refuses_peace_when_few_nations_remain():

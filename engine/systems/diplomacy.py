@@ -13,13 +13,25 @@ DEFAULT（交战）处理——老存档、测试棋盘照旧；新开的对局�
   向 AI 国家提议，对方当场按 AI 的判断接受或拒绝；向玩家国家（没开 AI）提议，变成待处理的提议
   （GameState.offers），玩家接受 / 拒绝，OFFER_TURNS 回合内没回应作废。
 
-关系值（每对国家，开局 50；update_relations 每回合更新）：
-- 领土接壤、对方军队贴近本国领土、没地方扩张了 → 下降（每回合合计有上限）；
-- 有共同的交战国 → 上升；
-- 某国兵力远超其余各国平均 → 大家和它的关系都下降；只剩 4 国及以下 → 所有关系一起下降。
-AI（resolve，每回合在国家 AI 规划之前，按国家编号依次）：关系值低于 0 开战（两边都是 AI 时兵力强的
-一方宣战）、高于 100 结盟，同盟的关系值跌破 ALLY_BREAK 同盟解除；打了 MIN_WAR 回合以上，打不过（兵力不到对方 PEACE_RATIO）或僵持（STALEMATE
-回合没有城市易手）就求和，对方占上风（DOMINATE 倍）且不僵持时拒绝；只剩 FEW_NATIONS 国及以下时占上风的一方僵持也拒绝。签和约后关系值回到 30，休战 TRUCE 回合。
+关系值（每对国家，开局 50；update_relations 每回合更新）：每回合向两国当前处境决定的“目标值”靠拢
+（差距的 VALUE_PULL，每回合最多 VALUE_STEP），不是只降不升——打完仗、威胁过去了，关系会慢慢恢复。目标值：
+- 50 起；领土接壤 −BORDER_RIVALRY；一方没地方扩张了（扩张期结束、没有城址），对邻国 −CROWDED；
+  接壤且一方兵力是另一方的 PREY_RATIO 倍以上（弱肉强食）−PREY；
+- 有共同的交战国（敌人的敌人就是朋友）+COMMON_ENEMY；有共同的威胁（第三国兵力是两国各自的 THREAT_RATIO
+  倍以上，而且和两国都接壤或交战）+COMMON_THREAT；已经结盟 +ALLIED（同盟自己会维持）；
+- 正在交战 −AT_WAR；刚打完仗（RECENT_WAR 回合内）−RECENT_DROP，随时间减弱；
+- 某国兵力远超其余各国平均（DOMINANT_POWER 倍）：和它的关系 −DOMINANT_DROP；只剩 FEW_NATIONS 国及以下：
+  所有关系 −FEW_DROP（统一在望，谁都不放过谁）。
+AI（resolve，每回合在国家 AI 规划之前，按国家编号依次）：
+- 求和：打了 MIN_WAR 回合以上，打不过（连同盟友兵力不到对方 PEACE_RATIO）或僵持（STALEMATE 回合没有城市
+  易手）就求和；对方占上风（DOMINATE 倍）且不僵持时拒绝；只剩 FEW_NATIONS 国及以下时占上风的一方僵持也拒绝。
+  签和约后关系值落到 PEACE_VALUE，休战 TRUCE 回合。
+- 宣战：扩张期结束（或没地方扩张了）才打仗，同一时间只主动打一场（手上的仗兵力负担不重时才开新仗）；
+  对关系值低于 WAR_AT 的邻国（没有陆上邻国时看隔海够得着的国家），连同双方盟友算兵力占优（OFFENSIVE_RATIO）
+  才宣战，每回合按 WAR_CHANCE 的概率动手（开战时机有起伏）；不打正在和自己的敌人交战的国家。
+  宣战时进攻方的盟友（关系值 ≥ ALLY_JOIN）一起参战，被宣战方的盟友援助被宣战方。
+- 结盟：关系值高于 ALLY_AT、有共同的敌人或共同的威胁就结盟（最多 MAX_ALLIES 个盟友）；
+  同盟的关系值跌破 ALLY_BREAK 同盟解除。
 """
 
 from __future__ import annotations
@@ -30,27 +42,35 @@ from engine.ids import parse_ref, ref
 
 DEFAULT = "war"
 STATUSES = ("war", "peace", "alliance")
-TRUCE = 15  # 和约签订后这么多回合内不能再宣战
+TRUCE = 25  # 和约签订后这么多回合内不能再宣战
 OFFER_TURNS = 5  # 给玩家的提议这么多回合内不回应就作废
-MIN_WAR = 30  # 打了这么多回合以上才考虑求和
-STALEMATE = 80  # 这么多回合两国之间没有城市易手：僵持（战线从备战推到城下本身要几十回合）
-PEACE_RATIO = 0.6  # 兵力不到对方的这么多倍：打不过，求和
+MIN_WAR = 20  # 打了这么多回合以上才考虑求和
+STALEMATE = 50  # 这么多回合两国之间没有城市易手：僵持
+PEACE_RATIO = 0.65  # 兵力（连同盟友）不到对方的这么多倍：打不过，求和
 DOMINATE = 1.6  # 兵力是对方这么多倍以上：占上风，不接受求和
-MAX_ALLIES = 2
-# 关系值（每对国家，开局 START_VALUE）：低于 WAR_AT 开战、高于 ALLY_AT 结盟
+MAX_ALLIES = 3
+# 关系值（每对国家，开局 START_VALUE）：低于 WAR_AT 才可能开战、高于 ALLY_AT 结盟
 START_VALUE = 50
-WAR_AT, ALLY_AT = 0, 100
+WAR_AT, ALLY_AT = 20, 85
 VALUE_MIN, VALUE_MAX = -50, 150
-PEACE_VALUE = 30  # 签和约后关系值回到这里
-ALLY_BREAK = 50  # 同盟的关系值跌破这里：同盟解除（转为和平，有休战期）
-BORDER_DROP = 0.5  # 领土接壤，每回合
-TROOP_DROP = 0.2  # 对方每支军队离本国领土 TROOP_RANGE 格内，每回合
-TROOP_RANGE = 2
-NO_ROOM_DROP = 0.5  # 没地方扩张的国家对邻国，每回合
-DROP_CAP = 2.0  # 以上下降每回合合计最多这么多
-COMMON_ENEMY = 1.0  # 有共同的交战国，每回合
-DOMINANT_POWER, DOMINANT_DROP = 1.5, 0.5  # 兵力超过其余各国平均的 1.5 倍：和它的关系每回合 −0.5
-FEW_NATIONS, FEW_DROP = 4, 0.5  # 只剩 4 国及以下：所有关系每回合 −0.5
+VALUE_PULL, VALUE_STEP = 0.08, 3.0  # 每回合向目标值靠拢差距的 8%，最多 3 点
+PEACE_VALUE = 15  # 签和约后关系值落到这里（再按目标值慢慢恢复）
+ALLY_BREAK = 40  # 同盟的关系值跌破这里：同盟解除（转为和平，有休战期）
+ALLY_JOIN = 70  # 进攻方的盟友关系值不低于它就一起参战
+BORDER_RIVALRY = 15  # 领土接壤
+CROWDED = 15  # 一方没地方扩张了，对邻国（每个没地方扩张的一方）
+PREY, PREY_RATIO = 10, 2.0  # 接壤且一方兵力是另一方 2 倍以上
+COMMON_ENEMY = 40  # 有共同的交战国
+COMMON_THREAT, THREAT_RATIO = 25, 1.4  # 有共同的威胁：第三国兵力是两国各自的 1.4 倍以上
+ALLIED = 25  # 已经结盟
+AT_WAR = 30  # 正在交战
+RECENT_WAR, RECENT_DROP = 60, 20  # 刚打完仗：这么多回合内关系目标值 −20（随时间减弱）
+DOMINANT_POWER, DOMINANT_DROP = 1.6, 15  # 兵力超过其余各国平均的 1.6 倍：和它的关系 −15
+FEW_NATIONS, FEW_DROP = 4, 20  # 只剩 4 国及以下：所有关系 −20
+OFFENSIVE_RATIO = 1.2  # 连同双方盟友，兵力是对方的这么多倍以上才主动宣战
+WAR_LOAD = 0.5  # 手上交战国的兵力合计不到本国这么多倍，才开新仗
+WAR_CHANCE = 0.08  # 条件都满足时，每回合宣战的概率
+SEA_WAR_REACH = 25  # 没有陆上邻国时，城市之间这么多格（× 地图尺度）以内的国家也能打（跨海）
 
 
 def key(a: int, b: int) -> str:
@@ -135,6 +155,15 @@ def declare_war(ctx, a: int, b: int, *, why: str = "", call_allies: bool = True)
     ctx.log.add("war_declared", nation=ref("nation", a), target=ref("nation", b), reason=why)
     _hostile(s, a, b)
     if call_allies:
+        # 进攻方的盟友（关系够好、和对方不是盟友、不在休战期）一起参战
+        for ally in allies(s, a):
+            if ally == b or allied(s, ally, b) or status(s, ally, b) == "war":
+                continue
+            if value(s, a, ally) < ALLY_JOIN or relation(s, ally, b).get("truce", -1) > s.turn:
+                continue
+            declare_war(
+                ctx, ally, b, why=f"同盟参战，和 {s.nations[a].name} 并肩作战", call_allies=False
+            )
         # 被宣战的一方的盟友跟着参战（和宣战方也是盟友、或在休战期的不参战）
         for ally in allies(s, b):
             if ally != a and not allied(s, ally, a) and status(s, ally, a) != "war":
@@ -151,7 +180,7 @@ def declare_war(ctx, a: int, b: int, *, why: str = "", call_allies: bool = True)
 
 def make_peace(ctx, a: int, b: int) -> None:
     s = ctx.state
-    _set(s, a, b, "peace", truce=s.turn + TRUCE, value=PEACE_VALUE)
+    _set(s, a, b, "peace", truce=s.turn + TRUCE, value=PEACE_VALUE, peace_turn=s.turn)
     _drop_offers(s, a, b)
     ctx.log.add("peace_signed", nation=ref("nation", a), target=ref("nation", b), truce=TRUCE)
 
@@ -262,11 +291,11 @@ def accepts(state, kind, nation, other, pw) -> tuple[bool, str]:
     if kind == "alliance":
         if len(allies(state, nation)) >= MAX_ALLIES:
             return False, "盟友已满"
-        common = set(enemies(state, nation)) & set(enemies(state, other))
-        stronger = max((pw.get(n, 0) for n in state.nations if n not in (nation, other)), default=0)
-        if common or stronger > 1.5 * pw.get(nation, 0):
+        if set(enemies(state, nation)) & set(enemies(state, other)):
             return True, ""
-        return False, "没有共同的敌人"
+        if _common_threat(state, pw, nation, other, _border_pairs(state)):
+            return True, ""
+        return False, "没有共同的敌人或威胁"
     return False, "不接受"
 
 
@@ -299,111 +328,179 @@ def _border_pairs(state) -> set[tuple[int, int]]:
     return pairs
 
 
-def _troop_pressure(state, rules) -> dict[tuple[int, int], int]:
-    """军队离别国领土太近：{(军队的国家, 领土的国家): 支数}（TROOP_RANGE 格内）。"""
-    g = state.grid
-    out: dict[tuple[int, int], int] = {}
-    for (tile, layer), ids in state._at.items():
-        if layer != "surface":
+def _neighbors(borders, n) -> set[int]:
+    return {b if a == n else a for a, b in borders if n in (a, b)}
+
+
+def _common_threat(state, pw, a, b, borders) -> int | None:
+    """a、b 的共同威胁：兵力是两国各自 THREAT_RATIO 倍以上、和两国都接壤或交战的第三国（返回国家 ID）。"""
+    for c in sorted(state.nations):
+        if c in (a, b) or not state.nation_cities(c):
             continue
-        for i in ids:
-            u = state.units[i]
-            if rules.units[u.type].category != "military":
-                continue
-            owners = {int(g.owner[t]) for t in g.within(tile, TROOP_RANGE)}
-            for o in owners:
-                if o >= 0 and o != u.nation:
-                    out[(u.nation, o)] = out.get((u.nation, o), 0) + 1
-    return out
+        if pw.get(c, 0) < THREAT_RATIO * max(pw.get(a, 0), pw.get(b, 0), 1.0):
+            continue
+        near_a = key(a, c) in _pair_keys(borders) or at_war(state, a, c)
+        near_b = key(b, c) in _pair_keys(borders) or at_war(state, b, c)
+        if near_a and near_b:
+            return c
+    return None
 
 
-def update_relations(ctx, pw) -> None:
-    """每回合更新各国关系值：
-    - 领土接壤 −BORDER_DROP；对方的军队离本国领土太近（TROOP_RANGE 格内），每支 −TROOP_DROP；
-      没地方扩张了（扩张期结束、没有城址）的国家对邻国再 −NO_ROOM_DROP；这些下降每回合合计最多 −DROP_CAP；
-    - 有共同的交战国 +COMMON_ENEMY；
-    - 某国兵力超过其余各国平均的 DOMINANT_POWER 倍：和它的关系都 −DOMINANT_DROP；
-    - 只剩 FEW_NATIONS 个国家及以下：所有关系都 −FEW_DROP。"""
+def _pair_keys(borders) -> set[str]:
+    return {key(a, b) for a, b in borders}
+
+
+def target_value(state, a, b, pw, borders, wars, crowded, dominant, few) -> float:
+    """a、b 两国关系值的目标值（每回合向它靠拢，见模块说明）。"""
+    t = float(START_VALUE)
+    if (min(a, b), max(a, b)) in borders:
+        t -= BORDER_RIVALRY + CROWDED * ((a in crowded) + (b in crowded))
+        hi, lo = max(pw.get(a, 0), pw.get(b, 0)), min(pw.get(a, 0), pw.get(b, 0))
+        if hi >= PREY_RATIO * max(lo, 1.0):
+            t -= PREY
+    if wars[a] & wars[b]:
+        t += COMMON_ENEMY  # 敌人的敌人就是朋友
+    elif _common_threat(state, pw, a, b, borders) is not None:
+        t += COMMON_THREAT
+    rel = relation(state, a, b)
+    st = rel["status"]
+    if st == "alliance":
+        t += ALLIED
+    elif st == "war":
+        t -= AT_WAR
+    since = state.turn - rel.get("peace_turn", -(10**6))
+    if st != "war" and since < RECENT_WAR:
+        t -= RECENT_DROP * (1 - since / RECENT_WAR)
+    if a in dominant or b in dominant:
+        t -= DOMINANT_DROP
+    if few:
+        t -= FEW_DROP
+    return t
+
+
+def update_relations(ctx, pw, borders=None) -> None:
+    """每回合更新各国关系值：向 target_value 靠拢差距的 VALUE_PULL（每回合最多 VALUE_STEP 点）。"""
     s = ctx.state
     alive = [n for n in sorted(s.nations) if s.nation_cities(n)]
     if len(alive) < 2:
         return
-    borders = _border_pairs(s)
-    pressure = _troop_pressure(s, ctx.rules)
+    borders = _border_pairs(s) if borders is None else borders
     wars = {n: set(enemies(s, n)) for n in alive}
     mean = {n: sum(pw.get(m, 0) for m in alive if m != n) / max(1, len(alive) - 1) for n in alive}
     dominant = {n for n in alive if pw.get(n, 0) > DOMINANT_POWER * max(1.0, mean[n])}
-    crowded = {
-        n
-        for n in alive
-        if (s.nations[n].strategy or {}).get("posture") == "战争"
-        and not (s.nations[n].strategy or {}).get("settlements")
-    }
+    crowded = {n for n in alive if _crowded(s, n)}
     few = len(alive) <= FEW_NATIONS
     for i, a in enumerate(alive):
         for b in alive[i + 1 :]:
-            st = status(s, a, b)
-            if st == "war":
-                continue
-            drop = 0.0
-            if (a, b) in borders:
-                drop += BORDER_DROP
-                drop += NO_ROOM_DROP * ((a in crowded) + (b in crowded))
-            drop += TROOP_DROP * (pressure.get((a, b), 0) + pressure.get((b, a), 0))
-            drop = min(DROP_CAP, drop)
-            gain = COMMON_ENEMY if wars[a] & wars[b] else 0.0
-            if a in dominant or b in dominant:
-                drop += DOMINANT_DROP
-            if few:
-                drop += FEW_DROP
-            _set_value(s, a, b, value(s, a, b) + gain - drop)
+            v = value(s, a, b)
+            t = target_value(s, a, b, pw, borders, wars, crowded, dominant, few)
+            step = max(-VALUE_STEP, min(VALUE_STEP, (t - v) * VALUE_PULL))
+            _set_value(s, a, b, v + step)
+
+
+def _crowded(s, n) -> bool:
+    """没地方扩张了：扩张期结束（国家 AI 的姿态是“战争”）而且没有城址。"""
+    st = s.nations[n].strategy or {}
+    return st.get("posture") == "战争" and not st.get("settlements")
+
+
+def _bloc(s, n, pw) -> float:
+    """n 连同盟友的兵力。"""
+    return pw.get(n, 0) + sum(pw.get(x, 0) for x in allies(s, n))
+
+
+def _war_targets(s, rules, nid, borders) -> list[int]:
+    """nid 能开战的对象：陆上邻国；没有陆上邻国时，城市离得够近（隔海够得着）的国家。"""
+    near = _neighbors(borders, nid)
+    if near:
+        return sorted(near)
+    from engine.systems.settlement import map_scale
+
+    reach = SEA_WAR_REACH * map_scale(s.grid)
+    mine = [c.tile for c in s.nation_cities(nid)]
+    out = []
+    for other in sorted(s.nations):
+        if other == nid or not s.nation_cities(other):
+            continue
+        theirs = [c.tile for c in s.nation_cities(other)]
+        if min(s.grid.distance(x, y) for x in mine for y in theirs) <= reach:
+            out.append(other)
+    return out
 
 
 def resolve(ctx) -> None:
-    """外交（每回合，国家 AI 规划之前）：更新关系值；AI 国家关系值低于 0 开战、高于 100 结盟，
-    打不过或僵持就求和；过期的提议作废。"""
+    """外交（每回合，国家 AI 规划之前）：更新关系值；AI 国家求和、宣战、结盟、解除同盟（见模块说明）；
+    过期的提议作废。"""
     s, rules = ctx.state, ctx.rules
     if ctx.immediate:
         return
     s.offers[:] = [o for o in s.offers if s.turn - o["turn"] < OFFER_TURNS]
     alive = [n for n in sorted(s.nations) if s.nation_cities(n)]
     pw = power(s, rules)
-    update_relations(ctx, pw)
+    borders = _border_pairs(s)
+    update_relations(ctx, pw, borders)
     ai = [n for n in alive if s.nations[n].ai_enabled]
+    rng = ctx.rng.child("diplomacy").generator()
     for nid in ai:
-        # 求和：打了 MIN_WAR 回合以上，打不过或者僵持
+        # 求和：打了 MIN_WAR 回合以上，打不过（连同盟友）或者僵持
         for e in enemies(s, nid):
             rel = relation(s, nid, e)
             if s.turn - rel.get("since", 0) < MIN_WAR:
                 continue
-            losing = ratio(pw, nid, e) < PEACE_RATIO
+            losing = _bloc(s, nid, pw) < PEACE_RATIO * _bloc(s, e, pw)
             stalled = s.turn - rel.get("progress", rel.get("since", 0)) >= STALEMATE
             if (losing or stalled) and at_war(s, nid, e):
                 _propose_ai(ctx, "peace", nid, e, pw)
-        declared = False
+        # 同盟：关系恶化就解除；关系好、有共同的敌人或威胁就结盟
         for other in alive:
-            if other == nid:
+            if other == nid or nid > other:
                 continue
             st, v = status(s, nid, other), value(s, nid, other)
-            if (
-                st == "peace"
-                and v < WAR_AT
-                and not declared
-                and relation(s, nid, other).get("truce", -1) <= s.turn
-                and (not s.nations[other].ai_enabled or pw.get(nid, 0) >= pw.get(other, 0))
-            ):
-                # 关系值跌破 0：开战（两边都是 AI 时由兵力强的一方宣战）
-                declare_war(ctx, nid, other, why=f"关系恶化（关系值 {v:.0f}）")
-                declared = True
-            elif st == "alliance" and v < ALLY_BREAK and nid < other:
-                # 同盟关系恶化（比如只剩几个国家、一方太强）：同盟解除，关系值继续掉到 0 以下就开战
+            if st == "alliance" and v < ALLY_BREAK:
                 break_alliance(ctx, nid, other)
-            elif st == "peace" and v > ALLY_AT and nid < other:
-                if len(allies(s, nid)) < MAX_ALLIES and len(allies(s, other)) < MAX_ALLIES:
-                    if s.nations[other].ai_enabled:
+            elif st == "peace" and v > ALLY_AT:
+                if len(allies(s, nid)) >= MAX_ALLIES or len(allies(s, other)) >= MAX_ALLIES:
+                    continue
+                if s.nations[other].ai_enabled:
+                    ok, _ = accepts(s, "alliance", other, nid, pw)
+                    if ok:
                         make_alliance(ctx, nid, other)
-                    else:
-                        propose(ctx, "alliance", nid, other)
+                else:
+                    propose(ctx, "alliance", nid, other)
+        _maybe_declare(ctx, nid, alive, pw, borders, rng)
+
+
+def _maybe_declare(ctx, nid, alive, pw, borders, rng) -> None:
+    """AI 主动宣战：扩张期过了、手上的仗不重、对关系差的国家（连同盟友）兵力占优，按概率动手。"""
+    s = ctx.state
+    strategy = s.nations[nid].strategy or {}
+    if strategy.get("posture") != "战争":
+        return  # 还在扩张期（国家 AI 还没转入战争姿态）：先发展
+    mine = _bloc(s, nid, pw)
+    foes = set(enemies(s, nid))
+    if sum(pw.get(e, 0) for e in foes) > WAR_LOAD * pw.get(nid, 0):
+        return  # 手上的仗已经够打了
+    best = None
+    for other in _war_targets(s, ctx.rules, nid, borders):
+        if other not in alive or status(s, nid, other) != "peace":
+            continue
+        rel = relation(s, nid, other)
+        if rel.get("truce", -1) > s.turn or value(s, nid, other) >= WAR_AT:
+            continue
+        if foes & set(enemies(s, other)):
+            continue  # 它正在和我的敌人交战：敌人的敌人不打
+        theirs = _bloc(s, other, pw) + sum(
+            pw.get(x, 0) for x in allies(s, nid) if allied(s, x, other)
+        )  # 两边都结盟的不会来帮我
+        odds = mine / max(1.0, theirs)
+        if odds < OFFENSIVE_RATIO:
+            continue
+        score = odds * (1 + (WAR_AT - value(s, nid, other)) / 50)
+        if best is None or score > best[0]:
+            best = (score, other)
+    if best is not None and rng.random() < WAR_CHANCE:
+        v = value(s, nid, best[1])
+        declare_war(ctx, nid, best[1], why=f"关系恶化（关系值 {v:.0f}），兵力占优")
 
 
 def _propose_ai(ctx, kind, a, b, pw):
