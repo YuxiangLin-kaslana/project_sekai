@@ -53,6 +53,7 @@ UPHEAVAL_COOLDOWN = 150
 
 HEGEMON_SHARE = 0.35
 COALITION_MIN_NATIONS = 6
+COALITION_GAP = 100
 COALITION_WEIGHT = 0.25  # 同盟各国兵力合计至少是霸主的这么多
 COALITION_MAX = 2  # 600 回合里最多这么多次反霸同盟（残局不再拖）
 COALITION_COOLDOWN = 150
@@ -397,11 +398,11 @@ def _coalition(ctx) -> None:
     alive = [n for n in sorted(s.nations) if s.nation_cities(n)]
     if len(alive) < COALITION_MIN_NATIONS:
         return
-    if (
-        sum(e["kind"] == "coalition" and s.turn - e["turn"] < 600 for e in s.chronicle)
-        >= COALITION_MAX
-    ):
+    recent = [e["turn"] for e in s.chronicle if e["kind"] == "coalition"]
+    if sum(s.turn - t < 600 for t in recent) >= COALITION_MAX:
         return
+    if recent and s.turn - max(recent) < COALITION_GAP:
+        return  # 刚结过一次反霸同盟：全世界 COALITION_GAP 回合内不再结新的（不会接连两回合互相反霸）
     from engine.systems import diplomacy
 
     pw = diplomacy.power(s, rules)
