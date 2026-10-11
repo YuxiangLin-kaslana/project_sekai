@@ -56,9 +56,9 @@ def exerts(rules, unit) -> bool:
 
 
 def ignores(rules, unit) -> bool:
-    """不受控制区影响：坦克、飞机。"""
+    """不受控制区影响：坦克、飞机、游击队（熟悉地形，钻得过去）。"""
     ut = rules.units[unit.type]
-    return ut.domain == "air" or "armored" in ut.tags
+    return ut.domain == "air" or "armored" in ut.tags or "partisan" in ut.tags
 
 
 def mask(state, rules, nation: int, domain: str) -> np.ndarray:

@@ -769,8 +769,10 @@ def _capture(ctx, city, unit):
 
     note_capture(s, previous, unit.nation)  # 求和时看僵持
     s._closed_cache.clear()
+    was_capital = city.capital
     city.nation, city.hp, city.capital = unit.nation, city_max_hp(rules, city) // 2, False
     city.drafted = 0  # 原国家征召走的人口不再占新主人的住房
+    city.captured_turn, city.captured_from = s.turn, previous
     city.stability = min(city.stability, rules.stability.captured)  # 新占领地区不稳
     city.queue, city.production, city.attacked_turn = [], 0, s.turn
     city.managed = True
@@ -815,6 +817,7 @@ def _capture(ctx, city, unit):
         tile=city.tile,
         nation=ref("nation", unit.nation),
         previous=ref("nation", previous),
+        capital=was_capital,
     )
 
 

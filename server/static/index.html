@@ -185,6 +185,13 @@
   .md table { border-collapse: collapse; font-size: 12px; min-width: 100%; }
   .md th, .md td { border: 1px solid var(--line); padding: 3px 6px; text-align: left; vertical-align: top; }
   .md th { background: rgba(255, 255, 255, 0.05); white-space: nowrap; }
+  .chronicle { max-height: 280px; overflow-y: auto; margin-bottom: 8px; }
+  .chronicle-row { display: grid; grid-template-columns: 20px auto 1fr; gap: 6px; align-items: baseline; padding: 5px 4px; border-bottom: 1px solid var(--line); font-size: 12px; line-height: 1.5; }
+  .chronicle-row[title] { cursor: pointer; }
+  .chronicle-row:hover { background: rgba(255, 255, 255, 0.04); }
+  .chronicle-row .turn { color: var(--muted); white-space: nowrap; }
+  .chronicle-row.civil_war .text, .chronicle-row.defection .text, .chronicle-row.coalition .text { color: #f0c27a; font-weight: 600; }
+  .chronicle-row.capital .text, .chronicle-row.eliminated .text { color: #f0a08c; }
   .tech-era { margin: 10px 0 4px; font-size: 11px; letter-spacing: 0.08em; color: var(--gold); }
   .tech-row { display: grid; grid-template-columns: 1fr auto auto; gap: 8px; align-items: center; padding: 5px 4px; border-bottom: 1px solid var(--line); font-size: 13px; }
   .tech-row .sub { display: block; color: var(--muted); font-size: 11px; }
@@ -539,6 +546,8 @@
         <!-- 选中的单位 / 城市放最上面：点地图后第一眼就能看到 -->
         <div id="selection"><p class="hint">点选军事单位查看移动与攻击范围；点击单位列表可切换部队。城市也可以发动防御射击。</p></div>
         <div class="game-brief" id="game-brief"></div>
+        <div class="list-head"><h3>世界大事记</h3><small id="chronicle-count"></small></div>
+        <div class="chronicle" id="chronicle"><p class="hint">首都陷落、灭国、内战、将领叛变、反霸同盟等大事会记在这里。</p></div>
         <details class="fold" data-fold="sim">
           <summary>自动模拟与国家 AI<small id="sim-summary"></small></summary>
           <div class="management-panel" id="simulation-panel" hidden>
@@ -959,6 +968,7 @@ const EVENT_KIND = {
   city_founded: 'build', building_completed: 'build', facility_built: 'build', unit_created: 'build',
   level_up: 'build', gold_assist: 'build', facility_repaired: 'build',
   facility_bombed: 'war', unit_captured: 'war', nation_eliminated: 'alert', base_fire: 'war', district_captured: 'war',
+  partisans: 'war', civil_war: 'alert', general_defected: 'alert', coalition: 'alert',
   tech_researched: 'build', road_built: 'build',
   war_declared: 'alert', peace_signed: 'alert', alliance_formed: 'alert', alliance_broken: 'alert', diplomatic_offer: 'alert',
 };
@@ -988,6 +998,10 @@ const EVENT_TEXT = {
   road_planned: (e) => `${cityName(e.city)} 把修路排进生产队列（${e.path.length - 1} 格，${e.cost} 生产力）`,
   base_fire: (e) => `${game.nationOf(e.nation)?.name ?? ''}的${game.G.rules.buildings[e.facility]?.name ?? '军事基地'}炮击敌军：敌方损失 ${e.damage}${e.target_hp <= 0 ? '，被消灭' : ''}`,
   district_captured: (e) => `${game.nationOf(e.nation)?.name ?? e.nation} 占领了${game.nationOf(e.previous)?.name ?? ''}的${game.G.rules.buildings[e.facility]?.name ?? '区域'}${e.tiles?.length > 1 ? `，连同 ${e.tiles.length - 1} 格土地` : ''}，划归 ${cityName(e.city)}`,
+  partisans: (e) => `${cityName(e.city)} 附近冒出${game.nationOf(e.nation)?.name ?? ''}的游击队，袭扰${game.nationOf(e.occupier)?.name ?? ''}的占领军后方`,
+  civil_war: (e) => `内战爆发：${e.cities.length} 座城市脱离${game.nationOf(e.previous)?.name ?? ''}，组建${e.name}，带走 ${e.units} 支部队`,
+  general_defected: (e) => `将领叛变：${game.nationOf(e.previous)?.name ?? ''}的将领拥兵自立，率 ${e.units} 支部队成立${e.name}`,
+  coalition: (e) => `反霸同盟成立：${e.members.map((m) => game.nationOf(m)?.name ?? m).join('、')}联手对${game.nationOf(e.nation)?.name ?? ''}宣战（其实力占全世界 ${e.share}%）`,
   tech_researched: (e) => `${game.nationOf(e.nation)?.name ?? e.nation} 研究完成：${e.name}`,
   research_set: (e) => `${game.nationOf(e.nation)?.name ?? e.nation} 开始研究 ${game.G.rules.techs?.[e.tech]?.name ?? e.tech}`,
   city_founded: (e) => `建立城市 ${e.name}`,
@@ -1605,6 +1619,18 @@ function markdownHtml(md) {
   }
   return out.join("");
 }
+const CHRONICLE_ICON = { capital: "🏛", eliminated: "☠", civil_war: "⚔", defection: "★", coalition: "🤝", independence: "⚑", great_war: "🔥" };
+function renderChronicle() {
+  const el = $("chronicle"), list = game.G.snap?.chronicle ?? [];
+  if (!el) return;
+  $("chronicle-count").textContent = list.length ? `${list.length} 条` : "";
+  if (!list.length) { el.innerHTML = '<p class="hint">首都陷落、灭国、内战、将领叛变、反霸同盟等大事会记在这里。</p>'; return; }
+  el.innerHTML = list.slice(0, 40).map((e, i) => `<div class="chronicle-row ${esc(e.kind)}" data-i="${i}"${e.tile != null ? ` title="点击跳到地图上的位置"` : ""}><span class="ico">${CHRONICLE_ICON[e.kind] ?? "•"}</span><span class="turn">第 ${e.turn} 回合</span><span class="text">${esc(e.text)}</span></div>`).join("");
+  for (const row of el.querySelectorAll(".chronicle-row")) {
+    const e = list[+row.dataset.i];
+    if (e.tile != null) row.onclick = () => { centerOn(e.tile % world.width, Math.floor(e.tile / world.width), 22); game.select(e.tile); renderSelection(); redraw(); };
+  }
+}
 function renderRuleSummary() {
   const snap = game.G.snap, el = $("rule-summary");
   if (!snap) { el.innerHTML = '<span class="hint">开局后显示</span>'; return; }
@@ -1802,6 +1828,7 @@ function renderGame() {
   $("badge-log").textContent = logLines.length > 1 ? logLines.length - 1 : "";
   renderSelection();
   renderBrief();
+  renderChronicle();
   renderStressReport();
   // 看不见的分类不画（大局里城市 / 军队列表上千条）；切过去时再画
   renderVisibleTab();

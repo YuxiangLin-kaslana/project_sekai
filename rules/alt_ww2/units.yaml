@@ -84,6 +84,20 @@ infantry:
     - { stat: strength, op: mul, value: 125, when: { defending: true } }
   icon: infantry
 
+partisan:
+  name: 游击队
+  short: 游
+  strength: 7
+  hp: 80
+  moves: 3
+  cost: 0
+  population: 0
+  gold: 0
+  upkeep: 0
+  buildable: false          # 城市造不出来：刚被占领、不稳定的城市里冒出来（engine/systems/upheaval.py）
+  tags: [partisan]          # 不受控制区影响；专门破坏占领军后方的道路、设施
+  icon: infantry
+
 motorized:
   name: 摩托化师
   short: 摩

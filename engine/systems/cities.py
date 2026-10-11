@@ -689,6 +689,8 @@ def production_problem(
         u = rules.units.get(key)
         if u is None:
             return f"没有这种单位：{key}"
+        if not u.buildable:
+            return f"{u.name}不能生产"
         from engine.systems.techs import locked
 
         why = locked(state, rules, city.nation, key)

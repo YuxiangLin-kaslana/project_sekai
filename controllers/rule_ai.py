@@ -121,6 +121,7 @@ OVERWHELM = 1.3  # 兵力是对方这么多倍就不等编制凑满
 GRAB_HP = 25  # 敌城城防值低于它、又没有守军：附近的近战陆军直接冲过去占领
 GRAB_UNITS = 2  # 每座城每回合最多派这么多支去抢
 FERRY_LOCAL = 6  # 战线有这么多陆军困在别的陆地上（而且是目标陆地上的 2 倍多）：按跨海作战组织运兵
+PARTISAN_REACH = 6  # 游击队找破坏目标的范围
 MELEE_MIN = 2  # 远程火力够了时，战线至少要这么多支近战才出发
 STAND_IN = 2  # 缺 1 支远程火力可以用多出来的这么多支近战顶上（近战能强攻城墙）
 MAX_FRONTS = 3  # 同时最多几条战线
@@ -1192,6 +1193,7 @@ def _troop(ctx, u):
         and ut.category == "military"
         and not ut.anti_air
         and "scout" not in ut.tags
+        and "partisan" not in ut.tags
         and u.id not in _ai(ctx).get("guards", {})
     )
 
@@ -1731,6 +1733,7 @@ def _front_pool(ctx, u):
     return (
         ut.category == "military"
         and "scout" not in ut.tags
+        and "partisan" not in ut.tags  # 游击队只在敌后活动，不编进战线
         and u.id not in _ai(ctx).get("guards", {})
     )
 
@@ -3338,6 +3341,44 @@ def _raid_airfield(ctx, unit):
     return march(ctx, unit, tile, f"奔袭敌方{b.name}，{verb}它")
 
 
+def _partisan(ctx, unit):
+    """游击队：在占领军后方破坏——脚下有敌方设施 / 道路就拆，旁边有打得过的弱敌就打，
+    否则去附近（PARTISAN_REACH 格内）的敌方设施；都没有就隐蔽待机。"""
+    from engine.systems.pillage import pillage_target
+
+    s, rules, g = ctx.state, ctx.rules, ctx.state.grid
+    issuer, uid = ref("nation", unit.nation), ref("unit", unit.id)
+    target, problem = pillage_target(s, rules, unit)
+    if not problem:
+        if emit(
+            ctx,
+            unit,
+            Pillage(issuer=issuer, unit=uid),
+            f"游击队破坏占领军的{target['name']}",
+        ):
+            return True
+    choice = attack_choice(ctx, unit) if health(rules, unit) >= 50 else None
+    if choice is not None:
+        tile, info, victim = choice
+        if not isinstance(victim, City) and info["retaliation"] < unit.hp // 2:
+            intend_attack(ctx, unit, tile, info, victim, "游击队袭击落单的占领军")
+            return True
+    goals = [
+        t
+        for t in g.within(unit.tile, PARTISAN_REACH)
+        if g.facility[t]
+        and int(g.owner[t]) >= 0
+        and at_war(s, int(g.owner[t]), unit.nation)
+        and s.city_at(t) is None
+        and not s.units_at(t, "surface")
+    ]
+    for t in sorted(goals, key=lambda t: (g.distance(unit.tile, t), t))[:3]:
+        if march(ctx, unit, t, "游击队潜行到占领军的设施旁，准备破坏"):
+            return True
+    emit(ctx, unit, Fortify(issuer=issuer, unit=uid), "游击队隐蔽待机")
+    return True
+
+
 def _pillage(ctx, unit):
     """破坏：在敌国领土上等待时，脚下有敌方设施（或在建工程）、2 格内又没有敌军，就拆掉它，
     掠走金币、动摇当地城市的稳定度。不拆道路（自己行军也要用），接敌时不拆（会丢驻守加成）。"""
@@ -3391,6 +3432,9 @@ def decide_unit(ctx, unit, plan, guards, claimed):
         return
     if ut.category != "military":
         unit.ai_goal = "待命；建设由国家直接组织"
+        return
+    if "partisan" in ut.tags:
+        _partisan(ctx, unit)
         return
     if unit.formation is not None:
         emit(ctx, unit, Ungroup(issuer=issuer, unit=uid), "解散自动编队，编队不能交战")

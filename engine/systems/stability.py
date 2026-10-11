@@ -20,7 +20,6 @@ from __future__ import annotations
 from collections import Counter, deque
 
 from engine.ids import parse_ref, ref
-from engine.state import Nation
 from engine.systems import encirclement
 from engine.systems.cities import FOOD_PER_POP, city_yields, heads, population_upkeep
 from engine.systems.context import StepContext
@@ -33,6 +32,8 @@ WAR_NAMES = {
     "occupied": "敌军压境",
     "encircled": "被包围",
     "weariness": "厌战",
+    "conquest": "新占领",
+    "overextension": "过度扩张",
 }
 REASON_NAMES = {**SHORTAGE_NAMES, **WAR_NAMES}
 
@@ -84,9 +85,23 @@ def war_pressures(ctx: StepContext) -> dict[int, list[str]]:
         parse_ref(e["nation"], "nation") for e in ctx.log.events if e["type"] == "unit_destroyed"
     )
     territory = s.territory_index()
+    cfg = rules.stability
+    far = max(1, round(cfg.far * city_scale(s.grid)))
+    sizes = Counter(c.nation for c in s.cities.values())
     out = {}
     for city in s.cities.values():
         reasons = []
+        if cfg.conquest and s.turn - city.captured_turn < cfg.conquest_turns:
+            reasons.append("conquest")
+        capital = s.cities.get(s.nations[city.nation].capital or -1)
+        if (
+            cfg.overextension
+            and sizes[city.nation] > cfg.empire_size
+            and capital is not None
+            and s.grid.distance(capital.tile, city.tile) > far
+            and (s.turn + city.id) % 2 == 0
+        ):
+            reasons.append("overextension")
         if city.damaged_turn == s.turn:
             reasons.append("attacked")
         if any(
@@ -172,68 +187,17 @@ def _independence(ctx: StepContext, city) -> None:
             ):
                 group.append(other)
                 queue.append(other)
-    from engine.setup import _generated_color
-    from engine.systems.names import nation_name
+    from engine.systems.secession import secede
 
-    nid = max(s.nations) + 1
-    culture = s.nations[old].culture  # 独立出来的国家和原国家同一个名字系列
-    nation = Nation(
-        nid,
-        nation_name(s, rules, culture, from_city=city.name),
-        _generated_color(nid + 7),
-        None,
-        capital=city.id,
-        gold=cfg.start_gold * len(group),
-        city_management=True,
-        ai_enabled=True,
-        culture=culture,
-        techs=None if s.nations[old].techs is None else list(s.nations[old].techs),  # 继承科技
-    )
-    s.nations[nid] = nation
-    # 外交：新政权和原国家交战，和其他国家照原国家的关系（交战的继续交战，其余和平）
-    from engine.systems import diplomacy
-
-    for other in sorted(s.nations):
-        if other == nid:
-            continue
-        st = "war" if other == old or diplomacy.at_war(s, old, other) else "peace"
-        s.relations[diplomacy.key(nid, other)] = {"status": st, "since": s.turn, "progress": s.turn}
-    s._closed_cache.clear()
-    for c in group:
-        c.nation, c.capital, c.stability = nid, c is city, cfg.independent
-        c.managed, c.gold_assist = True, False
-        c.management = {"status": "pending", "reason": "新政权成立，按方针重新安排"}
-        c.production_reason = ""
-        if c.construction is not None:
-            c.construction.nation = nid
-        g.owner[g.city_of == c.id] = nid
-        # 城里的原国家部队随城倒戈
-        for u in s.units_at(c.tile):
-            if u.nation == old:
-                u.nation, u.formation, u.destination, u.managed = nid, None, None, True
-                u.ai_goal = "随城独立"
-    previous = s.nations[old]
-    if previous.capital in {c.id for c in group}:
-        remaining = s.nation_cities(old)
-        previous.capital = remaining[0].id if remaining else None
-        if remaining:
-            remaining[0].capital = True
-    s._network_cache = None
-    s._settlement_usage = None
-    s.invalidate_paths()
-    s._worked_cache.clear()
-    s._yield_cache.clear()
-    s._supply_cache.clear()
-    s._power_cache.clear()
-    s._encircled = None
+    defectors = [
+        u for c in group for u in s.units_at(c.tile) if u.nation == old
+    ]  # 城里的部队随城倒戈
+    nid = secede(ctx, old, group, city, defectors, gold=cfg.start_gold * len(group), why="随城独立")
     ctx.log.add(
         "city_independence",
         nation=ref("nation", nid),
         previous=ref("nation", old),
-        name=nation.name,
+        name=s.nations[nid].name,
         cities=[ref("city", c.id) for c in group],
         tile=city.tile,
     )
-    from engine.systems.territory import rebalance
-
-    rebalance(s, (nid, old))  # 独立的城和原国家：领土在各自的城市之间重新分

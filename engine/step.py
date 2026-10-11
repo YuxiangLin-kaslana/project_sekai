@@ -31,6 +31,7 @@ from engine.systems import (
     occupation,
     progression,
     stability,
+    upheaval,
 )
 from engine.systems import orders as order_system
 from engine.systems.context import StepContext
@@ -62,6 +63,7 @@ PIPELINE: tuple[tuple[str, Callable[[StepContext], None]], ...] = (
     ("city_management", city_management.resolve),
     ("economy", economy.resolve),
     ("stability", stability.resolve),
+    ("upheaval", upheaval.resolve),
     ("progression", progression.resolve),
     ("refresh", _refresh),
 )

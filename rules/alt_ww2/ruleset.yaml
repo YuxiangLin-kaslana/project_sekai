@@ -85,6 +85,11 @@ stability:                # 城市稳定度 0–100：缺粮 / 缺钱 / 缺生�
   weariness: 1            # 战争：本国本回合阵亡 3 支以上（weariness_losses），全国城市 −1（厌战）
   weariness_losses: 3
   garrison: 67            # 有本国驻军（城里有陆军，或辖区内有驻守的陆军）：下降减少 67%，至少仍掉 1
+  conquest: 2             # 过度扩张：被攻占后 25 回合内每回合 −2（新占领，民心未附）
+  conquest_turns: 25
+  overextension: 1        # 城市超过 10 座时，离首都 10 格（按地图尺度放大）以外的城每两回合 −1
+  empire_size: 10
+  far: 10
 
 pillage:                  # 军队破坏外国领土上的设施 / 道路（站在那一格，用掉本回合行动）
   loot: 25                # 掠走设施造价的 25%（金币）

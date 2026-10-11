@@ -535,6 +535,8 @@ def _snapshot(game: Game, rules: Ruleset) -> dict:
             ],
         },
         "turn": s.turn,
+        # 世界大事记（最近 80 条，新的在前）：首都陷落、灭国、内战、将领叛变、反霸同盟……
+        "chronicle": list(reversed(s.chronicle[-80:])),
         "state_hash": s.state_hash(),
         "nations": nations,
         "cities": cities,

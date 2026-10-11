@@ -60,6 +60,8 @@ class Nation:
     research: str | None = None  # 正在研究的科技
     research_progress: int = 0  # 当前研究已投入的科研值
     culture: str = "west"  # 名字系列（东方 east / 西方 west）：城市名、将领名从这个系列的名字库取
+    upheaval_turn: int = -1000  # 上一次内战 / 将领叛变的回合（冷却，见 engine/systems/upheaval.py）
+    coalition_turn: int = -1000  # 上一次成为反霸同盟的目标的回合
 
 
 @dataclass(slots=True)
@@ -89,6 +91,8 @@ class City:
     population: int
     capital: bool = False
     founded_turn: int = 0
+    captured_turn: int = -1000  # 最近一次被攻占的回合（新占领：稳定度压力、游击队）
+    captured_from: int | None = None  # 从哪个国家手里攻占的（游击队归它）
     radius: int = 2  # 辖区半径
     buildings: list[str] = field(default_factory=list)  # 市中心建筑（规则集 ID，按建成顺序）
     queue: list[str] = field(default_factory=list)  # 生产队列："unit:<id>" / "building:<id>"
@@ -177,6 +181,8 @@ class GameState:
     region_xp: dict[int, int] = field(default_factory=dict)
     # 被占领划走的土地原来属于哪座城：格子 → 城市。那座城被攻下时，攻占方手里的这些土地还给它
     land_home: dict[int, int] = field(default_factory=dict)
+    # 世界大事记：[{turn, kind, text, nations, tile}]（首都陷落、灭国、内战、叛变、反霸同盟……）
+    chronicle: list[dict] = field(default_factory=list)
     # 外交（engine/systems/diplomacy.py）：{"a:b": {status, since, truce, progress}}；没有记录的按交战处理
     relations: dict[str, dict] = field(default_factory=dict)
     offers: list[dict] = field(default_factory=list)  # 给玩家国家的待处理提议
@@ -333,6 +339,7 @@ class GameState:
             facility_xp=dict(self.facility_xp),
             damaged=dict(self.damaged),
             land_home=dict(self.land_home),
+            chronicle=list(self.chronicle),
             region_xp=dict(self.region_xp),
             relations={k: dict(v) for k, v in self.relations.items()},
             offers=[dict(o) for o in self.offers],
@@ -368,6 +375,7 @@ class GameState:
             "offers": self.offers,
             "damaged": sorted(self.damaged.items()),
             "land_home": sorted(self.land_home.items()),
+            "chronicle": self.chronicle,
             "region_xp": sorted(self.region_xp.items()),
             "roads": [[a, b, v] for (a, b), v in sorted(self.roads.items())],
             "grid": self.grid.content_hash(),

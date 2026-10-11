@@ -153,6 +153,7 @@ class UnitType(_Strict):
     population: int = Field(1, ge=0)  # 造出来时从城市带走的人口（城市至少留 1 人）
     gold: int = Field(0, ge=0)  # 造出来时一次性付的金钱
     upkeep: int = Field(0, ge=0)  # 每回合金钱
+    buildable: bool = True  # False = 城市造不出来，只由事件产生（如游击队）
     requires_resources: list[str] = []  # 国家领土内要有这些资源才能生产
     tags: list[str] = []  # 能力标签：found_city、build_facility、scout ……
     modifiers: list[Modifier] = []
@@ -375,6 +376,14 @@ class StabilityConfig(_Strict):
     weariness: int = Field(1, ge=0, le=100)
     weariness_losses: int = Field(3, ge=1, le=100)  # 本回合阵亡这么多支以上才算厌战
     garrison: int = Field(67, ge=0, le=100)  # 有本国驻军时，稳定度的下降减少这么多 %（至少仍掉 1）
+    # 过度扩张：新占领的城一段时间里不稳；城市太多时离首都远的城回升得慢（每两回合掉一次）
+    conquest: int = Field(0, ge=0, le=100)  # 被攻占后 conquest_turns 回合内：每回合 −这么多
+    conquest_turns: int = Field(25, ge=0, le=500)
+    overextension: int = Field(
+        0, ge=0, le=100
+    )  # 城市超过 empire_size 座、离首都 far 格以外：每两回合 −这么多
+    empire_size: int = Field(10, ge=1, le=500)
+    far: int = Field(10, ge=1, le=200)  # 按地图尺度放大
 
 
 class PillageConfig(_Strict):
