@@ -51,8 +51,8 @@ UPHEAVAL_RECOVER = 80  # 内战、叛变之后，这个国家再出大乱子的�
 
 # 反霸同盟
 COALITION_RATE = 0.15
-COALITION_RECOVER = 80  # 全世界上一次反霸同盟之后，概率按这个尺度慢慢恢复
-COALITION_TARGET_RECOVER = 120  # 同一个霸主再被反霸的恢复尺度
+COALITION_RECOVER = 160  # 全世界上一次反霸同盟之后，概率按这个尺度慢慢恢复
+COALITION_TARGET_RECOVER = 240  # 同一个霸主再被反霸的恢复尺度
 
 # 投降并入
 SURRENDER_RATE = 0.25
