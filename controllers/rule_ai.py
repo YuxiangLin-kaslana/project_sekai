@@ -124,6 +124,14 @@ EXPLOIT_DEFENSIVE = 0.4  # 防守中的战线也会穿插反击，但要的分�
 EXPLOIT_LOCAL = 3  # 局部兵力：看这么多格以内
 EXPLOIT_OUTNUMBERED = 10  # 局部敌军比本方（连同已分好的穿插部队）每多一支：钻进去容易被反包围
 EXPLOIT_CANDIDATES = 40  # 每国每回合最多评估这么多个候选格
+EXPLOIT_CAUTION = 0.4  # 侧翼暴露度（engine/systems/learning.exposure）每 +1，穿插的胆量打这么多折
+# 防穿插（plan_screens）：站在敌人的角度推演——敌方快速部队这回合够得着、站上去能切断 / 拉长我军补给线的格子，
+# 派附近不在第一线的部队去占住（保护侧翼、堵住战线缺口）。最近越常被侧击、背击、合围（暴露度越高），
+# 门槛越低、派得越多
+SCREEN_MIN = 60  # 威胁分（和穿插同样的算法）不到这么多不派兵
+SCREEN_MAX = 2  # 每国每回合最多派这么多支（暴露度满时再多 SCREEN_EXTRA 支）
+SCREEN_EXTRA = 3
+SCREEN_REAR = 3  # 只抽离敌军这么多格以外的部队（不削弱第一线、第二线）
 MOVE_ARROWS = 16  # 每国每回合最多记几条包抄 / 包围动作箭头
 IDLE_PERIOD = 3  # 驻守不动、附近没有外国军队的部队每这么多回合（按单位编号错开）才重新决策一次
 IDLE_RADIUS = 5  # “附近”：这么多格以内（敌军一回合走 2–4 格，加上射程）
@@ -1031,11 +1039,15 @@ def plan_exploits(ctx, nid, units, guards, plan):
     from engine.systems.zoc import ignores, mask
 
     s, rules, g = ctx.state, ctx.rules, ctx.state.grid
-    bold = {}  # 单位 → 所在战线的胆量：进攻 1，防守 EXPLOIT_DEFENSIVE（门槛相应提高）
+    from engine.systems.learning import exposure
+
+    # 单位 → 所在战线的胆量：进攻 1，防守 EXPLOIT_DEFENSIVE（门槛相应提高）；最近常被合围、侧击就更保守
+    caution = 1 - EXPLOIT_CAUTION * exposure(s, nid)
+    bold = {}
     for f in plan.get("fronts") or ():
         if f.get("kind") == "land":
             for uid in f.get("units", ()):
-                bold[uid] = 1.0 if f.get("stance") == "进攻" else EXPLOIT_DEFENSIVE
+                bold[uid] = (1.0 if f.get("stance") == "进攻" else EXPLOIT_DEFENSIVE) * caution
     taken = set(_ai(ctx).get("encircle", {}))
     fast = [
         u
@@ -1162,6 +1174,113 @@ def plan_exploits(ctx, nid, units, guards, plan):
         free.remove(u)
         plan_tiles.append(t)
         out[u.id] = (t, f"穿插到敌后，切断敌军退路、打击后方（{best:.0f} 分）")
+    return out
+
+
+def plan_screens(ctx, nid, units, guards):
+    """防穿插：敌方快速部队（_fast）这回合够得着的空格里，推演“它站上去（连同控制区）以后，本国附近部队回
+    补给源的路拉长多少、会不会被切断”（和 plan_exploits 同样的算法），威胁大的格子派附近不在第一线
+    （没贴着敌军）的近战部队去占住。最近被侧击、背击、合围得越多（暴露度），门槛越低、派得越多。
+    返回 {单位 ID: (格子, 说明)}。"""
+    from engine.systems.diplomacy import at_war
+    from engine.systems.learning import exposure
+
+    s, rules, g = ctx.state, ctx.rules, ctx.state.grid
+    raiders = [
+        v
+        for v in s.units.values()
+        if at_war(s, v.nation, nid)
+        and _fast(rules, v)
+        and health(rules, v) >= 50
+        and not naval.afloat(s, rules, v)
+    ]
+    if not raiders:
+        return {}
+    occ = encirclement.occupants(s, rules)
+    net = encirclement.network(s, rules, nid, occ)
+    if net is None:
+        return {}
+    base = encirclement.steps(s, net)
+    mine = [
+        u
+        for u in units
+        if is_military(rules, u)
+        and rules.units[u.type].domain == "land"
+        and base[u.tile] < encirclement.UNREACHED
+        and (s.city_at(u.tile) is None or s.city_at(u.tile).nation != nid)
+    ]
+    if not mine:
+        return {}
+    standable = encirclement._standable(rules, "land")
+    foes = {
+        v.tile
+        for v in s.units.values()
+        if is_military(rules, v) and at_war(s, v.nation, nid) and v.layer == "surface"
+    }
+    near_mine = {}
+    for u in mine:
+        near_mine.setdefault(u.tile, []).append(u)
+    threats = {}
+    for v in raiders:
+        for t in g.within(v.tile, rules.units[v.type].moves):
+            if t in threats or not standable[g.terrain[t]] or occ.get(t):
+                continue
+            if s.city_at(t) is not None or any(n in foes for n in g.neighbors_of(t)):
+                continue  # 贴着敌军的格子是第一线，不是要堵的缺口
+            if any(g.distance(t, w) <= 3 for w in near_mine):
+                threats[t] = 0
+    if not threats:
+        return {}
+    for t in sorted(threats, key=lambda t: (min(g.distance(t, w) for w in near_mine), t))[
+        :EXPLOIT_CANDIDATES
+    ]:
+        after = encirclement.steps(s, net, (t,))
+        score = 0
+        for u in mine:
+            if g.distance(u.tile, t) > EXPLOIT_NEAR:
+                continue
+            if after[u.tile] >= encirclement.UNREACHED:
+                score += EXPLOIT_CUT
+            else:
+                longer = int(after[u.tile]) - int(base[u.tile])
+                score += EXPLOIT_STRETCH * max(0, min(EXPLOIT_STRETCH_CAP, longer))
+        threats[t] = score
+    risk = exposure(s, nid)
+    floor = SCREEN_MIN * (1 - 0.5 * risk)
+    cap = SCREEN_MAX + round(SCREEN_EXTRA * risk)
+    busy = set(guards) | set(_ai(ctx).get("encircle", {})) | set(_ai(ctx).get("exploit", {}))
+    foes_at = {
+        v.tile
+        for v in s.units.values()
+        if is_military(rules, v) and at_war(s, v.nation, nid) and v.layer == "surface"
+    }
+    spare = [
+        u
+        for u in mine
+        if u.id not in busy
+        and not is_siege(rules, u)
+        and not is_air_defense(rules, u)
+        and "scout" not in rules.units[u.type].tags
+        and health(rules, u) >= 50
+        and u.moves_left > 0
+        and not any(t in foes_at for t in g.within(u.tile, SCREEN_REAR))  # 只抽后方的
+    ]
+    out, covered = {}, set()
+    for t in sorted(threats, key=lambda t: (-threats[t], t)):
+        if len(out) >= cap or threats[t] < floor:
+            break
+        if t in covered:
+            continue
+        options = [
+            u
+            for u in spare
+            if u.id not in out and g.distance(u.tile, t) <= rules.units[u.type].moves
+        ]
+        if not options:
+            continue
+        u = min(options, key=lambda u: (g.distance(u.tile, t), u.id))
+        out[u.id] = (t, f"堵住敌军装甲可能穿插的缺口，保护侧翼和补给线（威胁 {threats[t]:.0f}）")
+        covered.update((t, *g.neighbors_of(t)))  # 站上去的部队连同控制区罩住了旁边
     return out
 
 
@@ -3986,6 +4105,15 @@ def decide_unit(ctx, unit, plan, guards, claimed):
         return
     if line and mode != "围城" and health(rules, unit) >= 60 and _raid_airfield(ctx, unit):
         return
+    screen = _ai(ctx).get("screen", {}).get(unit.id)
+    if screen is not None:
+        # 防穿插：去占住敌军装甲可能钻进来的格子
+        if unit.tile != screen[0] and march(ctx, unit, screen[0], screen[1]):
+            _record_move(ctx, unit, screen[0], "screen")
+            return
+        if unit.tile == screen[0]:
+            _hold(ctx, unit, screen[1])
+            return
     dash = _ai(ctx).get("exploit", {}).get(unit.id)
     if dash is not None and plan.get("kind") == "land":
         # 穿插：坦克的火力不能闲着——本回合能先走再打就先打（站着能打的上面已经打了），
@@ -4467,6 +4595,7 @@ def nation_turn(ctx, job):
         _bodyguards(ctx, nid)
         _ai(ctx).setdefault("encircle", {}).update(plan_encirclements(ctx, nid, ashore, guards))
         _ai(ctx)["exploit"] = plan_exploits(ctx, nid, ashore, guards, plan)
+        _ai(ctx)["screen"] = plan_screens(ctx, nid, ashore, guards)
         _prefetch_flows(ctx, {nid: plan})
     # 每支部队按所属战线决策（战线的目标、阶段、战线位置）；不在战线上的（守军、边境哨、侦察、
     # 开拓团、闲置舰船）按国家整体的计划

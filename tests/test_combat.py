@@ -1136,3 +1136,16 @@ def test_mirrored_duel_is_decided_by_who_moves_first_this_turn(board):
         survivor = 1 if a.id in out.units and b.id not in out.units else 2 if b.id in out.units and a.id not in out.units else 0
         first[min(rank, key=rank.get)] = survivor
     assert first == {1: 1, 2: 2}
+
+
+def test_units_turn_to_face_the_biggest_threat_before_combat(board):
+    """移动之后、战斗之前所有部队转向威胁最大的方向：东边一辆坦克、西边一支残血步兵，面朝东边。"""
+    from engine.systems.zoc import bearing, side
+
+    board.relations["1:2"] = {"status": "war", "since": 0}
+    me = add(board, "infantry", 1, 5, 3)
+    tank = add(board, "armor", 2, 7, 3)
+    add(board, "infantry", 2, 3, 3, hp=30)
+    me.facing = bearing(board.grid, me.tile, board.grid.idx(3, 3))  # 原来背对坦克
+    s = step(board, [], RULES).state
+    assert side(s.units[me.id].facing, bearing(s.grid, me.tile, tank.tile)) <= 1  # 坦克在正面

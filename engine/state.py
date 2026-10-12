@@ -57,6 +57,8 @@ class Nation:
     techs: list[str] | None = None
     # AI 作战学习：{打法类别: [战果和, 次数]}（带衰减），见 engine/systems/learning.py
     tactics: dict = field(default_factory=dict)
+    # 防守学习：{挨打的方位 front / flank / rear / pocket（被围）: [损失和, 次数]}（带衰减），见 learning.py
+    defense: dict = field(default_factory=dict)
     research: str | None = None  # 正在研究的科技
     research_progress: int = 0  # 当前研究已投入的科研值
     culture: str = "west"  # 名字系列（东方 east / 西方 west）：城市名、将领名从这个系列的名字库取

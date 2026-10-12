@@ -8,6 +8,11 @@
 每类按衰减（DECAY）累计：{类别: [价值和, 次数]}，存在 Nation.tactics。
 挑攻击目标时（controllers/rule_ai.py 的 attack_choice），这类打法的平均价值比本国所有进攻的平均价值高就加分、
 低就减分（bias，最多 ±BIAS_CAP）。打得越多越准，战场形势变了（敌人的兵种、城防）偏好也跟着变。
+
+防守学习：本国部队挨打也记下来（Nation.defense），按方位分 front 正面、flank 侧击、rear 背击、pocket 被围
+（挨打时已被包围，或者这回合新被围住），损失 = 受到的伤害（阵亡再加 LOST，新被围一次算 POCKET），同样衰减。
+exposure() = 侧击、背击、被围的损失占全部挨打损失的比例（样本少时打折）：越高说明侧翼越常被人抄、越常被合围，
+AI 防穿插派的兵越多、自己穿插越保守（controllers/rule_ai.py 的 plan_screens / plan_exploits）。
 """
 
 from __future__ import annotations
@@ -18,6 +23,8 @@ DECAY = 0.98  # 每回合衰减：大约 35 回合前的战果只剩一半分量
 KILL, LOST = 40, 60
 BIAS_CAP = 25
 MIN_SAMPLES = 2.0  # 样本太少不调整
+POCKET = 30  # 防守学习：新被围住一次算这么多损失
+EXPOSURE_SAMPLE = 400  # 挨打损失累计到这么多，暴露度才按全额算（少于时按比例打折）
 
 
 def role(rules, ut) -> str:
@@ -80,6 +87,7 @@ def update(ctx) -> None:
         slot = fresh.setdefault(nation, {}).setdefault(cat, [0.0, 0.0])
         slot[0] += value
         slot[1] += 1
+    _defense(ctx, gone, types)
     for nid, n in s.nations.items():
         if not n.tactics and nid not in fresh:
             continue
@@ -91,6 +99,56 @@ def update(ctx) -> None:
         n.tactics = {
             k: [round(v[0], 2), round(v[1], 3)] for k, v in sorted(memory.items()) if v[1] >= 0.05
         }
+
+
+def _defense(ctx, gone, types) -> None:
+    """防守学习：本回合各国部队挨的打按方位记进 Nation.defense（先衰减旧的）。"""
+    s = ctx.state
+    fresh: dict[int, dict[str, list[float]]] = {}
+
+    def add(nation, cat, value):
+        slot = fresh.setdefault(nation, {}).setdefault(cat, [0.0, 0.0])
+        slot[0] += value
+        slot[1] += 1
+
+    for e in ctx.log.events:
+        if e["type"] == "unit_encircled":
+            add(parse_ref(e["nation"], "nation"), "pocket", POCKET)
+            continue
+        if e["type"] != "combat" or not str(e.get("defender", "")).startswith("unit:"):
+            continue
+        ref_ = e["defender"]
+        u = s.units.get(parse_ref(ref_, "unit"))
+        nation = u.nation if u is not None else types.get(ref_, (None, None))[1]
+        if nation is None:
+            continue
+        pocket = any(
+            isinstance(m, dict) and m.get("side") == "defender" and m.get("label") == "被包围"
+            for m in e.get("modifiers") or ()
+        )
+        cat = "pocket" if pocket else angle(e.get("modifiers"))
+        add(nation, cat, e.get("damage", 0) + (LOST if ref_ in gone else 0))
+    for nid, n in s.nations.items():
+        if not n.defense and nid not in fresh:
+            continue
+        memory = {k: [v[0] * DECAY, v[1] * DECAY] for k, v in (n.defense or {}).items()}
+        for cat, (total, count) in fresh.get(nid, {}).items():
+            slot = memory.setdefault(cat, [0.0, 0.0])
+            slot[0] += total
+            slot[1] += count
+        n.defense = {
+            k: [round(v[0], 2), round(v[1], 3)] for k, v in sorted(memory.items()) if v[1] >= 0.05
+        }
+
+
+def exposure(state, nation: int) -> float:
+    """侧翼暴露度（0–1）：侧击、背击、被围的损失占全部挨打损失的比例；挨打少时按 EXPOSURE_SAMPLE 打折。"""
+    memory = state.nations[nation].defense or {}
+    total = sum(v[0] for v in memory.values())
+    if total <= 0:
+        return 0.0
+    exposed = sum(memory.get(k, (0, 0))[0] for k in ("flank", "rear", "pocket"))
+    return exposed / total * min(1.0, total / EXPOSURE_SAMPLE)
 
 
 def bias(state, rules, nation: int, actor_type: str, target_is_city: bool, modifiers) -> float:

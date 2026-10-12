@@ -32,6 +32,7 @@ from engine.systems import (
     progression,
     stability,
     upheaval,
+    zoc,
 )
 from engine.systems import orders as order_system
 from engine.systems.context import StepContext
@@ -57,6 +58,7 @@ PIPELINE: tuple[tuple[str, Callable[[StepContext], None]], ...] = (
     ("diplomacy", diplomacy.resolve),
     ("rule_ai", rule_ai.resolve),
     ("movement", movement.resolve),
+    ("facing", zoc.resolve_facing),
     ("encirclement", encirclement.resolve),
     ("combat", combat.resolve),
     ("occupation", occupation.resolve),

@@ -1,7 +1,8 @@
 """朝向与控制区（二战剧本的兵棋规则）。
 
 朝向：每个单位面朝六个方向之一（Unit.facing，方向编号同 engine/hexmap/coords.DIRECTIONS：
-0 东、1 东北、2 西北、3 西、4 西南、5 东南）。移动时朝前进的方向；攻击时朝目标；驻守时转向最近的敌军。
+0 东、1 东北、2 西北、3 西、4 西南、5 东南）。移动时朝前进的方向；移动之后、战斗之前所有部队转向威胁最大
+的方向（threat_facing：附近敌军按攻击力和距离加权，挑正面罩住威胁最多的朝向）；攻击时朝目标。
 被攻击时看攻击从哪个方向来：正面（朝向和它左右相邻的两个方向）没有加成，侧面 +flank%，背后 +rear%
 （规则集 tactics.flank / tactics.rear）。
 
@@ -126,18 +127,42 @@ def stop_mask(state, rules, unit):
     return sea | mask(state, rules, unit.nation, "land")
 
 
-def face_nearest_enemy(state, rules, unit, radius: int = 8) -> None:
-    """驻守时转向最近的交战国军事单位（radius 格内没有就不转）。"""
+FACE_RADIUS = 4  # 转向时看这么多格以内的敌军
+
+
+def threat_facing(state, rules, unit, radius: int = FACE_RADIUS) -> int | None:
+    """面向威胁最大的方向：radius 格内每支交战国战斗单位按（攻击力 × 剩余生命比例 ÷ 距离²）算威胁，
+    挑一个朝向让正面（朝向和它左右相邻的两个方向）罩住的威胁最多。附近没有敌军返回 None。"""
     g = state.grid
-    best = None
+    weights = [0.0] * 6
     for t in g.within(unit.tile, radius):
         if t == unit.tile:
             continue
+        d = g.distance(unit.tile, t)
         for v in state.units_at(t, "surface"):
-            if exerts(rules, v, state) and at_war(state, v.nation, unit.nation):
-                key = (g.distance(unit.tile, t), t)
-                if best is None or key < best:
-                    best = key
-                break
-    if best is not None:
-        unit.facing = bearing(g, unit.tile, best[1])
+            if not exerts(rules, v, state) or not at_war(state, v.nation, unit.nation):
+                continue
+            ut = rules.units[v.type]
+            power = max(ut.strength, ut.ranged_strength or 0) * v.hp / max(1, ut.hp)
+            weights[bearing(g, unit.tile, t)] += power / (d * d)
+    if max(weights) <= 0:
+        return None
+    return max(range(6), key=lambda f: (sum(weights[b] for b in range(6) if side(f, b) <= 1), -f))
+
+
+def resolve_facing(ctx) -> None:
+    """移动之后、战斗之前：所有地表战斗单位转向威胁最大的方向（threat_facing；附近没有敌军不转）。
+    本回合要进攻的部队开火时会再转向目标。"""
+    s, rules = ctx.state, ctx.rules
+    if ctx.immediate:
+        return
+    for (_tile, layer), ids in sorted(s._at.items()):
+        if layer != "surface":
+            continue
+        for i in ids:
+            u = s.units[i]
+            if not exerts(rules, u, s):
+                continue
+            f = threat_facing(s, rules, u)
+            if f is not None:
+                u.facing = f

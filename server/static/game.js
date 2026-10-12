@@ -2569,6 +2569,7 @@ const PLAN_STYLE = {
   flank_move: { w: 0.15, min: 2, head: 3.4 },
   encircle: { w: 0.15, min: 2, head: 3.4 },
   exploit: { w: 0.28, min: 3, head: 2.8 }, // 坦克穿插到敌后
+  screen: { w: 0.15, min: 2, head: 3.4, dash: true }, // 防穿插：堵缺口、护侧翼
 };
 const PLAN_ALPHA = { 备战: 0.38, 整编: 0.45, 推进: 0.6, 航渡: 0.6, 围城: 0.72 };
 

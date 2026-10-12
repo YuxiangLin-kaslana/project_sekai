@@ -644,3 +644,28 @@ def test_tanks_dash_behind_an_enemy_group_to_cut_its_supply(board):
     net = encirclement.network(board, RULES, 2)
     cut = encirclement.steps(board, net, (tile,))
     assert all(cut[v.tile] >= encirclement.UNREACHED for v in foes)
+
+
+def test_ai_screens_the_gap_an_enemy_tank_could_use_to_cut_it_off(board):
+    """防穿插：本国步兵在走廊里，敌方坦克够得着它们身后（本国城市那一侧）：派后面的部队去占住。"""
+    from controllers import rule_ai
+    from engine.systems import diplomacy, encirclement
+
+    g = board.grid
+    mountains = RULES.terrain_index("mountains")
+    for col in range(12, 27):
+        for row in range(g.height):
+            if not 9 <= row <= 11:
+                g.terrain[g.idx(col, row)] = mountains
+    diplomacy._set(board, 1, 2, "war")
+    front = [add(board, "infantry", 1, (18, row), hp=180) for row in (9, 10, 11)]
+    spare = add(board, "infantry", 1, (13, 10), hp=180)
+    add(board, "armor", 2, (20, 10), hp=RULES.units["armor"].hp)
+    ctx = StepContext(board, RULES, [], EventLog(board.turn), RngTree(board.seed, "t", 1))
+    jobs = rule_ai.plan_screens(ctx, 1, [*front, spare], {})
+    assert jobs
+    tile = next(iter(jobs.values()))[0]
+    assert g.col_row(tile)[0] < 18  # 堵在走廊里本方部队身后（敌军装甲会钻进来的地方）
+    # 推演：敌军坦克站到那一格，本方前线就断补给了——所以值得堵
+    net = encirclement.network(board, RULES, 1)
+    assert any(encirclement.steps(board, net, (tile,))[u.tile] >= encirclement.UNREACHED for u in front)
