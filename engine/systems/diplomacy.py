@@ -73,6 +73,7 @@ RECENT_WAR, RECENT_DROP = 60, 20  # 刚打完仗：这么多回合内关系目�
 DOMINANT_POWER, DOMINANT_DROP = 1.6, 15  # 兵力超过其余各国平均的 1.6 倍：和它的关系 −15
 FEW_NATIONS, FEW_DROP = 4, 20  # 只剩 4 国及以下：所有关系 −20
 OFFENSIVE_RATIO = 1.2  # 连同双方盟友，兵力是对方的这么多倍以上才主动宣战
+CRUSH = 2.5  # 巩固占领区时只打实力悬殊的（连同盟友兵力是对方的这么多倍）：后期的残余小国不再拖着统一不了
 WAR_LOAD = 0.5  # 手上交战国的兵力合计不到本国这么多倍，才开新仗
 WAR_CHANCE = 0.08  # 条件都满足时，每回合宣战的概率
 SEA_WAR_REACH = 25  # 没有陆上邻国时，城市之间这么多格（× 地图尺度）以内的国家也能打（跨海）
@@ -487,8 +488,8 @@ def _maybe_declare(ctx, nid, alive, pw, borders, rng) -> None:
         return  # 还在扩张期（国家 AI 还没转入战争姿态）：先发展
     from controllers.frontline import consolidating
 
-    if consolidating(s, ctx.rules, nid):
-        return  # 正在巩固新占领区：不开新仗
+    # 正在巩固新占领区：不开势均力敌的新仗，只打实力悬殊的
+    need = CRUSH if consolidating(s, ctx.rules, nid) else OFFENSIVE_RATIO
     mine = _bloc(s, nid, pw)
     foes = set(enemies(s, nid))
     if sum(pw.get(e, 0) for e in foes) > WAR_LOAD * pw.get(nid, 0):
@@ -509,7 +510,7 @@ def _maybe_declare(ctx, nid, alive, pw, borders, rng) -> None:
             pw.get(x, 0) for x in allies(s, nid) if allied(s, x, other)
         )  # 两边都结盟的不会来帮我
         odds = mine / max(1.0, theirs)
-        if odds < OFFENSIVE_RATIO:
+        if odds < need:
             continue
         score = odds * (1 + (WAR_AT - value(s, nid, other)) / 50)
         if best is None or score > best[0]:
