@@ -419,24 +419,22 @@ def _bloc(s, n, pw) -> float:
     return pw.get(n, 0) + sum(pw.get(x, 0) for x in allies(s, n))
 
 
-def _war_targets(s, rules, nid, borders) -> list[int]:
-    """nid 能开战的对象：陆上邻国；陆上邻国都是盟友、或者已经在打（没有能新开战的）时，再加上城市
-    离得够近（隔海够得着）的国家——不然后期隔海的残余国家永远没人去打，统一不了。"""
+def _war_targets(s, rules, nid, borders) -> tuple[list[int], list[int]]:
+    """nid 能开战的对象：(陆上邻国, 隔海够得着的国家)。宣战先在陆上邻国里挑，陆上没有能打的
+    （都是盟友、已经在打、或者打不过）再看隔海的——不然后期隔海的残余国家永远没人去打，统一不了。"""
     near = _neighbors(borders, nid)
-    if any(status(s, nid, n) == "peace" for n in near):
-        return sorted(near)
     from engine.systems.settlement import map_scale
 
     reach = SEA_WAR_REACH * map_scale(s.grid)
     mine = [c.tile for c in s.nation_cities(nid)]
-    out = set(near)
+    sea = []
     for other in sorted(s.nations):
-        if other == nid or other in out or not s.nation_cities(other):
+        if other == nid or other in near or not s.nation_cities(other):
             continue
         theirs = [c.tile for c in s.nation_cities(other)]
         if min(s.grid.distance(x, y) for x in mine for y in theirs) <= reach:
-            out.add(other)
-    return sorted(out)
+            sea.append(other)
+    return sorted(near), sea
 
 
 def resolve(ctx) -> None:
@@ -496,7 +494,10 @@ def _maybe_declare(ctx, nid, alive, pw, borders, rng) -> None:
     if sum(pw.get(e, 0) for e in foes) > WAR_LOAD * pw.get(nid, 0):
         return  # 手上的仗已经够打了
     best = None
-    for other in _war_targets(s, ctx.rules, nid, borders):
+    land, sea = _war_targets(s, ctx.rules, nid, borders)
+    for other in land + sea:
+        if best is not None and other in sea:
+            break  # 陆上有能打的，就不跨海
         if other not in alive or status(s, nid, other) != "peace":
             continue
         rel = relation(s, nid, other)
