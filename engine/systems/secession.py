@@ -10,7 +10,6 @@ from engine.ids import ref
 from engine.state import Nation, Unit
 
 LEVY_PER_CITY = 2.0
-STACK = 3  # 一个格子最多放这么多单位
 
 
 def secede(
@@ -92,8 +91,9 @@ def secede(
 
 def _levy(ctx, nid: int, group) -> None:
     """新政权就地募兵：天下大势越偏“分”越多（见模块说明）。兵种是新国家现在能造、不要资源的陆军里
-    战斗力最高的；放在各城辖区里没有别国单位、还没放满的陆地格子上，由那座城供养。"""
+    战斗力最高的；放在新国家自己的城和辖区里（陆地、没有别国单位、堆叠还有空位），由那座城供养。"""
     s, rules, g = ctx.state, ctx.rules, ctx.state.grid
+    from engine.systems.stacking import has_room
     from engine.systems.techs import locked
     from engine.systems.tide import unity
 
@@ -115,26 +115,33 @@ def _levy(ctx, nid: int, group) -> None:
     kind = max(kinds, key=lambda u: (u.strength, -u.cost, u.id))
     land = ctx.costs("land")
     territory = s.territory_index()
-    spots = []
-    for c in group:
-        for t in sorted(territory.get(c.id, ()), key=lambda t: (g.distance(t, c.tile), t)):
-            if g.is_water[t] or land[t] <= 0:
-                continue
-            here = s.units_at(t, "surface")
-            if len(here) < STACK and all(v.nation == nid for v in here):
-                spots.append((c, t, STACK - len(here)))
-    made = 0
-    for c, t, room in spots:
-        for _ in range(room):
+    def spots(c):
+        tiles = sorted({c.tile, *territory.get(c.id, ())}, key=lambda t: (g.distance(t, c.tile), t))
+        return [
+            t
+            for t in tiles
+            if not g.is_water[t]
+            and land[t] > 0
+            and int(g.owner[t]) == nid
+            and all(v.nation == nid for v in s.units_at(t, "surface"))
+        ]
+
+    # 各城轮流募一支（不全堆在一座城），城里和离城近的格子优先
+    places = {c.id: spots(c) for c in group}
+    made, progress = 0, True
+    while made < count and progress:
+        progress = False
+        for c in group:
             if made >= count:
                 break
+            t = next((t for t in places[c.id] if has_room(s, rules, t, kind.stack_class, nid)), None)
+            if t is None:
+                continue
             u = s.add_unit(
                 Unit(s.new_id(), kind.id, nid, t, "surface", hp=kind.hp, moves_left=kind.moves)
             )
             u.home, u.managed, u.ai_goal = c.id, True, "新政权募兵"
-            made += 1
-        if made >= count:
-            break
+            made, progress = made + 1, True
     if made:
         s._support = None
         ctx.log.add("levy", nation=ref("nation", nid), unit_type=kind.id, count=made)
