@@ -183,17 +183,17 @@ destroyer:
   short: 驱
   domain: sea
   strength: 10
-  torpedo: 24
+  torpedo: 28    # 鱼雷：只打舰船（海上的陆军也算），近距离伤害很高
   deck_gun: 10   # 甲板炮：打岸上的部队和城市
   range: 2
-  damage_vs_units: 150
-  moves: 11
+  damage_vs_units: 155
+  moves: 13      # 最快的战舰：跟得上下了海的陆军护航，对手海军多时直接上驱逐舰
   sight: 3
   cost: 135
   population: 1
   gold: 40
   upkeep: 2
-  flak: 12   # 舰载防空：敌机进 / 出 2 格防空圈各挨一次
+  flak: 6    # 舰载防空：敌机进 / 出 2 格防空圈各挨一次（舰艇防空弱，要靠战斗机）
   icon: destroyer
 
 cruiser:
@@ -211,7 +211,7 @@ cruiser:
   gold: 70
   upkeep: 3
   requires_resources: [iron]
-  flak: 10   # 舰载防空：敌机进 / 出 2 格防空圈各挨一次
+  flak: 5    # 舰载防空：敌机进 / 出 2 格防空圈各挨一次（舰艇防空弱，要靠战斗机）
   icon: cruiser
 
 battleship:
@@ -229,7 +229,7 @@ battleship:
   upkeep: 4
   requires_resources: [iron, oil]
   tags: [area_damage, suppress]
-  flak: 14   # 舰载防空：敌机进 / 出 2 格防空圈各挨一次
+  flak: 7    # 舰载防空：敌机进 / 出 2 格防空圈各挨一次（舰艇防空弱，要靠战斗机）
   icon: battleship
 
 carrier:
@@ -276,7 +276,9 @@ bomber:
   layer: air
   domain: air
   strength: 4
-  ranged_strength: 28
+  ranged_strength: 32
+  damage_vs_units: 140   # 对地轰炸：打部队、城防都比炮兵狠
+  damage_vs_city: 150
   area_tiles: 4          # 地毯式轰炸：目标格和它往前的菱形共 4 格
   range: 14
   moves: 14

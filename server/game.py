@@ -29,7 +29,7 @@ from engine.ids import parse_ref, ref
 from engine.rules.schema import Ruleset
 from engine.state import MOVE_STEPS
 from engine.step import step
-from engine.systems.air import PATROL_TURNS
+from engine.systems.air import FIGHTER_STRIKES, PATROL_TURNS
 from engine.systems.cities import (
     FOOD_PER_POP,
     assign_jobs,
@@ -483,6 +483,9 @@ def _snapshot(game: Game, rules: Ruleset) -> dict:
                         "air_radius": air_radius(s.grid, rules.units[u.type]),
                         "air_base": u.sortie["base"] if u.sortie else u.tile,
                         "patrol_left": max(0, PATROL_TURNS - (s.turn - u.sortie["turn"]))
+                        if u.sortie and u.sortie["stage"] == "patrol"
+                        else None,
+                        "strikes_left": max(0, FIGHTER_STRIKES - u.sortie.get("strikes", 0))
                         if u.sortie and u.sortie["stage"] == "patrol"
                         else None,
                     }

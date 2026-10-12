@@ -426,32 +426,29 @@ def test_air_strike_into_anti_air_cover_is_weakened_or_shot_down(board):
     full = RULES.units["infantry"].hp
 
     def fly(s):
-        """出击：起飞那回合 + 下回合轰炸。"""
-        launched = action(s, order(s.units[bomber.id], "attack", to=[6, 3]))
-        hover = step(launched.state, [], RULES)  # 第 1 回合结束：在目标上空
-        result = step(hover.state, [], RULES)  # 第 2 回合：轰炸
-        return launched.events + hover.events, result
+        """出击：起飞当回合飞到目标上空就轰炸。"""
+        return action(s, order(s.units[bomber.id], "attack", to=[6, 3]))
 
-    _, clear = fly(board)
+    clear = fly(board)
     open_sky = full - clear.state.units[target.id].hp
     assert open_sky > 0 and clear.state.units[bomber.id].hp == 100  # 没有防空：毫发无伤
 
     covered = board.clone()
     covered.add_unit(Unit(covered.new_id(), "anti_air", 2, covered.grid.idx(7, 3), "surface"))
-    launched, result = fly(covered)
-    # 航线飞进防空圈时挨一次；在圈里轰炸不挨打，带伤炸得更轻；飞出防空圈返航时再挨一次
-    assert [e["phase"] for e in launched if e["type"] == "anti_air_fire"] == ["enter"]
-    assert not any(e["type"] == "anti_air_fire" for e in result.events)
+    result = fly(covered)
+    # 航线飞进防空圈时挨一次，带伤炸得更轻；下回合飞出防空圈返航时再挨一次
+    assert [e["phase"] for e in result.events if e["type"] == "anti_air_fire"] == ["enter"]
     assert result.state.units[bomber.id].hp < 100
     assert full - result.state.units[target.id].hp < open_sky
-    back = step(result.state, [], RULES)
+    turn_end = step(result.state, [], RULES)  # 这回合结束：转入返航
+    back = step(turn_end.state, [], RULES)  # 下回合飞回基地降落
     assert [e["phase"] for e in back.events if e["type"] == "anti_air_fire"] == ["leave"]
 
     covered.units[bomber.id].hp = 20
-    launched, result = fly(covered)
+    result = fly(covered)
     assert bomber.id not in result.state.units
     assert result.state.units[target.id].hp == full
-    lost = [e for e in launched + result.events if e["type"] == "unit_destroyed"]
+    lost = [e for e in result.events if e["type"] == "unit_destroyed"]
     assert lost and lost[0]["reason"] == "被防空火力击落"
 
 
@@ -637,8 +634,8 @@ def test_outnumbered_nations_lose_morale(board):
     } in info["modifiers"]
 
 
-def test_aircraft_sortie_takes_three_turns_out_strike_and_back(board):
-    """出击三回合：起飞飞到目标上空 → 攻击 → 返航降落；要从本国基地起飞，转过场的不能出击。"""
+def test_bomber_sortie_takes_two_turns_strike_then_land(board):
+    """轰炸机出击两回合：起飞飞到目标上空当回合轰炸 → 下回合返航降落；要从本国基地起飞，转过场的不能出击。"""
     home = base(board, 1, 2, 3)
     base(board, 1, 4, 5)
     bomber = add(board, "bomber", 1, 2, 3)
@@ -646,21 +643,16 @@ def test_aircraft_sortie_takes_three_turns_out_strike_and_back(board):
     target = add(board, "infantry", 2, 8, 3)
     full = RULES.units["infantry"].hp
     assert lock_reason(board, RULES, stray) == "不在本国机场或航母上，不能起飞出击"
-    # 第 1 回合：起飞，飞到目标上空，还没炸
+    # 第 1 回合：起飞，飞到目标上空当回合就炸
     out = action(board, order(bomber, "attack", to=[8, 3]))
     plane = out.state.units[bomber.id]
-    assert not out.rejected and plane.tile == target.tile and plane.sortie["stage"] == "outbound"
-    assert out.state.units[target.id].hp == full
+    assert not out.rejected and plane.tile == target.tile and plane.sortie is not None
+    assert out.state.units[target.id].hp < full
     assert any(e["type"] == "air_sortie" for e in out.events)
     assert action(out.state, order(plane, "move", to=[4, 5])).rejected  # 出击中不能转场
-    # 这回合结束时还在目标上空；第 2 回合轰炸，转入返航
-    hover = step(out.state, [], RULES).state
-    assert (
-        hover.units[target.id].hp == full and hover.units[bomber.id].sortie["stage"] == "outbound"
-    )
-    hit = step(hover, [], RULES).state
-    assert hit.units[target.id].hp < full and hit.units[bomber.id].sortie["stage"] == "return"
-    # 第 3 回合：返航降落到原基地
+    # 这回合战斗阶段末转入返航；第 2 回合降落到原基地
+    hit = step(out.state, [], RULES).state
+    assert hit.units[bomber.id].sortie["stage"] == "return"
     back = step(hit, [], RULES)
     plane = back.state.units[bomber.id]
     assert plane.tile == home.tile and plane.sortie is None
@@ -692,9 +684,8 @@ def test_branch_damage_ships_pound_land_armies_and_aircraft_hunt_ships(board):
     base(board, 2, 2, 2)
     bomber = add(board, "bomber", 2, 2, 2)
     info, _ = preview(board, RULES, bomber, ship.tile)
-    assert {"side": "attacker", "label": "对部队火力", "value": 60} in info[
-        "modifiers"
-    ]  # 飞机打舰船 ×1.6
+    vs = RULES.units["bomber"].damage_vs_units * 160 // 100  # 飞机打舰船 ×1.6
+    assert {"side": "attacker", "label": "对部队火力", "value": vs - 100} in info["modifiers"]
 
 
 def test_several_anti_air_guns_fire_together(board):
@@ -720,10 +711,8 @@ def test_bombers_wreck_facilities_and_cities_repair_them(board):
     board.grid.owner[field], board.grid.city_of[field] = 2, home.id
     board.grid.facility[field] = RULES.facility_index("airfield")
     bomber = add(board, "bomber", 1, 1, 3)
-    launched = action(board, order(bomber, "attack", to=[8, 3]))
-    assert not launched.rejected
-    hover = step(launched.state, [], RULES)  # 第 1 回合结束：在目标上空
-    hit = step(hover.state, [], RULES)  # 第 2 回合：投弹
+    hit = action(board, order(bomber, "attack", to=[8, 3]))  # 起飞当回合投弹
+    assert not hit.rejected
     s = hit.state
     assert any(e["type"] == "facility_bombed" for e in hit.events)
     assert field in s.damaged and not facility_active(s, RULES, field)
@@ -939,17 +928,45 @@ def test_bombers_carpet_bomb_a_four_hex_rhombus(board):
     assert max(outer) <= info["damage"] * AREA_OUTER // 100 + 1
 
 
-def test_fighters_intercept_bombers_before_they_drop_their_bombs(board):
-    """拦截先于投弹：轰炸机飞到目标上空的下一回合，战斗机在它投弹之前打它。"""
+def test_fighters_scramble_to_intercept_bombers_before_they_drop_their_bombs(board):
+    """拦截先于投弹：轰炸机飞到目标上空，作战半径够得着的敌方战斗机（机场待命的也算）先起飞打它一次。"""
     base(board, 1, 1, 3)
     base(board, 2, 10, 3)
     bomber = add(board, "bomber", 1, 1, 3)
     victim = add(board, "infantry", 2, 6, 3)
-    s = step(board, parse_orders([order(bomber, "attack", to=[6, 3])]), RULES).state
-    assert s.units[bomber.id].sortie["stage"] == "outbound"  # 飞到目标上空，下回合投弹
-    fighter = add(s, "fighter", 2, 10, 3)
-    res = step(s, parse_orders([order(fighter, "attack", to=[6, 3])]), RULES)
+    fighter = add(board, "fighter", 2, 10, 3)
+    res = action(board, order(bomber, "attack", to=[6, 3]))
+    assert not res.rejected
+    assert any(e["type"] == "air_intercept" for e in res.events)
     fights = [e for e in res.events if e["type"] == "combat"]
     first = fights[0]
     assert first["attacker"] == f"unit:{fighter.id}" and first["defender"] == f"unit:{bomber.id}"
+    # 战斗机打轰炸机伤害更高
+    assert any(m["label"] == "对部队火力" and m["value"] > 0 for m in first["modifiers"])
+    assert res.state.units[fighter.id].sortie["stage"] == "patrol"  # 就此起飞，算第一次攻击
+    assert res.state.units[fighter.id].sortie["strikes"] == 1
     assert victim.id in res.state.units
+
+
+def test_fighters_strike_at_most_twice_per_sortie(board):
+    from engine.systems.air import FIGHTER_STRIKES
+
+    base(board, 1, 1, 3)
+    fighter = add(board, "fighter", 1, 1, 3)
+    a = add(board, "infantry", 2, 5, 3)
+    b = add(board, "infantry", 2, 6, 4)
+    s = action(board, order(fighter, "attack", to=[5, 3])).state
+    plane = s.units[fighter.id]
+    assert plane.sortie["stage"] == "patrol" and plane.sortie["strikes"] == 1
+    s = step(s, [], RULES).state  # 第 1 回合结束：还在空中
+    assert s.units[fighter.id].sortie is not None
+    second = action(s, order(s.units[fighter.id], "attack", to=[6, 4]))
+    assert not second.rejected and FIGHTER_STRIKES == 2
+    s = second.state  # 打满两次：本回合战斗阶段末降落
+    assert s.units[fighter.id].sortie is None
+    assert any(e["type"] == "air_returned" for e in second.events)
+    assert lock_reason(s, RULES, s.units[fighter.id]) is not None
+    assert (
+        s.units[a.id].hp < RULES.units["infantry"].hp
+        and s.units[b.id].hp < RULES.units["infantry"].hp
+    )

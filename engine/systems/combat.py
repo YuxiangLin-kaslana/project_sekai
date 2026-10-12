@@ -43,6 +43,7 @@ FUEL_SHORTAGE = 30  # 没有石油：坦克、飞机（fuel 单位）战斗力 �
 DECAY_STRENGTH = 25  # 大一统之后的腐败：军纪废弛，战斗力最多 −25%（腐败超过起点后每 4 点 −1%）
 FLAK_FACTOR = 30  # 一门高射炮对来袭飞机的火力：FLAK_FACTOR × 防空火力 ÷ 飞机战斗力（6–40）
 FLAK_CAP = 70  # 飞一段航线最多被防空火力打掉这么多生命
+FIGHTER_VS_BOMBER = 160  # 战斗机打轰炸机的伤害（%）
 
 
 # ---------------------------------------------------------------- 城防（城市和守城部队共用一个血条）
@@ -157,15 +158,15 @@ def lock_reason(state, rules, actor) -> str | None:
 
         sortie = actor.sortie
         if sortie is not None:
-            if sortie["stage"] == "outbound" and sortie["turn"] < state.turn:
-                return None  # 轰炸机在目标上空：这回合轰炸
             if sortie["stage"] == "patrol":
-                from engine.systems.air import PATROL_TURNS
+                from engine.systems.air import fighter_ready
 
-                if sortie.get("recall") or state.turn - sortie["turn"] >= PATROL_TURNS:
+                if not fighter_ready(state, sortie):
                     return "正在返航降落"
-                return None  # 战斗机在空中：每回合还能攻击一次
-            return "出击任务中（飞往目标 / 返航），完成前不能下别的命令"
+                return None  # 战斗机在空中：还能再攻击一次
+            if sortie["stage"] == "outbound" and not sortie.get("strikes"):
+                return None  # 轰炸机刚飞到目标上空：这回合投弹
+            return "出击任务中（返航），降落前不能下别的命令"
         if actor.moves_left < ut.moves:
             return "本回合已经转场，下一回合再出击"
         if not is_air_base(state, rules, actor.nation, actor.tile):
@@ -441,6 +442,13 @@ def _damage_scale(rules, actor, target, state=None) -> int:
     victim = rules.units[target.type].domain if state is None else domain_of(state, rules, target)
     vs = rules.domain_damage.get(attacker, {}).get(victim, 100)
     base = rules.units[actor.type].damage_vs_units if isinstance(actor, Unit) else 100
+    if (
+        isinstance(actor, Unit)
+        and "air_superiority" in rules.units[actor.type].tags
+        and rules.units[target.type].domain == "air"
+        and "air_superiority" not in rules.units[target.type].tags
+    ):
+        base = base * FIGHTER_VS_BOMBER // 100  # 战斗机打轰炸机
     return base * vs // 100
 
 
@@ -510,6 +518,18 @@ def target_at(state, rules, actor, tile):
                 default=None,
             )
         # 没有敌舰：用甲板炮打岸上的部队 / 城市（下面按远程的规则挑）
+    if isinstance(actor, Unit) and "air_superiority" in rules.units[actor.type].tags:
+        # 战斗机：格子上空有敌机就打敌机（空战 / 拦截），没有才扫射地面
+        planes = [u for u in enemies if u.layer == "air"]
+        if planes:
+            return max(
+                planes,
+                key=lambda u: (
+                    "air_superiority" not in rules.units[u.type].tags,  # 先打轰炸机
+                    strength(state, rules, u, defending=True),
+                    -u.id,
+                ),
+            )
     if isinstance(actor, Unit) and rules.units[actor.type].anti_air:
         # 高射炮只打飞机
         air = [u for u in enemies if u.layer == "air"]
@@ -1184,181 +1204,189 @@ def _intercept(state, rules, order) -> bool:
 
 def _resolve(ctx: StepContext) -> None:
     s, rules = ctx.state, ctx.rules
-    from engine.systems import air
-
     _skirmish(ctx)
-    # 拦截在投弹之前：战斗机打空中目标（来袭的轰炸机、敌方战斗机）先结算，轰炸机再投弹，
-    # 其余攻击按提交顺序（远程先于近战）
+    # 战斗机打空中目标（敌方飞机）先结算，其余攻击按提交顺序（远程先于近战）；轰炸机起飞当回合投弹，
+    # 投弹前先挨敌方战斗机拦截一次（air.intercept）
     intercepts = [o for o in ctx.attacks if _intercept(s, rules, o)]
     rest = [o for o in ctx.attacks if not _intercept(s, rules, o)]
-    for order in [*intercepts, *air.strike_orders(ctx), *rest]:
-        is_city = isinstance(order, CityAttack)
-        collection, key = (s.cities, "city") if is_city else (s.units, "unit")
-        automatic_order = (order.type, getattr(order, key), order.to) in ctx.automatic_attacks
-        actor = collection.get(parse_ref(getattr(order, key), key))
-        if actor is None:
-            if automatic_order:
-                continue
-            ctx.log.reject(order.model_dump(mode="json"), "not_found", "攻击者已不存在")
-            continue
-        if actor.nation != parse_ref(order.issuer, "nation"):
-            if automatic_order:
-                continue
-            ctx.log.reject(order.model_dump(mode="json"), "not_owner", "攻击者已不属于发令国")
-            continue
-        tile = s.grid.idx(*order.to)
-        # 先移动后攻击（文明 6 式）：这时部队已经走完，按走到的位置和剩下的移动力结算（lock_reason）
-        info, problem = preview(s, rules, actor, tile)
-        if problem:
-            if automatic_order:
-                ctx.log.add(
-                    "directive_report",
-                    nation=order.issuer,
-                    goal="unit_ai",
-                    status="blocked",
-                    reason=problem,
-                )
-                continue
-            ctx.log.reject(order.model_dump(mode="json"), "cannot_attack", problem)
-            continue
-        start = actor.tile
-        if isinstance(actor, Unit) and rules.units[actor.type].domain == "air":
-            if actor.sortie is None:
-                # 起飞：轰炸机这回合只飞到目标上空（下回合轰炸）；战斗机飞到就打
-                if not air.launch(ctx, actor, tile) or actor.sortie["stage"] != "patrol":
-                    continue
-            elif actor.tile != tile and not air.fly(ctx, actor, tile):
-                continue  # 在空中的战斗机转去打别的目标，途中被击落
-            info, problem = preview(s, rules, actor, tile)  # 飞到了：按带伤后的状态重新结算
-            if problem:
-                actor.attacked_turn = s.turn
-                continue
-            if info.get("facility_strike"):
-                bomb_facility(ctx, actor, tile)
-                actor.attacked_turn = s.turn
-                gain(ctx, actor, 4, "unit")
-                continue
-        if info.get("storm_city"):
-            # 城防已空：近战开进去占领，城里剩下的敌方单位全部消灭（_capture）
-            city = s.city_at(tile)
-            _capture(ctx, city, actor)
-            s.move_unit(actor, tile)
-            actor.attacked_turn = s.turn
-            actor.moves_left, actor.road_credit, actor.destination, actor.fortified = (
-                0,
-                0,
-                None,
-                False,
-            )
-            ctx.log.add("unit_moved", unit=ref("unit", actor.id), path=[start, tile])
-            continue
-        if info.get("seize_city"):
-            # 战舰开进港口占领城防已空的城市
-            city = s.city_at(tile)
-            _capture(ctx, city, actor)
-            s.move_unit(actor, tile)
-            actor.attacked_turn = s.turn
-            actor.moves_left, actor.road_credit, actor.destination, actor.fortified = (
-                0,
-                0,
-                None,
-                False,
-            )
-            ctx.log.add("unit_moved", unit=ref("unit", actor.id), path=[start, tile])
-            continue
-        target = target_at(s, rules, actor, tile)
-        if isinstance(target, City):
-            damage_city(ctx, target, info["damage"])  # 先打城市本体，再打守城部队
-        else:
-            target.hp = max(0, target.hp - info["damage"])
-        if isinstance(actor, Unit) and actor.tile != tile:
-            from engine.systems.zoc import bearing
+    for order in [*intercepts, *rest]:
+        _execute(ctx, order)
 
-            actor.facing = bearing(s.grid, actor.tile, tile)  # 攻击时朝向目标
-        splashed = []
-        for hit in info["area"]:
-            kind_, _, oid = hit["target"].partition(":")
-            other = s.cities.get(int(oid)) if kind_ == "city" else s.units.get(int(oid))
-            if other is None:
-                continue
-            if isinstance(other, City):
-                damage_city(ctx, other, hit["damage"])
-            else:
-                other.hp = max(0, other.hp - hit["damage"])
-            other.damaged_turn = s.turn
-            splashed.append(other)
-        # 炮击压制：打中的部队（炮击波及的整格都算）失去驻守加成
-        suppressed = []
-        if info.get("suppress"):
-            for victim in [target, *splashed]:
-                if isinstance(victim, Unit) and victim.fortified:
-                    victim.fortified = False
-                    suppressed.append(ref("unit", victim.id))
-        actor.hp = max(0, actor.hp - info["retaliation"])
-        actor.attacked_turn = actor.damaged_turn = target.damaged_turn = s.turn
-        if isinstance(actor, Unit):
-            actor.moves_left, actor.road_credit, actor.destination, actor.fortified = (
-                0,
-                0,
-                None,
-                False,
+
+def _execute(ctx: StepContext, order) -> None:
+    """结算一条攻击指令（_resolve 按顺序调用；拦截来袭轰炸机的战斗机也走这里，air.intercept）。"""
+    s, rules = ctx.state, ctx.rules
+    from engine.systems import air
+
+    is_city = isinstance(order, CityAttack)
+    collection, key = (s.cities, "city") if is_city else (s.units, "unit")
+    automatic_order = (order.type, getattr(order, key), order.to) in ctx.automatic_attacks
+    actor = collection.get(parse_ref(getattr(order, key), key))
+    if actor is None:
+        if automatic_order:
+            return
+        ctx.log.reject(order.model_dump(mode="json"), "not_found", "攻击者已不存在")
+        return
+    if actor.nation != parse_ref(order.issuer, "nation"):
+        if automatic_order:
+            return
+        ctx.log.reject(order.model_dump(mode="json"), "not_owner", "攻击者已不属于发令国")
+        return
+    tile = s.grid.idx(*order.to)
+    # 先移动后攻击（文明 6 式）：这时部队已经走完，按走到的位置和剩下的移动力结算（lock_reason）
+    info, problem = preview(s, rules, actor, tile)
+    if problem:
+        if automatic_order:
+            ctx.log.add(
+                "directive_report",
+                nation=order.issuer,
+                goal="unit_ai",
+                status="blocked",
+                reason=problem,
             )
-        ctx.log.add(
-            "combat",
-            attacker=ref(key, actor.id),
-            defender=info["target"],
-            source=start,
-            **info,
-            suppressed=suppressed,
-            attacker_hp=actor.hp,
-            defender_hp=target.hp,
+            return
+        ctx.log.reject(order.model_dump(mode="json"), "cannot_attack", problem)
+        return
+    start = actor.tile
+    if isinstance(actor, Unit) and rules.units[actor.type].domain == "air":
+        if actor.sortie is None:
+            # 起飞：飞到目标上空当回合就打；轰炸机投弹前先挨敌方战斗机拦截一次
+            if not air.launch(ctx, actor, tile):
+                return
+            if not air.is_fighter(rules, actor) and not air.intercept(ctx, actor):
+                return
+        elif actor.tile != tile and not air.fly(ctx, actor, tile):
+            return  # 在空中的战斗机转去打别的目标，途中被击落
+        info, problem = preview(s, rules, actor, tile)  # 飞到了：按带伤后的状态重新结算
+        if problem:
+            actor.attacked_turn = s.turn
+            return
+        if info.get("facility_strike"):
+            bomb_facility(ctx, actor, tile)
+            actor.attacked_turn = s.turn
+            gain(ctx, actor, 4, "unit")
+            return
+    if info.get("storm_city"):
+        # 城防已空：近战开进去占领，城里剩下的敌方单位全部消灭（_capture）
+        city = s.city_at(tile)
+        _capture(ctx, city, actor)
+        s.move_unit(actor, tile)
+        actor.attacked_turn = s.turn
+        actor.moves_left, actor.road_credit, actor.destination, actor.fortified = (
+            0,
+            0,
+            None,
+            False,
         )
-        gain(ctx, actor, 4 + (8 if target.hp <= 0 else 0), key)
-        if info["kind"] == "air" and bombable(s, rules, actor, tile):
-            bomb_facility(ctx, actor, tile)  # 轰炸格上的敌方设施一并炸坏
-        gain(ctx, target, 3, "city" if isinstance(target, City) else "unit")
-        for other in splashed:
-            if isinstance(other, Unit) and other.hp <= 0 and other.id in s.units:
-                _destroy(ctx, other, other.tile, "炮击")
-        dead_target = (
-            city_defense(s, rules, target) if isinstance(target, City) else target.hp
-        ) <= 0
-        if dead_target and isinstance(target, Unit):
-            ctx.log.add(
-                "unit_destroyed",
-                unit=ref("unit", target.id),
-                tile=target.tile,
-                unit_type=target.type,
-                nation=ref("nation", target.nation),
-            )
-            _lost_aboard(ctx, target)
-            s.remove_unit(target.id)
-        if actor.hp <= 0 and isinstance(actor, Unit):
-            ctx.log.add(
-                "unit_destroyed",
-                unit=ref("unit", actor.id),
-                tile=start,
-                unit_type=actor.type,
-                nation=ref("nation", actor.nation),
-            )
-            _lost_aboard(ctx, actor)
-            s.remove_unit(actor.id)
-        elif info["kind"] == "melee" and isinstance(target, Unit):
-            # 近战从相邻格打，敌我不同格：目标格的敌人打光了才开进去（留下的敌方平民被消灭）
-            _advance(ctx, actor, start, tile)
-        elif info["kind"] == "melee" and dead_target:
-            enemies = [
-                u
-                for u in s.units_at(tile, actor.layer)
-                if u.nation != actor.nation and rules.units[u.type].category == "military"
-            ]
-            city = s.city_at(tile)
-            if not enemies and (city is None or city.nation == actor.nation or city.hp <= 0):
-                if city is not None and city.nation != actor.nation:
-                    _capture(ctx, city, actor)
-                elif city is None:
-                    for stranded in list(s.units_at(tile, actor.layer)):
-                        if stranded.nation != actor.nation:
-                            _destroy(ctx, stranded, tile, "被消灭")
-                s.move_unit(actor, tile)
-                ctx.log.add("unit_moved", unit=ref("unit", actor.id), path=[start, tile])
+        ctx.log.add("unit_moved", unit=ref("unit", actor.id), path=[start, tile])
+        return
+    if info.get("seize_city"):
+        # 战舰开进港口占领城防已空的城市
+        city = s.city_at(tile)
+        _capture(ctx, city, actor)
+        s.move_unit(actor, tile)
+        actor.attacked_turn = s.turn
+        actor.moves_left, actor.road_credit, actor.destination, actor.fortified = (
+            0,
+            0,
+            None,
+            False,
+        )
+        ctx.log.add("unit_moved", unit=ref("unit", actor.id), path=[start, tile])
+        return
+    target = target_at(s, rules, actor, tile)
+    if isinstance(target, City):
+        damage_city(ctx, target, info["damage"])  # 先打城市本体，再打守城部队
+    else:
+        target.hp = max(0, target.hp - info["damage"])
+    if isinstance(actor, Unit) and actor.tile != tile:
+        from engine.systems.zoc import bearing
+
+        actor.facing = bearing(s.grid, actor.tile, tile)  # 攻击时朝向目标
+    splashed = []
+    for hit in info["area"]:
+        kind_, _, oid = hit["target"].partition(":")
+        other = s.cities.get(int(oid)) if kind_ == "city" else s.units.get(int(oid))
+        if other is None:
+            continue
+        if isinstance(other, City):
+            damage_city(ctx, other, hit["damage"])
+        else:
+            other.hp = max(0, other.hp - hit["damage"])
+        other.damaged_turn = s.turn
+        splashed.append(other)
+    # 炮击压制：打中的部队（炮击波及的整格都算）失去驻守加成
+    suppressed = []
+    if info.get("suppress"):
+        for victim in [target, *splashed]:
+            if isinstance(victim, Unit) and victim.fortified:
+                victim.fortified = False
+                suppressed.append(ref("unit", victim.id))
+    actor.hp = max(0, actor.hp - info["retaliation"])
+    actor.attacked_turn = actor.damaged_turn = target.damaged_turn = s.turn
+    if isinstance(actor, Unit) and actor.sortie is not None:
+        actor.sortie["strikes"] = actor.sortie.get("strikes", 0) + 1  # 战斗机一次出击最多打两次
+    if isinstance(actor, Unit):
+        actor.moves_left, actor.road_credit, actor.destination, actor.fortified = (
+            0,
+            0,
+            None,
+            False,
+        )
+    ctx.log.add(
+        "combat",
+        attacker=ref(key, actor.id),
+        defender=info["target"],
+        source=start,
+        **info,
+        suppressed=suppressed,
+        attacker_hp=actor.hp,
+        defender_hp=target.hp,
+    )
+    gain(ctx, actor, 4 + (8 if target.hp <= 0 else 0), key)
+    if info["kind"] == "air" and bombable(s, rules, actor, tile):
+        bomb_facility(ctx, actor, tile)  # 轰炸格上的敌方设施一并炸坏
+    gain(ctx, target, 3, "city" if isinstance(target, City) else "unit")
+    for other in splashed:
+        if isinstance(other, Unit) and other.hp <= 0 and other.id in s.units:
+            _destroy(ctx, other, other.tile, "炮击")
+    dead_target = (city_defense(s, rules, target) if isinstance(target, City) else target.hp) <= 0
+    if dead_target and isinstance(target, Unit):
+        ctx.log.add(
+            "unit_destroyed",
+            unit=ref("unit", target.id),
+            tile=target.tile,
+            unit_type=target.type,
+            nation=ref("nation", target.nation),
+        )
+        _lost_aboard(ctx, target)
+        s.remove_unit(target.id)
+    if actor.hp <= 0 and isinstance(actor, Unit):
+        ctx.log.add(
+            "unit_destroyed",
+            unit=ref("unit", actor.id),
+            tile=start,
+            unit_type=actor.type,
+            nation=ref("nation", actor.nation),
+        )
+        _lost_aboard(ctx, actor)
+        s.remove_unit(actor.id)
+    elif info["kind"] == "melee" and isinstance(target, Unit):
+        # 近战从相邻格打，敌我不同格：目标格的敌人打光了才开进去（留下的敌方平民被消灭）
+        _advance(ctx, actor, start, tile)
+    elif info["kind"] == "melee" and dead_target:
+        enemies = [
+            u
+            for u in s.units_at(tile, actor.layer)
+            if u.nation != actor.nation and rules.units[u.type].category == "military"
+        ]
+        city = s.city_at(tile)
+        if not enemies and (city is None or city.nation == actor.nation or city.hp <= 0):
+            if city is not None and city.nation != actor.nation:
+                _capture(ctx, city, actor)
+            elif city is None:
+                for stranded in list(s.units_at(tile, actor.layer)):
+                    if stranded.nation != actor.nation:
+                        _destroy(ctx, stranded, tile, "被消灭")
+            s.move_unit(actor, tile)
+            ctx.log.add("unit_moved", unit=ref("unit", actor.id), path=[start, tile])

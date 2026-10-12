@@ -146,7 +146,9 @@ class Unit:
     ai_target: int | None = None
     carried_by: int | None = None  # 停在哪艘航母上（飞机）
     corps: int | None = None  # 所属军团（统帅将领的单位 ID）
-    sortie: dict | None = None  # 飞机出击中：{stage: outbound|return, target, base, carrier, turn}
+    sortie: dict | None = (
+        None  # 飞机出击中：{stage: outbound|patrol|return, target, base, carrier, turn, strikes}
+    )
     name: str = ""  # 将领姓名
     rank: int = 0  # 将领星级（★1…★5，出生时抽签）
     title: str = ""  # 将领统率的军团番号（第 N 军团）

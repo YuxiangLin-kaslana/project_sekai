@@ -1017,7 +1017,8 @@ const EVENT_TEXT = {
   production_blocked: (e) => `${cityName(e.city)} 生产受阻：${e.reason}`,
   unit_captured: (e) => `${game.nationOf(e.nation)?.name ?? ''} 俘虏了${game.nationOf(e.previous)?.name ?? ''}的${unitName(e.unit_type)}`,
   nation_eliminated: (e) => `${e.name} 灭亡`,
-  air_sortie: (e) => e.fighter ? `${unitName(e.unit_type)} 起飞出击，飞到就打，之后留空巡逻` : `${unitName(e.unit_type)} 起飞出击，飞往目标上空（下回合轰炸，再下回合返航）`,
+  air_sortie: (e) => e.fighter ? `${unitName(e.unit_type)} 起飞出击，飞到就打，之后还能留空再打一次` : `${unitName(e.unit_type)} 起飞出击，飞到目标上空当回合轰炸（下回合返航降落）`,
+  air_intercept: (e) => `战斗机起飞拦截来袭的轰炸机`,
   air_recalled: (e) => `${unitName(e.unit_type)} 奉命返航`,
   facility_bombed: (e) => `${game.nationOf(e.nation)?.name ?? ''} 的轰炸机炸坏了${game.nationOf(e.victim)?.name ?? ''}的${game.G.rules.buildings[e.facility]?.name ?? '设施'}（修好前不能用）`,
   facility_repaired: (e) => `${cityName(e.city)} 修好了${game.G.rules.buildings[e.facility]?.name ?? '设施'}`,
@@ -1207,8 +1208,8 @@ function renderLegend() {
 
 function unitStatus(u) {
   if (u.task) return `施工中：${game.G.rules.buildings[u.task.facility].name}（还剩 ${u.task.turns_left} 回合）`;
-  if (u.sortie === 'patrol') return `空中巡逻：还能留空 ${u.patrol_left ?? 0} 回合（可继续攻击，或下令返航）`;
-  if (u.sortie) return u.sortie === 'outbound' ? '出击中：在目标上空，下回合轰炸' : '返航中：本回合降落';
+  if (u.sortie === 'patrol') return `空中巡逻：还能攻击 ${u.strikes_left ?? 0} 次、留空 ${u.patrol_left ?? 0} 回合（可继续攻击，或下令返航）`;
+  if (u.sortie) return u.sortie === 'outbound' ? '出击中：在目标上空轰炸' : '返航中：本回合降落';
   if (u.destination) return `行军中 → (${u.destination[0]}, ${u.destination[1]})`;
   if (u.fortified) return "驻守";
   const corps = u.corps != null ? game.G.units.get(u.corps) : null;
@@ -1960,7 +1961,7 @@ function tacticalCard(actor) {
   if(unit)buttons.appendChild(commandButton('移动','move',()=>setCommandMode('move'),commandBusy||move<=0));
   const air=unit&&def.domain==='air';
   const fighterPlane=air&&def.tags?.includes('air_superiority');
-  const airTip=fighterPlane?'战斗机：起飞当回合就攻击，之后最多留空 3 回合，每回合可再攻击机场作战半径内的目标；下令返航后降落':'轰炸机：起飞飞到目标上空 → 下回合轰炸（可以炸坏设施，机场优先）→ 再下回合返航降落';
+  const airTip=fighterPlane?'战斗机：起飞当回合就攻击，下回合还能留空再攻击一次（一次出击最多打两次），打来袭的轰炸机伤害更高；敌方轰炸机飞进作战半径时会自动起飞拦截':'轰炸机：起飞飞到目标上空当回合就轰炸（投弹前可能被敌方战斗机拦截）→ 下回合返航降落；目标优先级：军团 → 机场 → 城市 → 重要资源 → 部队 → 港口';
   if(!unit||def.category==='military')buttons.appendChild(commandButton(air?(actor.sortie?'攻击':'出击'):'攻击','attack',()=>setCommandMode('attack'),commandBusy||!!actor.attack_blocked,actor.attack_blocked??(air?airTip+'；航线进出敌方防空圈（高射炮、战舰）各挨一次':'')));
   if(unit){
     if(def.tags?.includes('found_city'))buttons.appendChild(commandButton('建立城市','group',()=>executeCommand(actorOrder('found_city')),commandBusy||!!game.G.tactics?.found_city_blocked,game.G.tactics?.found_city_blocked??''));

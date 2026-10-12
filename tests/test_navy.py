@@ -69,9 +69,14 @@ def test_destroyer_torpedoes_only_hit_ships_hard_at_close_range(board):
     assert gun["kind"] == "ranged" and 0 < gun["damage"] < targets[target.tile]["damage"]
     info = targets[target.tile]
     assert info["kind"] == "torpedo" and info["damage"] >= 50
-    assert {"side": "attacker", "label": "对部队火力", "value": 50} in info["modifiers"]
+    vs = RULES.units["destroyer"].damage_vs_units - 100
+    assert {"side": "attacker", "label": "对部队火力", "value": vs} in info["modifiers"]
     result = act(board, order(tin, "attack", to=[7, 3]))
-    assert result.state.units[target.id].hp == 100 - info["damage"]
+    left = 100 - info["damage"]  # 背后挨鱼雷可能一发击沉
+    if left > 0:
+        assert result.state.units[target.id].hp == left
+    else:
+        assert target.id not in result.state.units
     assert result.state.units[tin.id].hp == 100  # 鱼雷没有反击
 
 

@@ -1,13 +1,17 @@
 """飞机出击。
 
-轰炸机（没有 air_superiority 标签的飞机）：三回合一个来回。
-- 第 1 回合（下令出击）：从基地（本国城市、机场、本方航母）起飞，飞到作战半径内的目标格上空。
-- 第 2 回合：在目标上空轰炸（战斗阶段一开始自动执行；目标走了就打这一格里剩下的敌军），然后转入返航。
-- 第 3 回合：飞回原基地降落。
+轰炸机（没有 air_superiority 标签的飞机）：两回合一个来回。
+- 第 1 回合（下令出击）：从基地（本国城市、机场、本方航母）起飞，飞到作战半径内的目标格上空，
+  当回合就轰炸（投弹前，作战半径够得着的敌方战斗机先拦截一次，intercept），然后转入返航。
+- 第 2 回合：飞回原基地降落（降落占一个回合）。
 
-战斗机（air_superiority）：起飞当回合就攻击（空战 / 扫射），之后可以在空中再留两回合
-（PATROL_TURNS 回合内），每回合再攻击机场作战半径内的一个目标；下令“返航”或者留空满了就降落，
-降落占一个回合。战斗机始终不能飞出起飞机场的作战半径。
+战斗机（air_superiority）：起飞当回合就攻击（空战 / 扫射），之后可以在空中再留一回合，一次出击
+最多攻击 FIGHTER_STRIKES 次（含起飞那次）；打满了、留空满了（PATROL_TURNS 回合）或下令“返航”就降落，
+降落占一个回合。战斗机始终不能飞出起飞机场的作战半径。打来袭的轰炸机伤害更高（combat._damage_scale）。
+
+拦截：轰炸机飞到目标上空、投弹之前，交战国的一架战斗机（在空中巡逻、还能攻击的，或者在机场待命、
+这回合还能出击的；轰炸机在它机场的作战半径里）自动拦截一次——机场待命的战斗机就此起飞，算作这次出击
+的第一次攻击。每架轰炸机最多被拦截一次。
 
 降落：原基地丢了、满了，就去最近的本国机场 / 城市 / 航母；哪里都降不了就坠毁。降落当回合不能再行动。
 
@@ -18,10 +22,10 @@
 
 from __future__ import annotations
 
-from engine.actions import Attack
 from engine.ids import ref
 
-PATROL_TURNS = 3  # 战斗机最多在空中留几回合（含起飞当回合）
+PATROL_TURNS = 2  # 战斗机最多在空中留几回合（含起飞当回合）
+FIGHTER_STRIKES = 2  # 战斗机一次出击最多攻击几次（含起飞当回合那次）
 
 
 def airborne(unit) -> bool:
@@ -134,8 +138,7 @@ def fly(ctx, plane, dst) -> bool:
 
 
 def launch(ctx, plane, tile) -> bool:
-    """起飞，飞到 tile 上空。战斗机这回合接着攻击（返回 True 且仍在空中），轰炸机下回合才轰炸。
-    返回 False 表示途中被击落。"""
+    """起飞，飞到 tile 上空，这回合接着攻击（返回 True 且仍在空中）。返回 False 表示途中被击落。"""
     s = ctx.state
     base = plane.tile
     fighter = is_fighter(ctx.rules, plane)
@@ -145,13 +148,12 @@ def launch(ctx, plane, tile) -> bool:
         "base": base,
         "carrier": plane.carried_by,
         "turn": s.turn,
+        "strikes": 0,
     }
     plane.carried_by = None
     plane.moves_left = plane.road_credit = 0
     plane.fortified = False
     plane.destination = None
-    if not fighter:
-        plane.attacked_turn = s.turn
     ctx.log.add(
         "air_sortie",
         unit=ref("unit", plane.id),
@@ -170,37 +172,88 @@ def recall(plane) -> None:
         plane.sortie["recall"] = True
 
 
-def strike_orders(ctx) -> list:
-    """轰炸机第 2 回合：在目标上空自动轰炸（排在本回合攻击的最前面）。"""
+def fighter_ready(state, sortie) -> bool:
+    """在空中的战斗机这回合还能攻击：没下令返航、攻击次数没用完、还在留空时间里。"""
+    return not (
+        sortie.get("recall")
+        or sortie.get("strikes", 0) >= FIGHTER_STRIKES
+        or state.turn - sortie["turn"] >= PATROL_TURNS
+    )
+
+
+def fighter_done(state, sortie) -> bool:
+    """战斗机这次出击结束了（下令返航、攻击满了、这回合是留空的最后一回合）：本回合战斗阶段末降落。"""
+    return bool(
+        sortie.get("recall")
+        or sortie.get("strikes", 0) >= FIGHTER_STRIKES
+        or state.turn - sortie["turn"] + 1 >= PATROL_TURNS
+    )
+
+
+def interceptor(state, rules, bomber):
+    """拦截来袭轰炸机的交战国战斗机：在空中巡逻、还能攻击的，或在机场待命、这回合还能出击的，
+    轰炸机在它机场的作战半径里。挑战斗力最强的（同样强挑近的、编号小的）；没有返回 None。"""
+    from engine.systems.combat import lock_reason, strength
+    from engine.systems.diplomacy import at_war
+    from engine.systems.movement import air_radius
+
+    g = state.grid
+    best = None
+    for u in state.units.values():
+        if (
+            u.layer != "air"
+            or not is_fighter(rules, u)
+            or not at_war(state, u.nation, bomber.nation)
+        ):
+            continue
+        if g.distance(base_of(u), bomber.tile) > air_radius(g, rules.units[u.type]):
+            continue
+        if lock_reason(state, rules, u) is not None or u.hp <= 0:
+            continue
+        key = (-strength(state, rules, u), g.distance(u.tile, bomber.tile), u.id)
+        if best is None or key < best[0]:
+            best = (key, u)
+    return None if best is None else best[1]
+
+
+def intercept(ctx, bomber) -> bool:
+    """轰炸机飞到目标上空、投弹之前：交战国的一架战斗机拦截一次（interceptor）。返回轰炸机还在不在。"""
+    from engine.actions import Attack
+    from engine.systems.combat import _execute
+
     s = ctx.state
-    orders = []
-    for u in sorted(s.units.values(), key=lambda u: u.id):
-        sortie = u.sortie
-        if sortie and sortie["stage"] == "outbound" and sortie["turn"] < s.turn:
-            order = Attack(
-                issuer=ref("nation", u.nation),
-                unit=ref("unit", u.id),
-                to=s.grid.col_row(u.tile),
-            )
-            ctx.automatic_attacks.add((order.type, order.unit, order.to))
-            orders.append(order)
-    return orders
+    fighter = interceptor(s, ctx.rules, bomber)
+    if fighter is None:
+        return True
+    order = Attack(
+        issuer=ref("nation", fighter.nation),
+        unit=ref("unit", fighter.id),
+        to=s.grid.col_row(bomber.tile),
+    )
+    ctx.automatic_attacks.add((order.type, order.unit, order.to))
+    ctx.log.add(
+        "air_intercept",
+        unit=ref("unit", fighter.id),
+        target=ref("unit", bomber.id),
+        tile=bomber.tile,
+        nation=ref("nation", fighter.nation),
+    )
+    _execute(ctx, order)
+    return bomber.id in s.units
 
 
 def after_combat(ctx) -> None:
-    """战斗阶段末：轰炸完的转入返航；返航的、下令返航的、留空满了的降落。"""
+    """战斗阶段末：轰炸完的转入返航；返航的、下令返航的、攻击 / 留空满了的战斗机降落。"""
     s = ctx.state
     for u in sorted(s.units.values(), key=lambda u: u.id):
         sortie = u.sortie
         if sortie is None or u.id not in s.units:
             continue
-        if sortie["stage"] == "outbound" and sortie["turn"] < s.turn:
+        if sortie["stage"] == "outbound":
             sortie["stage"], sortie["turn"] = "return", s.turn
         elif sortie["stage"] == "return" and sortie["turn"] < s.turn:
             land(ctx, u)
-        elif sortie["stage"] == "patrol" and (
-            sortie.get("recall") or s.turn - sortie["turn"] >= PATROL_TURNS
-        ):
+        elif sortie["stage"] == "patrol" and fighter_done(s, sortie):
             land(ctx, u)
 
 
