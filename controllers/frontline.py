@@ -49,18 +49,14 @@ CONSOLIDATE_TURNS = 2  # “刚打下来”：被攻占后 conquest_turns 的这
 
 
 def consolidating(state, rules, nid) -> bool:
-    """国家在巩固占领区：动荡（稳定度低于 unrest）或刚打下来（conquest_turns 回合内）的城占到 CONSOLIDATE。
-    打得太快、新占领的地方民心未附时先停一停（也给反霸同盟、起义留出翻盘的机会）。"""
+    """国家在巩固占领区：最近（conquest_turns × CONSOLIDATE_TURNS 回合内）打下来的城占到 CONSOLIDATE。
+    打得太快、新占领的地方民心未附时先停一停（也给反霸同盟、起义留出翻盘的机会）。只看新占领的城：
+    缺粮缺钱造成的动荡由稳定度自己管，不该让 AI 停战（不然后期各国都“在巩固”、谁也不打）。"""
     cities = state.nation_cities(nid)
     if len(cities) < 4:
         return False
-    cfg = rules.stability
-    shaky = sum(
-        1
-        for c in cities
-        if c.stability < cfg.unrest
-        or state.turn - c.captured_turn < CONSOLIDATE_TURNS * cfg.conquest_turns
-    )
+    window = CONSOLIDATE_TURNS * rules.stability.conquest_turns
+    shaky = sum(1 for c in cities if state.turn - c.captured_turn < window)
     return shaky >= CONSOLIDATE * len(cities)
 
 
@@ -404,7 +400,7 @@ def _stance(ctx, nation, seg):
             else f"{lead}对 {who} 的战线兵力占优（{mine:.0f} 对 {theirs}），肃清敌军"
         )
     elif hold:
-        seg["reason"] = f"巩固新占领区（动荡、刚打下来的城太多），对 {who} 的战线暂取守势"
+        seg["reason"] = f"巩固新占领区（刚打下来的城太多），对 {who} 的战线暂取守势"
     else:
         seg["reason"] = f"对 {who} 的战线兵力不足（{mine:.0f} 对 {theirs}），就地防守，只打划算的仗"
 
