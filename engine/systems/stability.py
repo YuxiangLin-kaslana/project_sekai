@@ -25,6 +25,7 @@ from engine.systems.cities import FOOD_PER_POP, city_yields, heads, population_u
 from engine.systems.context import StepContext
 from engine.systems.diplomacy import at_war
 from engine.systems.settlement import city_scale
+from engine.systems.soft import fade, ramp, roll
 
 SHORTAGE_NAMES = {"food": "缺粮", "gold": "缺钱", "production": "缺生产力"}
 WAR_NAMES = {
@@ -68,27 +69,27 @@ def garrisoned(state, rules, city) -> bool:
     )
 
 
-DECAY_FLOOR = 25  # 离心压力压到这里就停（低于动荡线 30，但不会单独压到 0 独立）
-
-
-def _drifting(s, cfg) -> set[int]:
-    """大一统之后的离心：腐败超过 decay_start 的国家，离首都最远的一部分城市（腐败越重范围越大，最多六成）。"""
-    out = set()
+def _drift(s, cfg) -> dict[int, float]:
+    """大一统之后的离心：{城市: 这回合挨“离心”压力的概率}。腐败超过起点越多越重；离首都越远越容易挨；
+    稳定度越接近 25 越不容易再往下压（攒成大面积动荡，一次爆发内战，而不是一座座单独独立）。"""
+    out: dict[int, float] = {}
     if not cfg.decay:
         return out
     for nid, n in s.nations.items():
-        if n.decay <= cfg.decay_start:
+        drift = ramp(n.decay, cfg.decay_start, cfg.decay_start + cfg.decay_spread)
+        if drift <= 0:
             continue
         cities = s.nation_cities(nid)
         capital = s.cities.get(n.capital or -1)
         if capital is None or len(cities) < 2:
             continue
-        share = min(0.6, 0.1 + (n.decay - cfg.decay_start) / cfg.decay_spread)
         far = sorted(
             (c for c in cities if c.id != capital.id),
-            key=lambda c: (-s.grid.distance(c.tile, capital.tile), c.id),
+            key=lambda c: (s.grid.distance(c.tile, capital.tile), c.id),
         )
-        out.update(c.id for c in far[: max(1, round(share * len(cities)))])
+        for k, c in enumerate(far):
+            rank = (k + 1) / len(far)  # 0 近 … 1 最远
+            out[c.id] = drift * ramp(rank, 0.9 - 0.6 * drift, 1.0) * ramp(c.stability, 15, 45)
     return out
 
 
@@ -111,25 +112,28 @@ def war_pressures(ctx: StepContext) -> dict[int, list[str]]:
     )
     territory = s.territory_index()
     cfg = rules.stability
-    far = max(1, round(cfg.far * city_scale(s.grid)))
+    far = max(1, cfg.far * city_scale(s.grid))
     sizes = Counter(c.nation for c in s.cities.values())
-    drifting = _drifting(s, cfg)
+    drift = _drift(s, cfg)
     out = {}
-    for city in s.cities.values():
+    for city in sorted(s.cities.values(), key=lambda c: c.id):
         reasons = []
-        if cfg.conquest and s.turn - city.captured_turn < cfg.conquest_turns:
+        # 新占领：越新越可能挨（按 conquest_turns 指数衰减）
+        if cfg.conquest and roll(
+            ctx, fade(s.turn - city.captured_turn, cfg.conquest_turns), "conq", city.id
+        ):
             reasons.append("conquest")
         capital = s.cities.get(s.nations[city.nation].capital or -1)
-        if (
-            cfg.overextension
-            and sizes[city.nation] > cfg.empire_size
-            and capital is not None
-            and s.grid.distance(capital.tile, city.tile) > far
-            and (s.turn + city.id) % 2 == 0
-        ):
-            reasons.append("overextension")
-        if city.id in drifting and city.stability > DECAY_FLOOR:
-            # 离心只把城市压到动荡区，不单独压到独立：攒成大面积动荡，一次爆发内战（大分裂）
+        if cfg.overextension and capital is not None:
+            # 过度扩张：国家越大、离首都越远越可能挨（满了大约每两回合一次）
+            p = (
+                0.5
+                * ramp(sizes[city.nation], cfg.empire_size - 4, cfg.empire_size + 4)
+                * ramp(s.grid.distance(capital.tile, city.tile), 0.6 * far, 1.4 * far)
+            )
+            if roll(ctx, p, "over", city.id):
+                reasons.append("overextension")
+        if roll(ctx, drift.get(city.id, 0.0), "drift", city.id):
             reasons.append("decay")
         if city.damaged_turn == s.turn:
             reasons.append("attacked")
@@ -139,7 +143,11 @@ def war_pressures(ctx: StepContext) -> dict[int, list[str]]:
             reasons.append("occupied")
         if city.id in ring.cities:
             reasons.append("encircled")
-        if losses[city.nation] >= rules.stability.weariness_losses:
+        # 厌战：本国这回合阵亡得越多越可能（weariness_losses 支左右过半）
+        k = rules.stability.weariness_losses
+        if losses[city.nation] and roll(
+            ctx, ramp(losses[city.nation], k - 2, k + 2), "weary", city.nation
+        ):
             reasons.append("weariness")
         out[city.id] = reasons
     return out
@@ -200,16 +208,16 @@ def resolve(ctx: StepContext) -> None:
             owner = city.captured_from
             if (
                 owner is not None
-                and s.turn - city.captured_turn < REVOLT_TURNS
                 and s.nation_cities(owner)
                 and at_war(s, owner, city.nation)
+                and roll(ctx, fade(s.turn - city.captured_turn, REVOLT_TURNS), "revolt", city.id)
             ):
                 _revolt(ctx, city, owner)  # 刚被占领的城：起义归附原主，不独立成小国
             else:
                 _independence(ctx, city)
 
 
-REVOLT_TURNS = 60  # 被攻占后这么多回合内稳定度降到 0：起义归附原主（原主还在、还在交战）
+REVOLT_TURNS = 60  # 稳定度降到 0 的城起义归附原主（而不是独立）的概率按这个尺度随占领时间衰减
 
 
 def _revolt(ctx: StepContext, city, owner: int) -> None:

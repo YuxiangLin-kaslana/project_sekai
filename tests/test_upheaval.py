@@ -16,7 +16,11 @@ RULES = load_ruleset("alt_ww2")
 
 @pytest.fixture(autouse=True)
 def certain(monkeypatch):
-    monkeypatch.setattr(upheaval, "chance", lambda ctx, odds, *keys: True)
+    # 概率都是软性的：测试里只要概率大于 0 就让它发生（概率为 0 的仍然不发生）
+    from engine.systems import stability
+
+    monkeypatch.setattr(upheaval, "roll", lambda ctx, p, *keys: p > 0)
+    monkeypatch.setattr(stability, "roll", lambda ctx, p, *keys: p > 0)
 
 
 def board(nations=2, width=40):
@@ -36,7 +40,9 @@ def ctx_of(s):
     return StepContext(s, RULES, [], EventLog(s.turn), RngTree(s.seed, "t", s.turn))
 
 
-def test_partisans_rise_in_freshly_conquered_unstable_cities():
+def test_partisans_rise_in_freshly_conquered_unstable_cities(monkeypatch):
+    # 概率超过 5% 才算发生：刚占领、不稳的城会冒游击队；已经有一支时概率大降，不再冒
+    monkeypatch.setattr(upheaval, "roll", lambda ctx, p, *keys: p > 0.05)
     s = board()
     home = found_city(s, RULES, 1, s.grid.idx(32, 5), capital=True)  # 原主还有别的城
     c = found_city(s, RULES, 1, s.grid.idx(5, 5))
@@ -52,7 +58,7 @@ def test_partisans_rise_in_freshly_conquered_unstable_cities():
     assert len(partisans) == 1 and partisans[0].nation == 1  # 归原主
     assert any(e["type"] == "partisans" for e in ctx.log.events)
     upheaval._partisans(ctx)
-    assert sum(u.type == "partisan" for u in s.units.values()) == 1  # 每座城同时最多 1 支
+    assert sum(u.type == "partisan" for u in s.units.values()) == 1  # 这座城已有一支：概率大降
 
 
 def test_civil_war_splits_off_the_far_region_with_its_troops():
