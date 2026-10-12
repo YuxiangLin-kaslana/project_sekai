@@ -209,3 +209,74 @@ def test_tide_is_deterministic_and_varies_between_games():
     assert max(a) - min(a) > 0.5  # 同一局里有分有合
     early = [sum(tide.at(s, t) for t in range(0, 300, 10)) / 30 for s in range(1, 101)]
     assert any(e > 0.4 for e in early) and any(e < -0.4 for e in early)  # 有的局偏合、有的局偏分
+
+
+def _civil_war_board():
+    s = board(nations=1, width=80)
+    cities = [found_city(s, RULES, 1, s.grid.idx(3 + 7 * k, 5), capital=k == 0) for k in range(11)]
+    s.nations[1].capital = cities[0].id
+    for c in cities[5:]:
+        c.stability = 20
+    return s
+
+
+@pytest.mark.parametrize("tide_value", [-0.9, 0.9])
+def test_breakaway_states_levy_more_troops_when_the_world_is_splitting(monkeypatch, tide_value):
+    from engine.systems import tide
+
+    monkeypatch.setattr(tide, "at", lambda seed, turn: tide_value)
+    s = _civil_war_board()
+    ctx = ctx_of(s)
+    assert upheaval._civil_war(ctx, 1)
+    new = max(s.nations)
+    levied = [u for u in s.units.values() if u.nation == new and u.ai_goal == "新政权募兵"]
+    cities = len(s.nation_cities(new))
+    if tide_value < 0:  # 偏“分”：每座城期望约 1.9 支
+        assert len(levied) >= cities
+        assert all(u.home in {c.id for c in s.nation_cities(new)} for u in levied)
+        assert all(len(s.units_at(u.tile, "surface")) <= 3 for u in levied)
+    else:  # 偏“合”：几乎不募兵
+        assert len(levied) <= cities // 2
+
+
+def test_old_nation_recognizes_breakaway_when_the_world_is_splitting(monkeypatch):
+    from engine.systems import tide
+
+    s = _civil_war_board()
+    for n in s.nations.values():
+        n.ai_enabled = True
+    ctx = ctx_of(s)
+    assert upheaval._civil_war(ctx, 1)
+    new = max(s.nations)
+    assert s.nations[new].origin == 1
+    s.nations[new].ai_enabled = True
+    s.turn += 10
+    monkeypatch.setattr(tide, "at", lambda seed, turn: 1.0)  # 大势全“合”：不承认
+    upheaval._recognition(ctx_of(s))
+    assert diplomacy.at_war(s, 1, new)
+    monkeypatch.setattr(tide, "at", lambda seed, turn: -0.8)
+    ctx = ctx_of(s)
+    upheaval._recognition(ctx)
+    assert not diplomacy.at_war(s, 1, new)
+    assert s.chronicle[-1]["kind"] == "recognition"
+
+
+def test_partisans_cool_down_after_recent_waves(monkeypatch):
+    # 同一国家最近冒过很多游击队：再冒的概率被压低
+    monkeypatch.setattr(upheaval, "roll", lambda ctx, p, *keys: p > 0.02)
+    s = board()
+    home = found_city(s, RULES, 1, s.grid.idx(32, 5), capital=True)
+    c = found_city(s, RULES, 1, s.grid.idx(5, 5))
+    found_city(s, RULES, 2, s.grid.idx(20, 5), capital=True)
+    s.nations[1].capital = home.id
+    diplomacy._set(s, 1, 2, "war")
+    c.nation, c.captured_from, c.captured_turn, c.stability = 2, 1, s.turn - 3, 40
+    s.grid.owner[s.grid.city_of == c.id] = 2
+    s._territory_cache = None
+    s.nations[1].partisan_turns = [s.turn - k for k in range(1, 8)]
+    upheaval._partisans(ctx_of(s))
+    assert not any(u.type == "partisan" for u in s.units.values())
+    s.nations[1].partisan_turns = []
+    upheaval._partisans(ctx_of(s))
+    assert any(u.type == "partisan" for u in s.units.values())
+    assert s.nations[1].partisan_turns == [s.turn]

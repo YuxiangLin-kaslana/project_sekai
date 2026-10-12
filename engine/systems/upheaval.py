@@ -60,7 +60,14 @@ COALITION_TARGET_RECOVER = 240  # 同一个霸主再被反霸的恢复尺度
 SURRENDER_RATE = 0.25
 
 # 天下大势（engine/systems/tide.py）：各事件概率乘 exp(±k × 大势)，大势在 −1（分）… 1（合）之间
-TIDE_PARTISAN = 0.6
+TIDE_PARTISAN = 0.3
+PARTISAN_MEMORY = 60  # 同一国家最近冒过的游击队按这个尺度淡忘
+PARTISAN_HEAT = 1.5  # 同一国家最近冒得越多，再冒的概率按这个尺度压低
+
+# 承认独立：分裂出来的新政权和原国家开战之后，原国家按这个概率（× 分的程度² × 随时间变化）无力平叛、
+# 承认独立（签和约）。原国家不是规则 AI 管的（玩家 / 大模型），改为由新政权向它求和
+RECOGNIZE_RATE = 0.05
+RECOGNIZE_FADE = 80
 TIDE_UPHEAVAL = 0.7  # 内战、将领叛变
 TIDE_COALITION = 0.8
 TIDE_SURRENDER = 1.0
@@ -94,6 +101,7 @@ def resolve(ctx) -> None:
         if s.nation_cities(nid) and _civil_war(ctx, nid):
             continue
     _defections(ctx)
+    _recognition(ctx)
     _coalition(ctx)
     _surrender(ctx)
 
@@ -172,6 +180,11 @@ def _partisans(ctx) -> None:
     for u in s.units.values():
         if u.type == kind.id:
             alive[u.nation] = alive.get(u.nation, 0) + 1
+    heat = {
+        nid: sum(fade(s.turn - t, PARTISAN_MEMORY) for t in n.partisan_turns)
+        for nid, n in s.nations.items()
+        if n.partisan_turns
+    }
     territory = s.territory_index()
     for city in sorted(s.cities.values(), key=lambda c: c.id):
         owner = city.captured_from
@@ -191,6 +204,7 @@ def _partisans(ctx) -> None:
             * 0.15**here  # 这座城已经有游击队：再冒的可能小得多
             * fade(alive.get(owner, 0), PARTISAN_PER_NATION)  # 这个国家的游击队越多越少冒
             * boost(s, -TIDE_PARTISAN)  # 天下大势偏“分”时更多
+            * fade(heat.get(owner, 0.0), PARTISAN_HEAT)  # 这个国家最近冒得越多越少冒
         )
         if not roll(ctx, p, "partisan", city.id):
             continue
@@ -209,6 +223,10 @@ def _partisans(ctx) -> None:
         )
         u.ai_goal = "游击队：破坏占领军后方"
         alive[owner] = alive.get(owner, 0) + 1
+        mark = s.nations[owner].partisan_turns
+        mark.append(s.turn)
+        del mark[:-20]
+        heat[owner] = heat.get(owner, 0.0) + 1
         ctx.log.add(
             "partisans",
             unit=ref("unit", u.id),
@@ -494,6 +512,43 @@ def _coalition(ctx) -> None:
             (hid, *members),
         )
         return  # 一回合最多一个反霸同盟
+
+
+# ---------------------------------------------------------------- 承认独立
+
+
+def _recognition(ctx) -> None:
+    """分裂出来的新政权还在和原国家打：天下大势越偏“分”，原国家越可能无力平叛、承认独立（签和约，
+    之后各自发展）。刚分裂的头几回合原国家还想平叛，之后越拖越可能承认，过了很久就不再算“刚分裂”。"""
+    s = ctx.state
+    from engine.systems import diplomacy
+    from engine.systems.tide import unity
+
+    split = (1 - unity(s)) ** 2
+    if split <= 0:
+        return
+    for nid in sorted(s.nations):
+        n = s.nations[nid]
+        old = n.origin
+        if old is None or not s.nation_cities(nid) or not s.nation_cities(old):
+            continue
+        if not at_war(s, nid, old):
+            continue
+        age = s.turn - diplomacy.relation(s, nid, old).get("since", s.turn)
+        p = RECOGNIZE_RATE * split * ramp(age, 3, 15) * fade(age, RECOGNIZE_FADE)
+        if not roll(ctx, p, "recognize", nid):
+            continue
+        if diplomacy.automatic(s, old):
+            diplomacy.make_peace(ctx, old, nid)
+            record(
+                s,
+                "recognition",
+                f"{s.nations[old].name}无力平叛，承认{n.name}独立",
+                (old, nid),
+                s.cities[n.capital].tile if n.capital in s.cities else None,
+            )
+        elif diplomacy.automatic(s, nid):
+            diplomacy.propose(ctx, "peace", nid, old)  # 玩家 / 大模型国家自己决定
 
 
 # ---------------------------------------------------------------- 投降并入

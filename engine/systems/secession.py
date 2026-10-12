@@ -1,8 +1,16 @@
-"""分裂出新国家（城市独立、内战、将领叛变共用）：一组城市连同辖区、一批部队脱离原国家，成立新国家。"""
+"""分裂出新国家（城市独立、内战、将领叛变共用）：一组城市连同辖区、一批部队脱离原国家，成立新国家。
+
+天下大势偏“分”时（engine/systems/tide.py），新政权在辖区里就地募兵（每座城期望 LEVY_PER_CITY ×（1 − 合力）
+支，按小数部分随机取整），站得住脚，不至于马上被原国家平定。
+"""
 
 from __future__ import annotations
 
-from engine.state import Nation
+from engine.ids import ref
+from engine.state import Nation, Unit
+
+LEVY_PER_CITY = 2.0
+STACK = 3  # 一个格子最多放这么多单位
 
 
 def secede(
@@ -37,6 +45,7 @@ def secede(
         techs=None if s.nations[old].techs is None else list(s.nations[old].techs),
     )
     nation.upheaval_turn = s.turn
+    nation.origin = old
     s.nations[nid] = nation
     for other in sorted(s.nations):
         if other == nid:
@@ -77,4 +86,56 @@ def secede(
     s._encircled = None
     s._support = None
     rebalance(s, (nid, old))  # 新旧两国：领土在各自的城市之间重新分
+    _levy(ctx, nid, group)
     return nid
+
+
+def _levy(ctx, nid: int, group) -> None:
+    """新政权就地募兵：天下大势越偏“分”越多（见模块说明）。兵种是新国家现在能造、不要资源的陆军里
+    战斗力最高的；放在各城辖区里没有别国单位、还没放满的陆地格子上，由那座城供养。"""
+    s, rules, g = ctx.state, ctx.rules, ctx.state.grid
+    from engine.systems.techs import locked
+    from engine.systems.tide import unity
+
+    want = LEVY_PER_CITY * len(group) * (1 - unity(s))
+    rng = ctx.rng.child("levy", nid).generator()
+    count = int(want) + (rng.random() < want - int(want))
+    kinds = [
+        u
+        for u in rules.units.values()
+        if u.category == "military"
+        and u.domain == "land"
+        and u.buildable
+        and not u.requires_resources
+        and "partisan" not in u.tags
+        and locked(s, rules, nid, u.id) is None
+    ]
+    if count <= 0 or not kinds:
+        return
+    kind = max(kinds, key=lambda u: (u.strength, -u.cost, u.id))
+    land = ctx.costs("land")
+    territory = s.territory_index()
+    spots = []
+    for c in group:
+        for t in sorted(territory.get(c.id, ()), key=lambda t: (g.distance(t, c.tile), t)):
+            if g.is_water[t] or land[t] <= 0:
+                continue
+            here = s.units_at(t, "surface")
+            if len(here) < STACK and all(v.nation == nid for v in here):
+                spots.append((c, t, STACK - len(here)))
+    made = 0
+    for c, t, room in spots:
+        for _ in range(room):
+            if made >= count:
+                break
+            u = s.add_unit(
+                Unit(s.new_id(), kind.id, nid, t, "surface", hp=kind.hp, moves_left=kind.moves)
+            )
+            u.home, u.managed, u.ai_goal = c.id, True, "新政权募兵"
+            made += 1
+        if made >= count:
+            break
+    if made:
+        s._support = None
+        ctx.log.add("levy", nation=ref("nation", nid), unit_type=kind.id, count=made)
+

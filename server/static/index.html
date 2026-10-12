@@ -1007,6 +1007,7 @@ const EVENT_TEXT = {
   directive_set: (e) => `${game.nationOf(e.nation)?.name ?? ''}（大模型统帅）定下方针：${e.summary}`,
   agent_changed: (e) => `${game.nationOf(e.nation)?.name ?? ''}${e.enabled ? `交给大模型统帅（每 ${e.every} 回合决策）` : '收回大模型控制'}`,
   surrendered: (e) => `${game.nationOf(e.nation)?.name ?? ''}向${game.nationOf(e.winner)?.name ?? ''}投降，${e.cities.length} 座城市并入`,
+  levy: (e) => `${game.nationOf(e.nation)?.name ?? ''}新政权就地募兵 ${e.count} 支`,
   partisans: (e) => `${cityName(e.city)} 附近冒出${game.nationOf(e.nation)?.name ?? ''}的游击队，袭扰${game.nationOf(e.occupier)?.name ?? ''}的占领军后方`,
   civil_war: (e) => `内战爆发：${e.cities.length} 座城市脱离${game.nationOf(e.previous)?.name ?? ''}，组建${e.name}，带走 ${e.units} 支部队`,
   general_defected: (e) => `将领叛变：${game.nationOf(e.previous)?.name ?? ''}的将领拥兵自立，率 ${e.units} 支部队成立${e.name}`,
@@ -1641,7 +1642,7 @@ function markdownHtml(md) {
   }
   return out.join("");
 }
-const CHRONICLE_ICON = { capital: "🏛", eliminated: "☠", civil_war: "⚔", defection: "★", coalition: "🤝", independence: "⚑", great_war: "🔥", surrender: "🏳", decay: "🍂" };
+const CHRONICLE_ICON = { capital: "🏛", eliminated: "☠", civil_war: "⚔", defection: "★", coalition: "🤝", independence: "⚑", great_war: "🔥", surrender: "🏳", decay: "🍂", recognition: "🕊", tide: "☯" };
 function renderChronicle() {
   const el = $("chronicle"), list = game.G.snap?.chronicle ?? [];
   if (!el) return;
