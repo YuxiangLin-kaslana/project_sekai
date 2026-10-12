@@ -1112,12 +1112,16 @@ def _contested(state, rules):
 
 
 def _skirmish(ctx: StepContext) -> None:
-    """交战格里的部队自动接着打：每支（按国家、ID 顺序）打一次格子里最强的敌军，双方都受伤。"""
+    """交战格里的部队自动接着打：每支（按本回合的先后名次、ID 顺序，轮流先手）打一次格子里最强的敌军，
+    双方都受伤。"""
+    from engine.systems.turn_order import rotation
+
     s, rules = ctx.state, ctx.rules
+    rank = rotation(s)
     for tile in _contested(s, rules):
         for uid in sorted(
             (u.id for u in s.units_at(tile, "surface") if _military(rules, u)),
-            key=lambda i: (s.units[i].nation, i),
+            key=lambda i: (rank.get(s.units[i].nation, 0), i),
         ):
             u = s.units.get(uid)
             if u is None or u.attacked_turn == s.turn or u.formation is not None:
