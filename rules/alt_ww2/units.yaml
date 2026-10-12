@@ -103,10 +103,11 @@ motorized:
   name: 摩托化师
   short: 摩
   strength: 12
+  hp: 180            # 和步兵一样能扛（原来 100，正面打全面吃亏；它的价值在速度：穿插、追击）
   moves: 6
-  cost: 155
+  cost: 120
   population: 1
-  gold: 40
+  gold: 30
   upkeep: 2
   requires_resources: [rubber]
   icon: motorized
