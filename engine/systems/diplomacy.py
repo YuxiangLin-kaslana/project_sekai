@@ -77,6 +77,7 @@ CRUSH = (
     2.5  # 巩固占领区时只打实力悬殊的残余小国（连同盟友兵力是对方的这么多倍）：后期不再拖着统一不了
 )
 REMNANT = 3  # “残余小国”：连同盟友一共不超过这么多座城
+ENDGAME = 3  # 只剩这么多国（含）时进入终局：兵力占优就宣战（不要求 OFFENSIVE_RATIO），两强不会永远相安无事
 WAR_LOAD = 0.5  # 手上交战国的兵力合计不到本国这么多倍，才开新仗
 WAR_CHANCE = 0.08  # 条件都满足时，每回合宣战的概率
 SEA_WAR_REACH = 25  # 没有陆上邻国时，城市之间这么多格（× 地图尺度）以内的国家也能打（跨海）
@@ -518,7 +519,7 @@ def _maybe_declare(ctx, nid, alive, pw, borders, rng) -> None:
             or sum(len(s.nation_cities(x)) for x in [other, *allies(s, other)]) > REMNANT
         ):
             continue
-        if odds < OFFENSIVE_RATIO:
+        if odds < (1.0 if len(alive) <= ENDGAME else OFFENSIVE_RATIO):
             continue
         score = odds * (1 + (WAR_AT - value(s, nid, other)) / 50)
         if best is None or score > best[0]:
