@@ -9,7 +9,9 @@
    每段记下长度、对面的敌军兵力（离战线 REACH 格内）、就近的敌城（推进的目标）。
 3. 分兵：野战陆军按各段的长度和威胁分配（军团整支跟着将领去离得最近的那段）；每段里近战部队均匀站到
    战线格上（每格最多 LINE_STACK 支，先每格一支铺满再加厚），远程、高射炮站在战线后面一排。
-4. 攻守：每段比较本段的兵力和对面的兵力，占优（OFFENSE 倍）就进攻，否则防守。
+4. 攻守：每段比较本段的兵力和对面的兵力，占优（OFFENSE 倍）就进攻，否则防守。各国挑一段最有希望突破的
+   作为主攻方向（_main_effort：对面兵少、离目标城近、本国部队就在附近）：分兵份额加倍、兵力相当就进攻，
+   其余地段薄守——势均力敌时集中兵力在一处突破，不会每段都差一点、谁也不进攻。
    - 进攻：先打（站着打、或者文明 6 式先走再打，攻击花 1 点移动力）；没仗打就往前推一格进敌方控制区，
      整条线一起往前压；离目标敌城近的部队转去围城、轰城、强攻、占领。
    - 防守：站到自己的战线格上驻守；只打划算的（能击杀、或者损失小得多）。
@@ -40,6 +42,8 @@ APPROACH_BUDGET = 64  # 每国每回合最多算多少次“先走再打”（�
 APPROACH_TARGETS = 4  # 每次最多细算几个目标
 ARROW_REACH = 12  # 进攻箭头只画离目标城这么近（× 地图尺度的平方根）的战线段
 DEFENSIVE_SCORE = 20  # 防守时只打这么划算以上的（或者能击杀）
+MAIN_WEIGHT = 2.5  # 主攻方向分兵的份额加倍（集中兵力在一处突破，其余地段薄守）
+MAIN_OFFENSE = 1.0  # 主攻方向兵力和对面相当就进攻（别的地段要 OFFENSE 倍）
 UNREACHED = 1 << 20
 
 
@@ -252,6 +256,7 @@ def build(ctx, nation, p, units, cities, components, guards) -> list[dict]:
         target = _objective(ctx, nation, seg, components)
         seg["objective"] = target.id if target else None
         seg["weight"] = len(seg["tiles"]) + THREAT_WEIGHT * threat.get(k, 0) / max(1.0, unit_power)
+    _main_effort(ctx, nation, segs, pool, unit_power)
     _assign(ctx, nation, p, segs, pool, units)
     for seg in segs:
         _stance(ctx, nation, seg)
@@ -263,6 +268,27 @@ def _anchor(seg, g, tile) -> int:
     """seg 离 tile 最近的战线格的距离（只看抽样的格子，长战线不逐格算）。"""
     sample = seg["tiles"][:: max(1, len(seg["tiles"]) // 12)]
     return min(g.distance(t, tile) for t in sample)
+
+
+def _main_effort(ctx, nation, segs, pool, unit_power):
+    """主攻方向：在有目标城的各段里挑最有希望突破的一段（对面兵少、离目标城近、本国部队就在附近），
+    分兵份额加倍、兵力相当就进攻；其余地段按份额薄守。势均力敌时不再是每一段都差一点、谁也不进攻。"""
+    s, g = ctx.state, ctx.state.grid
+    best = None
+    for seg in segs:
+        city = s.cities.get(seg.get("objective"))
+        if city is None:
+            continue
+        near = sum(1 for u in pool if _anchor(seg, g, u.tile) <= 6)
+        gap = min(g.distance(t, city.tile) for t in seg["tiles"][:: max(1, len(seg["tiles"]) // 8)])
+        foes = seg["enemy_strength"] / max(1.0, unit_power)
+        score = near - 1.5 * foes - 0.3 * gap + (3 if city.capital else 0)
+        if best is None or (score, -seg["id"]) > (best[0], -best[1]["id"]):
+            best = (score, seg)
+    for seg in segs:
+        seg["main"] = best is not None and seg is best[1]
+        if seg["main"]:
+            seg["weight"] *= MAIN_WEIGHT
 
 
 def _assign(ctx, nation, p, segs, pool, units):
@@ -339,15 +365,17 @@ def _stance(ctx, nation, seg):
     mine = sum(combat.strength(s, rules, s.units[uid]) for uid in seg["units"] if uid in s.units)
     seg["strength"] = round(mine)
     theirs = seg["enemy_strength"]
-    attack = bool(seg["units"]) and (theirs == 0 or mine >= OFFENSE * theirs)
+    need = MAIN_OFFENSE if seg.get("main") else OFFENSE
+    attack = bool(seg["units"]) and (theirs == 0 or mine >= need * theirs)
     seg["stance"] = "进攻" if attack else "防守"
     who = s.nations[seg["enemy"]].name if seg["enemy"] in s.nations else "敌军"
     if attack:
         city = s.cities.get(seg.get("objective"))
+        lead = "主攻方向：" if seg.get("main") else ""
         seg["reason"] = (
-            f"对 {who} 的战线兵力占优（{mine:.0f} 对 {theirs}），向 {city.name} 推进"
+            f"{lead}对 {who} 的战线兵力占优（{mine:.0f} 对 {theirs}），向 {city.name} 推进"
             if city
-            else f"对 {who} 的战线兵力占优（{mine:.0f} 对 {theirs}），肃清敌军"
+            else f"{lead}对 {who} 的战线兵力占优（{mine:.0f} 对 {theirs}），肃清敌军"
         )
     else:
         seg["reason"] = f"对 {who} 的战线兵力不足（{mine:.0f} 对 {theirs}），就地防守，只打划算的仗"
@@ -411,6 +439,7 @@ def _as_front(ctx, nation, seg) -> dict:
         "objective": seg.get("objective"),
         "target_city": seg.get("objective"),
         "stance": seg["stance"],
+        "main": bool(seg.get("main")),
         "mode": seg["stance"],
         "reason": seg["reason"],
         "units": seg["units"],
