@@ -147,6 +147,7 @@ def found_city(
     state.damaged.pop(tile, None)
     claim_territory(g, city, round(cfg.coastal_waters * city_scale(g)))
     state._territory_cache = None
+    state._encircled = None  # 城市是补给源（engine/systems/encirclement.py）
     state._network_cache = None
     state._settlement_usage = None
     state.invalidate_paths()

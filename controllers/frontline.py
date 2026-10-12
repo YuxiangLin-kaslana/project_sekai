@@ -656,6 +656,9 @@ def _advance(ctx, unit, slot, target) -> bool:
     return False
 
 
+CUT_WEIGHT = 0.5  # 先走再打的出发格能切断敌军退路（穿插价值）时，攻击打分加这么多倍的穿插价值
+
+
 def approach_attack(ctx, unit, *, offensive: bool) -> bool:
     """文明 6 式先走再打：在本回合走得到、还剩攻击要的移动力的格子里，挑一个能打到划算目标的位置，
     走过去再攻击（攻击用掉剩下的移动力）。进攻时只要不亏就打，防守时只打能击杀的或很划算的。"""
@@ -703,14 +706,19 @@ def approach_attack(ctx, unit, *, offensive: bool) -> bool:
     if not spots:
         return False
     choice = None
+    # 穿插价值（rule_ai.plan_exploits）：站上去能切断 / 拉长敌军回补给源的路的格子
+    cut = ai.get("exploit_map", {})
     for _, left, _, tile, victim in sorted(foes, key=lambda f: (f[0], f[2], f[3]))[
         :APPROACH_TARGETS
     ]:
         options = [sp for sp in spots if g.distance(sp, tile) <= reach]
         if not options:
             continue
-        # 出发格：剩的移动力多、地形好守、不在敌城射程里的优先
-        spot = max(options, key=lambda sp: (best_map[sp], R._ground(ctx, sp, tile), -sp))
+        # 出发格：能切断敌军退路的、剩的移动力多、地形好守、不在敌城射程里的优先
+        spot = max(
+            options,
+            key=lambda sp: (cut.get(sp, 0), best_map[sp], R._ground(ctx, sp, tile), -sp),
+        )
         info, problem = combat.preview_from(s, rules, unit, spot, best_map[spot], tile)
         if problem or info is None or info.get("facility_strike"):
             continue
@@ -723,6 +731,7 @@ def approach_attack(ctx, unit, *, offensive: bool) -> bool:
         if info.get("capture") or (isinstance(victim, City) and R._hp(ctx, victim) == 0):
             score += 200
         score += R._priority(ctx, unit, victim)
+        score += CUT_WEIGHT * cut.get(spot, 0)  # 边打边合围
         if planned.get(R._target_key(victim)):
             score += 15
         score += R.learned_bias(

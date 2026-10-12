@@ -158,17 +158,14 @@ def test_encircled_units_and_cities(board):
     from engine.systems import encirclement
     from engine.systems.cities import found_city
 
+    found_city(board, RULES, 2, board.grid.idx(11, 7))  # 乙的补给源（城市）在远处
     victim = add(board, "infantry", 2, 5, 3)
     ring = board.grid.neighbors_of(victim.tile)
     add(board, "infantry", 1, *board.grid.col_row(ring[0]))
     assert victim.id not in encirclement.status(board, RULES).units  # 一边有敌军还不算
-    # 对面再来一支：两支部队的控制区把其余四格也封住了（控制区算包围）
+    # 对面再来一支：两支部队的控制区把其余四格也封住了，回城的路断了（控制区算包围）
     add(board, "infantry", 1, *board.grid.col_row(ring[3]))
     assert victim.id in encirclement.status(board, RULES).units
-    # 本方部队站进控制区里：缺口打开
-    friend = add(board, "infantry", 2, *board.grid.col_row(ring[1]))
-    assert victim.id not in encirclement.status(board, RULES).units
-    board.remove_unit(friend.id)
     # 被包围：驻守也不回血，每回合减员
     victim.fortified, victim.hp = True, 50
     s = step(board, [], RULES).state
@@ -180,6 +177,54 @@ def test_encircled_units_and_cities(board):
         add(board, "infantry", 1, *board.grid.col_row(t))
     assert city.id in encirclement.status(board, RULES).cities
     assert step(board, [], RULES).state.cities[city.id].hp == 50
+
+
+def test_a_whole_pocket_of_units_is_encircled_when_cut_off_from_its_cities(board):
+    """断补给：几支挨在一起的部队互相占着邻格，照样可以被一起围在口袋里；口袋里有本国城市就不算。"""
+    from engine.systems import encirclement
+    from engine.systems.cities import found_city
+
+    g = board.grid
+    found_city(board, RULES, 2, g.idx(11, 7))
+    center = g.idx(5, 3)
+    inner = [center, *g.neighbors_of(center)]
+    pocket = [add(board, "infantry", 2, *g.col_row(t)) for t in inner[:3]]
+    assert not encirclement.status(board, RULES).units & {u.id for u in pocket}
+    # 敌军在外面围一圈（离中心两格的格子），它们的控制区封住了所有出路
+    for t in g.within(center, 2):
+        if g.distance(t, center) == 2:
+            add(board, "infantry", 1, *g.col_row(t))
+    assert {u.id for u in pocket} <= encirclement.status(board, RULES).units
+    # 口袋里就有一座本国城市：补给不断
+    found_city(board, RULES, 2, inner[4])
+    assert not encirclement.status(board, RULES).units & {u.id for u in pocket}
+
+
+def test_a_beachhead_is_supplied_by_sea_only_while_the_fleet_is_offshore():
+    """跨海登陆的滩头（岛上没有本国城市）：本国舰队守在旁边的海面、从本国港口走得到，就算补给不断。"""
+    from engine.systems import encirclement
+    from engine.systems.cities import found_city
+
+    g = HexGrid.empty(16, 8, wrap_x=False)
+    for t in range(g.size):
+        col, _ = g.col_row(t)
+        water = 4 <= col <= 10
+        g.terrain[t] = list(RULES.terrain).index("ocean" if water else "plains")
+        g.is_water[t] = water
+    g.elevation[:] = 10
+    g.area[:] = 0
+    s = GameState(0, 42, RULES.id, g)
+    s.nations = {1: Nation(1, "A", "#aa3333", None), 2: Nation(2, "B", "#3333aa", None)}
+    s.relations["1:2"] = {"status": "war", "since": 0}
+    found_city(s, RULES, 1, g.idx(3, 3))  # 甲的沿海城市（港口）
+    found_city(s, RULES, 2, g.idx(15, 3))
+    landing = add(s, "infantry", 1, 11, 3)  # 登上对岸的滩头
+    for row in (1, 5):  # 乙的部队把滩头往内陆的路封住
+        add(s, "infantry", 2, 12, row)
+    add(s, "infantry", 2, 13, 3)
+    assert landing.id in encirclement.status(s, RULES).units  # 没有舰队：补给断了
+    add(s, "destroyer", 1, 10, 3)  # 舰队守在滩头旁边的海面
+    assert landing.id not in encirclement.status(s, RULES).units
 
 
 def test_group_range_is_slowest_and_movement_atomic(board):

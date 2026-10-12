@@ -107,6 +107,23 @@ ENCIRCLE_MAX_GAPS = 4  # 敌军四周最多还差几格没占就值得去围（�
 ENCIRCLE_TARGETS = 10  # 每国每回合最多同时组织几处野战包围
 ROAD_RESERVE = 60  # 国库低于这么多金就不让工兵修前线道路
 FLANK_REACH = 3  # 包抄：去这么近的、已被本方贴住的敌军侧面
+# 穿插（plan_exploits）：坦克、摩托化这类快速部队钻到敌后，切断敌军回补给源的路（断补给 = 包围，见
+# engine/systems/encirclement.py）、打敌后的炮兵和机场。各项都是软性打分：
+EXPLOIT_MOVES = 4  # 移动力不少于这么多的近战陆军算快速部队
+EXPLOIT_CUT = 45  # 每切断一支敌军的补给（它在口袋里了）
+EXPLOIT_STRETCH = 4  # 敌军回补给源的路每拉长一步（最多算 EXPLOIT_STRETCH_CAP 步）
+EXPLOIT_STRETCH_CAP = 6
+EXPLOIT_NEAR = 8  # 只看这么近的敌军
+EXPLOIT_REAR = 25  # 贴到敌后的炮兵 / 远程部队（生命低、反击弱），每支
+EXPLOIT_AIRFIELD = 15  # 贴到敌方机场
+EXPLOIT_DANGER = 15  # 四周每多一支敌军（第一支不算）
+EXPLOIT_EXPOSED = 25  # 停在那里自己的补给也断了
+EXPLOIT_TRAVEL = 2  # 每格路程
+EXPLOIT_MIN = 25  # 总分不到这么多不值得冒险穿插
+EXPLOIT_DEFENSIVE = 0.4  # 防守中的战线也会穿插反击，但要的分数按这个比例提高（更保守）
+EXPLOIT_LOCAL = 3  # 局部兵力：看这么多格以内
+EXPLOIT_OUTNUMBERED = 10  # 局部敌军比本方（连同已分好的穿插部队）每多一支：钻进去容易被反包围
+EXPLOIT_CANDIDATES = 40  # 每国每回合最多评估这么多个候选格
 MOVE_ARROWS = 16  # 每国每回合最多记几条包抄 / 包围动作箭头
 IDLE_PERIOD = 3  # 驻守不动、附近没有外国军队的部队每这么多回合（按单位编号错开）才重新决策一次
 IDLE_RADIUS = 5  # “附近”：这么多格以内（敌军一回合走 2–4 格，加上射程）
@@ -987,6 +1004,165 @@ def plan_encirclements(ctx, nid, units, guards):
             used.add(uid)
             assigned[uid] = (hole, tile, f"堵住缺口，包围敌军{name}（被围断补给）")
     return assigned
+
+
+def _fast(rules, u):
+    """快速部队：移动力高的近战陆军（坦克、摩托化），不是炮兵、高射炮、侦察。"""
+    ut = rules.units[u.type]
+    return (
+        ut.domain == "land"
+        and ut.category == "military"
+        and ut.moves >= EXPLOIT_MOVES
+        and not ut.ranged_strength
+        and not ut.anti_air
+        and "scout" not in ut.tags
+        and "general" not in ut.tags
+        and "partisan" not in ut.tags
+    )
+
+
+def plan_exploits(ctx, nid, units, guards, plan):
+    """穿插：战线上的快速部队钻到敌后（防守中的战线也会，但更保守，见 EXPLOIT_DEFENSIVE）。候选格是它们一回合够得着、敌军附近的空格（避开敌城射程）。
+    每格打分（见 EXPLOIT_*）：在推演里放上本方部队连同它的控制区，附近敌军回补给源的路拉长了多少、
+    有没有被切断（断补给 = 包围）；能不能贴到敌后的炮兵、机场；四周敌军多、自己补给也断了就减分。
+    贪心地一格一格分配，前面分好的格子算进后面的推演——两翼的装甲自然会凑成钳形合围。
+    已经合围成功（附近有被围的敌军）的快速部队留在原地守住口袋。返回 {单位 ID: (格子, 说明)}。"""
+    from engine.systems.diplomacy import at_war
+    from engine.systems.zoc import ignores, mask
+
+    s, rules, g = ctx.state, ctx.rules, ctx.state.grid
+    bold = {}  # 单位 → 所在战线的胆量：进攻 1，防守 EXPLOIT_DEFENSIVE（门槛相应提高）
+    for f in plan.get("fronts") or ():
+        if f.get("kind") == "land":
+            for uid in f.get("units", ()):
+                bold[uid] = 1.0 if f.get("stance") == "进攻" else EXPLOIT_DEFENSIVE
+    taken = set(_ai(ctx).get("encircle", {}))
+    fast = [
+        u
+        for u in units
+        if u.id in bold
+        and u.id not in guards
+        and u.id not in taken
+        and _fast(rules, u)
+        and health(rules, u) >= 60
+        and u.moves_left > 0
+    ]
+    if not fast:
+        return {}
+    ring_now = encirclement.status(s, rules)
+    foes = [
+        v
+        for v in s.units.values()
+        if is_military(rules, v)
+        and rules.units[v.type].domain == "land"
+        and at_war(s, v.nation, nid)
+        and not naval.afloat(s, rules, v)
+    ]
+    if not foes:
+        return {}
+    out = {}
+    # 已经合围成功：附近有被围的敌军就守在原地，别被拉回战线放跑了口袋
+    for u in list(fast):
+        if any(v.id in ring_now.units and g.distance(v.tile, u.tile) <= 2 for v in foes):
+            out[u.id] = (u.tile, "守住合围的口袋，不让被围的敌军突围")
+            fast.remove(u)
+    if not fast:
+        return out
+    occ = encirclement.occupants(s, rules)
+    enemy_cities = [c for c in s.cities.values() if at_war(s, c.nation, nid)]
+    # 候选格：快速部队一回合够得着、EXPLOIT_NEAR 内有敌军、空着、不在敌城射程里
+    near_foe = {}
+    for v in foes:
+        near_foe.setdefault(v.tile, []).append(v)
+    standable = encirclement._standable(rules, "land")
+    candidates = {}
+    for u in fast:
+        reach = rules.units[u.type].moves
+        zone = None if ignores(rules, u) else mask(s, rules, nid, "land")
+        for t in g.within(u.tile, reach):
+            if t in candidates or not standable[g.terrain[t]] or s.city_at(t) is not None:
+                continue
+            if occ.get(t) or (zone is not None and zone[t]):
+                continue  # 有人站着；不能无视控制区的（摩托化）进不了敌方控制区深处
+            if any(g.distance(t, c.tile) <= CITY_RANGE for c in enemy_cities):
+                continue
+            if not any(g.distance(t, v.tile) <= 3 for v in foes):
+                continue
+            candidates[t] = min(g.distance(t, w.tile) for w in fast)
+    if not candidates:
+        return out
+    pool = sorted(candidates, key=lambda t: (candidates[t], t))[:EXPLOIT_CANDIDATES]
+    # 推演用的补给网：每个相关的敌国一份（只算一次），本国一份
+    nets, base = {}, {}
+    for e in sorted({v.nation for v in foes}):
+        net = encirclement.network(s, rules, e, occ)
+        if net is not None:
+            nets[e] = net
+            base[e] = encirclement.steps(s, net)
+    own = {u.tile for u in units if is_military(rules, u) and rules.units[u.type].domain == "land"}
+    mine = encirclement.network(s, rules, nid, occ)
+    my_steps = None if mine is None else encirclement.steps(s, mine)
+    plan_tiles = []
+
+    def value(t):
+        blocks = (*plan_tiles, t)
+        score = -EXPLOIT_TRAVEL * candidates[t]
+        nearby = [v for v in foes if g.distance(v.tile, t) <= EXPLOIT_NEAR and v.nation in nets]
+        for e in sorted({v.nation for v in nearby}):
+            after = encirclement.steps(s, nets[e], blocks)
+            for v in nearby:
+                if v.nation != e or base[e][v.tile] >= encirclement.UNREACHED:
+                    continue  # 已经被围的不重复算
+                if after[v.tile] >= encirclement.UNREACHED:
+                    score += EXPLOIT_CUT
+                else:
+                    longer = int(after[v.tile]) - int(base[e][v.tile])
+                    score += EXPLOIT_STRETCH * max(0, min(EXPLOIT_STRETCH_CAP, longer))
+        around = [w for n in g.neighbors_of(t) for w in near_foe.get(n, ())]
+        close = g.within(t, EXPLOIT_LOCAL)
+        enemies = sum(len(near_foe.get(n, ())) for n in close)
+        friends = 1 + sum(1 for n in close if n in own or n in plan_tiles)
+        score -= EXPLOIT_OUTNUMBERED * max(0, enemies - friends)
+        score += EXPLOIT_REAR * sum(1 for w in around if rules.units[w.type].ranged_strength)
+        score -= EXPLOIT_DANGER * max(0, len(around) - 1)
+        if any(
+            (b := rules.facility_at(int(g.facility[n]))) is not None
+            and b.air_base
+            and at_war(s, int(g.owner[n]), nid)
+            for n in (t, *g.neighbors_of(t))
+            if int(g.owner[n]) >= 0
+        ):
+            score += EXPLOIT_AIRFIELD
+        if my_steps is not None and my_steps[t] >= encirclement.UNREACHED:
+            score -= EXPLOIT_EXPOSED
+        return score
+
+    free = list(fast)
+    first = True
+    while free and pool:
+        scored = sorted(((value(t), -t) for t in pool), reverse=True)
+        if first:
+            # 先走再打（frontline.approach_attack）挑出发格时也参考：能切断敌军退路的格子优先
+            _ai(ctx)["exploit_map"] = {-n: v for v, n in scored if v > 0}
+            first = False
+        best, neg = scored[0]
+        if best < EXPLOIT_MIN:
+            break
+        t = -neg
+        reachable = [
+            u
+            for u in free
+            if g.distance(u.tile, t) <= rules.units[u.type].moves
+            and best * bold[u.id] >= EXPLOIT_MIN
+        ]
+        pool.remove(t)
+        if not reachable:
+            continue
+        u = min(reachable, key=lambda u: (g.distance(u.tile, t), u.id))
+        free.remove(u)
+        plan_tiles.append(t)
+        out[u.id] = (t, f"穿插到敌后，切断敌军退路、打击后方（{best:.0f} 分）")
+    return out
 
 
 def _escape(ctx, unit):
@@ -3810,6 +3986,20 @@ def decide_unit(ctx, unit, plan, guards, claimed):
         return
     if line and mode != "围城" and health(rules, unit) >= 60 and _raid_airfield(ctx, unit):
         return
+    dash = _ai(ctx).get("exploit", {}).get(unit.id)
+    if dash is not None and plan.get("kind") == "land":
+        # 穿插：坦克的火力不能闲着——本回合能先走再打就先打（站着能打的上面已经打了），
+        # 打不了才钻到敌后的格子（或守在合围的口袋上）
+        from controllers import frontline
+
+        if frontline.approach_attack(ctx, unit, offensive=True):
+            return
+        if unit.tile != dash[0] and march(ctx, unit, dash[0], dash[1]):
+            _record_move(ctx, unit, dash[0], "exploit")
+            return
+        if unit.tile == dash[0]:
+            _hold(ctx, unit, dash[1])
+            return
     if plan.get("kind") == "land":
         # 钢铁雄心式陆上战线：先走再打、进攻推进 / 围城、防守驻守（controllers/frontline.py）
         from controllers import frontline
@@ -4276,6 +4466,7 @@ def nation_turn(ctx, job):
     if units:
         _bodyguards(ctx, nid)
         _ai(ctx).setdefault("encircle", {}).update(plan_encirclements(ctx, nid, ashore, guards))
+        _ai(ctx)["exploit"] = plan_exploits(ctx, nid, ashore, guards, plan)
         _prefetch_flows(ctx, {nid: plan})
     # 每支部队按所属战线决策（战线的目标、阶段、战线位置）；不在战线上的（守军、边境哨、侦察、
     # 开拓团、闲置舰船）按国家整体的计划

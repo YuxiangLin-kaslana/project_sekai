@@ -614,3 +614,33 @@ def test_ai_planes_hop_through_airfields_to_a_captured_forward_airfield(board):
         s = step(s, [], RULES).state
         seen.append(s.units[fighter.id].tile)
     assert seen[0] == g.idx(9, 10) and g.idx(14, 10) in seen  # 一回合一跳，飞到前线机场
+
+
+def test_tanks_dash_behind_an_enemy_group_to_cut_its_supply(board):
+    """穿插：敌军站在一条走廊里，坦克钻到它们身后（敌军和它们的城市之间）就能切断补给、合围。"""
+    from controllers import rule_ai
+    from engine.systems import diplomacy
+
+    g = board.grid
+    mountains = RULES.terrain_index("mountains")
+    for col in range(14, 27):  # 一条三格宽的走廊（第 9–11 行），两边是山
+        for row in range(g.height):
+            if not 9 <= row <= 11:
+                g.terrain[g.idx(col, row)] = mountains
+    diplomacy._set(board, 1, 2, "war")
+    foes = [add(board, "infantry", 2, (18, row)) for row in (9, 10, 11)]
+    tank = add(board, "armor", 1, (17, 10), hp=RULES.units["armor"].hp)
+    tank.moves_left = RULES.units["armor"].moves
+    ctx = StepContext(board, RULES, [], EventLog(board.turn), RngTree(board.seed, "t", 1))
+    plan = {"fronts": [{"kind": "land", "stance": "进攻", "units": [tank.id]}]}
+    jobs = rule_ai.plan_exploits(ctx, 1, [tank], {}, plan)
+    assert tank.id in jobs
+    tile, reason = jobs[tank.id]
+    col, _ = g.col_row(tile)
+    assert col > 18 and "穿插" in reason  # 钻到敌军身后（靠它们城市的那一侧）
+    # 推演：坦克站上去以后，这几支敌军回不了城（断补给）
+    from engine.systems import encirclement
+
+    net = encirclement.network(board, RULES, 2)
+    cut = encirclement.steps(board, net, (tile,))
+    assert all(cut[v.tile] >= encirclement.UNREACHED for v in foes)
