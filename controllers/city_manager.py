@@ -778,8 +778,12 @@ def decide_city(state, rules, city, budget):
                     reason = "附近的外国军队里这类威胁多：造克制它们的兵"
             # 实战效率：同样的投入打出伤害多的兵种多造，打不出伤害的少造
             if u.id in budget.effect:
-                # 战损比是全国平均的 2 倍 +30，一半 −30（最多 ±45）
-                score += max(-45, min(45, 30 * budget.effect[u.id]))
+                # 战损比是全国平均的 2 倍 +30，一半 −30（最多 ±45）。战斗机只加不减：它的价值在拦截、
+                # 夺制空权，没有敌机可打时打不出伤害，按战损比扣分会让它永远造不出来
+                bonus = max(-45, min(45, 30 * budget.effect[u.id]))
+                if "air_superiority" in u.tags:
+                    bonus = max(0, bonus)
+                score += bonus
                 if budget.effect[u.id] >= 0.6:
                     reason = "这类部队战损比好（打出的伤害远多于挨的），多造"
             if budget.expanding and not threatened:
