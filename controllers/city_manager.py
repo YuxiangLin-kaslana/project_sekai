@@ -13,6 +13,7 @@ from engine.actions import CityOrder, DevelopCity, GoldAssist
 from engine.ids import ref
 from engine.systems.cities import (
     FOOD_PER_POP,
+    city_enables,
     city_sites,
     city_tiles,
     city_yields,
@@ -78,6 +79,14 @@ WAR_MODES = (
 
 
 KEY_RESOURCES = ("oil", "aluminum")  # 坦克、飞机要的稀缺资源：有了就多造这两类兵
+# 空军规模：野战陆军的这么多比例。随交战紧张度（交战国数 n 的饱和函数 n / (n + 1)、战争姿态算 0.5 起）
+# 从和平时的 AIR_SHARE_PEACE 平滑升到 AIR_SHARE_WAR——制空权对战果影响很大，和平时也备一点
+AIR_SHARE_PEACE, AIR_SHARE_WAR = 0.08, 0.3
+AIR_MIX = 110  # 战斗机和轰炸机的比例偏离一比一时的加减分（轰炸机没有战斗机护航容易被成批打掉）
+AIR_PER_FIELD = 2  # 空军缺口每超过“能造飞机的城市数 × 这么多”，再让一座城建机场（能造飞机的城不够）
+# 新机场往边境修（作战半径罩住前线）：城市离边境（有交战国时按交战国的领土）越近加分越多，
+# 按 AIRFIELD_BORDER_FADE 格衰减；机场格离边境 AIRFIELD_BORDER_GAP 格左右最好（太近一冲就丢）
+AIRFIELD_BORDER_PULL, AIRFIELD_BORDER_FADE, AIRFIELD_BORDER_GAP = 12, 6, 3
 KEEP_POP = 4  # 打仗时每座城至少留这么多人劳作，多出来的人口可以征召成部队
 
 
@@ -105,7 +114,7 @@ class Budget:
     carrier_want: int = 0  # 还要造几艘航母（打仗、有靠海的战线目标；减去现有的和在造的）
     want_general: int = 0  # 没人统率的野战陆军比将领的统御空位多出多少（多于 GENERAL_MIN 就造将领）
     engineer_want: int = 0  # 还缺几个随战线修路的工兵
-    air_want: int = 0  # 飞机还缺几架（按野战军规模的一成半）
+    air_want: int = 0  # 飞机还缺几架（按野战军规模的比例，随交战紧张度平滑变化，见 AIR_SHARE_*）
     threats: Counter = field(
         default_factory=Counter
     )  # 本国城市 10 格内的外国军队按类别（air/sea/armor/siege/land）
@@ -120,6 +129,8 @@ class Budget:
     want_admiral: int = (
         0  # 没人统率的战舰比海军将领的统御空位多出多少（多于 ADMIRAL_MIN 就造海军将领）
     )
+
+    air_base_city: int | None = None  # 能造飞机的城不够：让这座城建机场
 
     @property
     def net(self):
@@ -302,10 +313,41 @@ def budget_for(state, rules, nation, cities):
             ratio[k] = (dealt_ + 10) / (taken_ + 10)
     mean = _math.exp(sum(_math.log(r) for r in ratio.values()) / len(ratio)) if ratio else 0
     effect = {k: _math.log2(r / mean) for k, r in ratio.items()} if mean else {}
-    # 飞机：野战军的一成半；工兵：每条陆上战线一个
+    # 飞机：野战军的一定比例，随交战紧张度平滑变化（AIR_SHARE_*）；工兵：每条陆上战线一个
+    from engine.systems.diplomacy import enemies
+
     land_army = sum(1 for u in units if rules.units[u.type].domain == "land")
     planes = sum(1 for u in units if rules.units[u.type].domain == "air")
-    air_want = max(0, round(0.15 * land_army) - planes) if strategy.get("posture") == "战争" else 0
+    foes = len(enemies(state, nation.id))
+    tension = max(foes / (foes + 1), 0.5 if strategy.get("posture") == "战争" else 0.0)
+    share = AIR_SHARE_PEACE + (AIR_SHARE_WAR - AIR_SHARE_PEACE) * tension
+    air_want = max(0, round(share * land_army) - planes)
+    # 能造飞机（资源够）、空军缺口比能造飞机的城市多得多、没有在修的机场：挑一座产能最高的城建机场
+    have = nation_resources(state, rules, nation.id)
+    flyable = any(
+        u.domain == "air" and u.buildable and all(r in have for r in u.requires_resources)
+        for u in rules.units.values()
+    )
+    air_cities = [c for c in cities if "aircraft" in city_enables(state, rules, c)]
+    building_field = any(
+        c.construction is not None and rules.buildings[c.construction.facility].air_base
+        for c in cities
+    )
+    air_base_city = None
+    if flyable and air_want > AIR_PER_FIELD * len(air_cities) and not building_field:
+        options = [
+            c for c in cities if c not in air_cities and c.managed and c.construction is None
+        ]
+        if options:
+            border = _border_tiles(state, nation.id)
+
+            def appeal(c):
+                # 产能高、离边境近（按 AIRFIELD_BORDER_FADE 格衰减）的城先建
+                d = min((state.grid.distance(c.tile, t) for t in border), default=99)
+                near = math.exp(-max(0, d - AIRFIELD_BORDER_GAP) / AIRFIELD_BORDER_FADE)
+                return city_yields(state, rules, c).production + AIRFIELD_BORDER_PULL * near
+
+            air_base_city = max(options, key=lambda c: (appeal(c), -c.id)).id
     queued_warships = sum(
         1
         for c in cities
@@ -367,7 +409,7 @@ def budget_for(state, rules, nation, cities):
         len(units),
         target,
         pending,
-        nation_resources(state, rules, nation.id),
+        have,
         types,
         nearby,
         rich,
@@ -389,6 +431,7 @@ def budget_for(state, rules, nation, cities):
         strategy.get("posture", ""),
         want_admiral=want_admiral,
         airfield=strategy.get("airfield"),
+        air_base_city=air_base_city,
         settler_want=settler_want,
         expanding=expanding,
         enemy_fleet=strategy.get("enemy_fleet", 0),
@@ -594,6 +637,13 @@ def decide_city(state, rules, city, budget):
             n for t, n in budget.types.items() if "air_superiority" in rules.units[t].tags
         )
         balance = (melee - ranged) / (melee + ranged + 2)  # >0 近战多，<0 远程多
+        # 空军编成：轰炸机没有战斗机护航、争夺制空权，会被拦截、被防空成批打掉
+        bombers = sum(
+            n
+            for t, n in budget.types.items()
+            if rules.units[t].domain == "air" and "air_superiority" not in rules.units[t].tags
+        )
+        escort_gap = (bombers - fighters) / (bombers + fighters + 2)  # >0 战斗机少
         roles = Counter()
         for t, n in budget.types.items():
             roles[role(rules.units[t])] += n
@@ -708,10 +758,17 @@ def decide_city(state, rules, city, budget):
                 score += 30  # 坦克：突破、包围的主力
                 reason = "装甲部队：突破和包围的主力"
             if u.domain == "air" and budget.air_want > 0:
-                score += 30 + 12 * min(3, budget.air_want)
+                # 制空权对战果影响很大（轰炸、拦截、压制）：空军缺得越多加分越高
+                score += 45 + 15 * min(4, budget.air_want)
                 if "air_superiority" in u.tags and budget.air_threat:
                     score += 15  # 敌机在附近：先造战斗机夺制空权
                 reason = f"空军还缺 {budget.air_want} 支：夺制空权、轰炸敌军"
+            if u.domain == "air":
+                # 战斗机、轰炸机大致一比一：哪边少多造哪边（平滑，造多了变成减分）
+                fighter = "air_superiority" in u.tags
+                score += AIR_MIX * escort_gap * (1 if fighter else -1)
+                if fighter and escort_gap > 0.2:
+                    reason = f"轰炸机 {bombers} 架、战斗机 {fighters} 架：补战斗机护航、夺制空权"
             # 威胁：附近哪类外国军队多，就多造克制它们的兵
             counters = _counters(u)
             share = sum(budget.threats[k] for k in counters) / max(1, sum(budget.threats.values()))
@@ -1024,6 +1081,23 @@ def yield_sum(y) -> int:
     return y.food + y.production + y.gold + y.science
 
 
+def _border_tiles(state, nation, near=None, radius=12):
+    """外国领土（有交战国时只算交战国的）里挨着本国领土的格子；给了 near 只看它 radius 格以内。"""
+    from engine.systems.diplomacy import enemies
+
+    g = state.grid
+    foes = set(enemies(state, nation))
+    tiles = g.within(near, radius) if near is not None else range(len(g.owner))
+    out = []
+    for t in tiles:
+        o = int(g.owner[t])
+        if o < 0 or o == nation or (foes and o not in foes):
+            continue
+        if any(int(g.owner[n]) == nation for n in g.neighbors_of(t)):
+            out.append(t)
+    return out
+
+
 def _site(state, rules, city, b, score):
     """在本城辖区里给区域 b 挑一格（能建、打分最高）。"""
     best = None
@@ -1070,6 +1144,28 @@ def _urgent_development(state, rules, city, budget):
     plan = budget.airfield
     if plan and plan.get("city") == city.id and not g.facility[plan["tile"]]:
         return plan["facility"], plan["tile"], plan["reason"]
+    if budget.air_base_city == city.id:
+        fields = [
+            b
+            for b in rules.buildings.values()
+            if b.placement == "district" and b.air_base and "aircraft" in b.enables
+        ]
+        if fields:
+            b = fields[0]
+            border = _border_tiles(state, city.nation, near=city.tile)
+
+            def toward(t):
+                # 朝边境那边，离边境 AIRFIELD_BORDER_GAP 格左右最好（太近一冲就丢）；也别离城太远
+                edge = min((g.distance(t, f) for f in border), default=AIRFIELD_BORDER_GAP)
+                return -2 * abs(edge - AIRFIELD_BORDER_GAP) - g.distance(t, city.tile)
+
+            tile = _site(state, rules, city, b, toward)
+            if tile is not None:
+                return (
+                    b.id,
+                    tile,
+                    f"空军还缺 {budget.air_want} 架、能造飞机的城市不够：建机场（有机场才能造飞机）",
+                )
     y = city_yields(state, rules, city)
     net_food = y.food - heads(state, city) * FOOD_PER_POP
     linked = connected(state, city)

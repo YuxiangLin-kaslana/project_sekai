@@ -246,7 +246,7 @@ carrier:
   population: 1
   gold: 120
   upkeep: 4
-  air_capacity: 3
+  air_capacity: 4
   requires_resources: [iron, oil]
   tags: [carrier, indirect, suppress]
   icon: carrier

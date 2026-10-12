@@ -587,3 +587,30 @@ def test_ai_fighters_intercept_incoming_bombers(board):
     fights = [e for e in result.events if e["type"] == "combat"]
     assert fights and fights[0]["attacker"] == f"unit:{fighter.id}"
     assert fights[0]["defender"] == f"unit:{bomber.id}"  # 拦截在投弹之前
+
+
+def test_ai_planes_hop_through_airfields_to_a_captured_forward_airfield(board):
+    """城市不能停飞机：飞机经中间的机场一站站转场，用上远处占领来的前线机场。"""
+    from engine.systems import diplomacy
+
+    g = board.grid
+    af = RULES.facility_index("airfield")
+    home = next(c for c in board.cities.values() if c.nation == 1)
+    for col in range(5, 20):
+        for row in range(8, 13):
+            g.owner[g.idx(col, row)], g.city_of[g.idx(col, row)] = 1, home.id
+    for xy in ((4, 11), (9, 10), (14, 10)):  # 首都机场、中间的机场、占领来的前线机场
+        g.facility[g.idx(*xy)] = af
+    board._territory_cache = None
+    fighter = add(board, "fighter", 1, (4, 11))
+    for y in range(8, 13):
+        add(board, "infantry", 2, (22, y))
+        add(board, "infantry", 1, (19, y))
+    board.nations[1].ai_enabled = board.nations[2].ai_enabled = True
+    diplomacy._set(board, 1, 2, "war")
+    seen = []
+    s = board
+    for _ in range(3):
+        s = step(s, [], RULES).state
+        seen.append(s.units[fighter.id].tile)
+    assert seen[0] == g.idx(9, 10) and g.idx(14, 10) in seen  # 一回合一跳，飞到前线机场

@@ -747,15 +747,10 @@ def march(
             for v in s.units.values()
             if v.nation == unit.nation and rules.units[v.type].air_capacity and v.tile != unit.tile
         ]
-        options = [
-            t
-            for t in bases
-            if g.distance(t, goal) < g.distance(unit.tile, goal)
-            and movement.local_step_problem(ctx, unit, unit.tile, t) is None
-        ]
-        if not options:
+        hop = _air_hop(ctx, unit, goal, bases)
+        if hop is None:
             return False
-        path = [unit.tile, min(options, key=lambda t: (g.distance(t, goal), t))]
+        path = [unit.tile, hop]
     else:
         distance = flow(ctx, unit, goal, domain)
         path, seen = [unit.tile], {unit.tile}
@@ -2968,6 +2963,38 @@ def _navy(ctx, unit, plan, target):
         _hold(ctx, unit, why)
         return True
     return False
+
+
+def _air_hop(ctx, unit, goal, bases):
+    """飞机朝 goal 转场的下一站：在本国机场 / 航母组成的网里（相邻两站不超过转场半径）找离 goal 最近、
+    比现在近的那一站，返回去那里的第一跳（一回合只飞一跳；远处占领来的机场经中间的机场一站站飞过去）。
+    没有更近的站返回 None。"""
+    from collections import deque
+
+    rules, g = ctx.rules, ctx.state.grid
+    reach = movement.air_radius(g, rules.units[unit.type])
+    nodes = sorted(set(bases) - {unit.tile})
+    first = {}  # 站 → 从这里出发的第一跳
+    queue = deque()
+    for t in nodes:
+        if g.distance(unit.tile, t) <= reach and (
+            movement.local_step_problem(ctx, unit, unit.tile, t) is None
+        ):
+            first[t] = t
+            queue.append(t)
+    while queue:
+        a = queue.popleft()
+        for b in nodes:
+            if b not in first and g.distance(a, b) <= reach:
+                first[b] = first[a]
+                queue.append(b)
+    here = g.distance(unit.tile, goal)
+    best = min(
+        (t for t in first if g.distance(t, goal) < here),
+        key=lambda t: (g.distance(t, goal), g.distance(unit.tile, t), t),
+        default=None,
+    )
+    return None if best is None else first[best]
 
 
 def _air_rebase(ctx, unit) -> bool:

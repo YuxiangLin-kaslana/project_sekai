@@ -1032,3 +1032,23 @@ def test_planes_on_a_lost_airfield_surrender_or_flee(board):
     stranded(ctx)
     assert board.units[plane.id].tile == far
     assert any(e.get("reason") == "机场失守，紧急转场" for e in ctx.log.events)
+
+
+def test_an_airfield_holds_six_planes_and_a_carrier_four(board):
+    from engine.systems.stacking import has_room
+
+    g = board.grid
+    field = g.idx(2, 3)
+    g.owner[field] = 1
+    g.facility[field] = RULES.facility_index("airfield")
+    for _ in range(6):
+        assert has_room(board, RULES, field, "air", 1)
+        add(board, "fighter", 1, 2, 3)
+    assert not has_room(board, RULES, field, "air", 1)  # 一座机场最多 6 架
+    sea = g.idx(8, 3)
+    g.terrain[sea], g.is_water[sea] = list(RULES.terrain).index("ocean"), True
+    add(board, "carrier", 1, 8, 3)
+    for _ in range(4):
+        assert has_room(board, RULES, sea, "air", 1)
+        add(board, "fighter", 1, 8, 3)
+    assert not has_room(board, RULES, sea, "air", 1)  # 一艘航母最多 4 架
