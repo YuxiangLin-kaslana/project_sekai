@@ -527,8 +527,7 @@ def decide(ctx, unit, plan) -> bool:
         ctx, unit, slot, f"{'进攻' if offensive else '防守'}：前往{where}上的位置"
     ):
         return True
-    if R._pillage(ctx, unit):
-        return True
+    # 战线上的部队不破坏设施：那是要打下来的地方（破坏掉自己将来用不上，还把当地城市逼到独立）
     why = f"{'进攻' if offensive else '守住'}{where}（{'找机会打' if offensive else '驻守待敌'}）"
     if not unit.fortified:
         R.emit(

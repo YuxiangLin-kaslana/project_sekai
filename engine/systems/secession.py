@@ -9,7 +9,8 @@ def secede(
     ctx, old: int, group, seat, units, *, gold: int, why: str, name: str | None = None
 ) -> int:
     """group 里的城市（seat 为首都）和 units 脱离 old，成立新国家（AI 管理），返回新国家 ID。
-    新政权和原国家交战，和其他国家沿用原国家的关系（交战的继续交战，其余和平）；继承原国家的科技。"""
+    新政权只和原国家交战，和其他国家都是和平（关系值 50；原国家的敌人会按“敌人的敌人”去拉拢它）；
+    继承原国家的科技。"""
     s, rules = ctx.state, ctx.rules
     cfg, g = rules.stability, s.grid
     from engine.rng import RngTree
@@ -40,8 +41,13 @@ def secede(
     for other in sorted(s.nations):
         if other == nid:
             continue
-        st = "war" if other == old or diplomacy.at_war(s, old, other) else "peace"
-        s.relations[diplomacy.key(nid, other)] = {"status": st, "since": s.turn, "progress": s.turn}
+        st = "war" if other == old else "peace"
+        s.relations[diplomacy.key(nid, other)] = {
+            "status": st,
+            "since": s.turn,
+            "progress": s.turn,
+            "value": diplomacy.START_VALUE,
+        }
     s._closed_cache.clear()
     for c in group:
         c.nation, c.capital, c.stability = nid, c is seat, max(c.stability, cfg.independent)
