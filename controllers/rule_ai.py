@@ -749,7 +749,13 @@ def march(
         left = unit.moves_left * MOVE_STEPS + unit.road_credit
         full = movement.full_moves(s, rules, unit) * MOVE_STEPS
         cost_table = ctx.costs(movement.move_domain(ut))
-        sea_ok = not ashore or naval.afloat(s, rules, unit)
+        # 能不能走进海面：已经在海上的、走水陆两用路线的（开拓团、跨海作战）才行；陆路走不到时按直线逼近
+        # 的兜底不能把陆军带下海
+        sea_ok = (
+            ut.domain != "land"
+            or naval.afloat(s, rules, unit)
+            or (not ashore and (domain or movement.route_domain(s, rules, unit)) == "amphibious")
+        )
         ports = movement.port_overrides(s, ut, unit.nation, rules)
         if not distance and not disperse:
             # 本回合的共享距离场名额用完了：改用单位自己的 A* 路线（绕水绕山），只走本回合走得到的一段
@@ -1493,11 +1499,13 @@ def _go_ashore(ctx, unit, why):
     """下了海、没有跨海作战可打的部队：回最近的本国海岸上岸（满移动力时直接上岸，花一整回合）。"""
     s, g = ctx.state, ctx.state.grid
     if _full(ctx, unit):
+        # 本国的海岸优先，其次无主的陆地（被和平国家的领海围住、回不了家时先上岸再说）
         lands = sorted(
-            n
+            (int(g.owner[n]) != unit.nation, n)
             for n in g.neighbors_of(unit.tile)
-            if int(g.owner[n]) == unit.nation and not g.is_water[n]
+            if not g.is_water[n] and int(g.owner[n]) in (unit.nation, -1)
         )
+        lands = [n for _, n in lands]
         for n in lands:
             if movement.local_step_problem(ctx, unit, unit.tile, n) is None and _step(
                 ctx, unit, n, why
@@ -3267,7 +3275,12 @@ def _settler(ctx, unit, plan, claimed):
     if sites:
         site = min(sites, key=lambda t: (g.distance(unit.tile, t), t))
         claimed.add(site)
-        march(ctx, unit, site, "开拓团前往选定的新城位置")
+        if march(ctx, unit, site, "开拓团前往选定的新城位置"):
+            return
+        if naval.afloat(s, rules, unit) and g.distance(unit.tile, site) > 1:
+            _go_ashore(ctx, unit, "去新城址的海路被挡住，先回本国海岸上岸")
+    elif naval.afloat(s, rules, unit):
+        _go_ashore(ctx, unit, "没有合适的城址了，回本国海岸上岸")
     else:
         unit.ai_goal = "等待有承载余量的安全选址"
 
