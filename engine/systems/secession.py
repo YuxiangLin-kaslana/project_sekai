@@ -115,6 +115,7 @@ def _levy(ctx, nid: int, group) -> None:
     kind = max(kinds, key=lambda u: (u.strength, -u.cost, u.id))
     land = ctx.costs("land")
     territory = s.territory_index()
+
     def spots(c):
         tiles = sorted({c.tile, *territory.get(c.id, ())}, key=lambda t: (g.distance(t, c.tile), t))
         return [
@@ -134,7 +135,9 @@ def _levy(ctx, nid: int, group) -> None:
         for c in group:
             if made >= count:
                 break
-            t = next((t for t in places[c.id] if has_room(s, rules, t, kind.stack_class, nid)), None)
+            t = next(
+                (t for t in places[c.id] if has_room(s, rules, t, kind.stack_class, nid)), None
+            )
             if t is None:
                 continue
             u = s.add_unit(
@@ -145,4 +148,3 @@ def _levy(ctx, nid: int, group) -> None:
     if made:
         s._support = None
         ctx.log.add("levy", nation=ref("nation", nid), unit_type=kind.id, count=made)
-

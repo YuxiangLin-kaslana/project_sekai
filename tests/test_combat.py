@@ -38,10 +38,12 @@ def add(s, kind, nation, col, row, hp=None):
 
 
 def base(s, nation, col, row):
-    """本国城市：飞机的起降基地。"""
+    """飞机的起降基地：本国一座城，这一格标成机场（只测出击、降落，不管城市和机场是否同格；
+    城市本身不能停飞机）。"""
     c = City(s.new_id(), f"基地{col}{row}", nation, s.grid.idx(col, row), 2)
     s.cities[c.id] = c
     s.grid.owner[c.tile], s.grid.city_of[c.tile] = nation, c.id
+    s.grid.facility[c.tile] = RULES.facility_index("airfield")
     return c
 
 
@@ -982,3 +984,51 @@ def test_units_keep_a_record_of_how_many_enemies_they_defeated(board):
     foe = add(s, "infantry", 2, 5, 4, hp=5)
     s = action(s, order(s.units[tank.id], "attack", to=[5, 4])).state
     assert foe.id not in s.units and s.units[tank.id].kills == 1
+
+
+def test_planes_park_only_on_airfields_not_in_cities(board):
+    from engine.systems.economy import _spawn_tile
+    from engine.systems.movement import is_air_base
+
+    c = City(board.new_id(), "A城", 1, board.grid.idx(3, 3), 2)
+    board.cities[c.id] = c
+    g = board.grid
+    for t in g.within(c.tile, 1):
+        g.owner[t], g.city_of[t] = 1, c.id
+    assert not is_air_base(board, RULES, 1, c.tile)  # 城市本身不能停飞机
+    assert _spawn_tile(board, RULES, c, "fighter") is None  # 没有机场：飞机无处出生
+    field = g.idx(4, 3)
+    g.facility[field] = RULES.facility_index("airfield")
+    assert is_air_base(board, RULES, 1, field)
+    assert _spawn_tile(board, RULES, c, "fighter") == field  # 新造的飞机出生在本城的机场
+
+
+def test_planes_on_a_lost_airfield_surrender_or_flee(board):
+    from engine.events import EventLog
+    from engine.rng import RngTree
+    from engine.systems.air import stranded
+    from engine.systems.context import StepContext
+
+    g = board.grid
+    board.relations["1:2"] = {"status": "war", "since": 0}
+    near, far = g.idx(2, 3), g.idx(4, 3)
+    for t in (near, far):
+        g.owner[t] = 1
+        g.facility[t] = RULES.facility_index("airfield")
+    captured = add(board, "fighter", 1, 2, 3)
+    fled = add(board, "bomber", 1, 2, 3)
+    infantry = add(board, "infantry", 2, 2, 3)
+    g.owner[near] = 2  # 敌军占了这座机场
+    ctx = StepContext(board, RULES, [], EventLog(board.turn), RngTree(board.seed, "t"))
+    stranded(ctx)
+    # 敌方陆军就在机场上：飞机就地投降（记进占领部队的战绩）——这里轰炸机也一起投降
+    assert captured.id not in board.units and fled.id not in board.units
+    assert board.units[infantry.id].kills == 2
+    # 机场所在的土地易手（比如城市陷落），但没有敌军站在上面：紧急转场到最近的本国机场
+    g.owner[near] = 1
+    plane = add(board, "fighter", 1, 2, 3)
+    board.remove_unit(infantry.id)
+    g.owner[near] = 2
+    stranded(ctx)
+    assert board.units[plane.id].tile == far
+    assert any(e.get("reason") == "机场失守，紧急转场" for e in ctx.log.events)

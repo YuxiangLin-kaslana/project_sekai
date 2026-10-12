@@ -190,7 +190,7 @@ def populate(
         add(land_types[int(rng.integers(len(land_types)))], int(g.owner[tile]), tile)
     for tile in available.tolist():
         facility = rules.facility_at(int(g.facility[tile]))
-        if (tile in city_tiles or (facility and facility.air_base)) and rng.random() < 0.3:
+        if facility and facility.air_base and rng.random() < 0.3:  # 城市不能停飞机，只停机场
             add(air_types[int(rng.integers(len(air_types)))], int(g.owner[tile]), tile)
     sea_candidates = np.flatnonzero(g.is_water & buildable_table[g.terrain])
     for tile in rng.choice(

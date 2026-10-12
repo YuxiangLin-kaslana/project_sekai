@@ -33,7 +33,7 @@ industry:                 # 有煤又有铁（都在开采）：全国工厂产�
 
 stacking:                 # 一个格子最多放 3 个单位（地表的军事 + 平民合计）；敌我不能同格（近战从相邻格打）
   limits: { military: 3, civilian: 3, air: 3 }      # 每格：地表军事 / 地表平民 / 空域（飞机在空中另算）
-  city_bonus: { military: 0, civilian: 0, air: 2 }  # 城市所在格：飞机多停 2 架；地表单位按城里最多 4 个（cities.max_units）
+  city_bonus: { military: 0, civilian: 0, air: 0 }  # 城市不能停飞机（只有机场、航母能起降）；地表单位按城里最多 4 个（cities.max_units）
   total: 3                # 地表单位合计最多 3 个
   crowding_from: 3        # 同格军事单位超过 3 个才拥挤（上限就是 3，不会拥挤）
   crowding_penalty: 10    # 每多 1 个，该格所有单位战斗力 −10%
@@ -113,7 +113,7 @@ start:                    # 开局：每个国家一座首都 + 这些单位
   gold: 100
   buildings: [palace]
   facilities: 2           # 首都辖区内预先开发的设施数
-  districts: [airfield]   # 首都自带一座机场
+  districts: [airfield]   # 首都自带一座机场（开局的飞机停在这里；城市本身不能停飞机）
   units: [infantry, infantry, recon, engineer, settler]
   coastal_units: [destroyer]   # 首都临水才给
   air_units: [fighter]

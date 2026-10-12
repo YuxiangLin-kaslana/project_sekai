@@ -104,6 +104,10 @@ def resolve(ctx) -> None:
     _recognition(ctx)
     _coalition(ctx)
     _surrender(ctx)
+    # 分裂、投降之后机场换了主人：停在上面的飞机转场（engine/systems/air.py）
+    from engine.systems.air import stranded
+
+    stranded(ctx)
 
 
 def _name(s, nid) -> str:

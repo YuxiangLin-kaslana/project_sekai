@@ -735,8 +735,8 @@ def march(
     if (unit.tile == goal or g.distance(unit.tile, goal) <= stop_within) and not disperse:
         return False
     if ut.domain == "air":
-        bases = [c.tile for c in s.nation_cities(unit.nation)]
-        bases += [
+        # 城市不能停飞机：只有机场、航母
+        bases = [
             int(t)
             for t in np.flatnonzero((g.owner == unit.nation) & (g.facility > 0))
             if movement.is_air_base(s, rules, unit.nation, int(t))
@@ -2750,9 +2750,10 @@ def _airfield_plan(ctx, nation, p, units, cities):
     reach = max(air_radius(g, rules.units[u.type]) for u in planes)
     index = rules.facility_index(b.id)
     mine = (g.owner == nation.id) & (g.facility == index)
-    bases = [c.tile for c in cities] + [
-        int(t) for t in np.flatnonzero(mine) if int(t) not in s.damaged
-    ]
+    bases = [int(t) for t in np.flatnonzero(mine) if int(t) not in s.damaged]
+    if not bases:
+        # 一座机场都没有：从城市量起（第一座机场修在离前线近的地方）
+        bases = [c.tile for c in cities]
     best = None
     for f in fronts:
         target = s.cities[f["target_city"]]
@@ -2970,7 +2971,7 @@ def _navy(ctx, unit, plan, target):
 
 
 def _air_rebase(ctx, unit) -> bool:
-    """这回合没仗打的飞机：转场到离主战场最近的本国机场 / 城市 / 航母（主攻方向优先，其次进攻中的战线、
+    """这回合没仗打的飞机：转场到离主战场最近的本国机场 / 航母（主攻方向优先，其次进攻中的战线、
     离得最近的敌军），让战线落在作战半径里；已经够得着就原地待命。"""
     s, rules, g = ctx.state, ctx.rules, ctx.state.grid
     from engine.systems.movement import air_radius

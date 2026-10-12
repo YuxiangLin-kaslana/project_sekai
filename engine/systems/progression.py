@@ -101,6 +101,14 @@ def resolve(ctx: StepContext) -> None:
             and u.tile not in s.damaged
         ):
             pct = max(pct, heal.city)  # 停在本国港口里：和在城里一样回血
+        if (
+            u.layer == "air"
+            and fac is not None
+            and fac.air_base
+            and int(s.grid.owner[u.tile]) == u.nation
+            and u.tile not in s.damaged
+        ):
+            pct = max(pct, heal.city)  # 停在本国机场的飞机：和在城里一样回血
         pct = max(pct, heal.field if u.fortified else 0)
         full = rules.units[u.type].hp
         u.hp = min(full, u.hp + full * pct // 100)  # 按生命上限的百分比回

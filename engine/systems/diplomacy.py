@@ -72,7 +72,8 @@ NO_CAUSE_STEP = (
 AT_WAR = 30  # 正在交战
 RECENT_WAR, RECENT_DROP = 60, 20  # 刚打完仗：这么多回合内关系目标值 −20（随时间减弱）
 DOMINANT_POWER, DOMINANT_DROP = 1.6, 15  # 兵力超过其余各国平均的 1.6 倍：和它的关系 −15
-FEW_NATIONS, FEW_DROP = 4, 20  # 剩下的国家从 FEW_NATIONS + 2 减到 FEW_NATIONS 时，所有关系平滑地 −20 × 合力
+# 剩下的国家从 FEW_NATIONS + 2 减到 FEW_NATIONS 时，所有关系平滑地 −FEW_DROP × 合力
+FEW_NATIONS, FEW_DROP = 4, 20
 TIDE_WAR = 0.4  # 宣战概率乘 exp(0.4 × 天下大势)：偏“合”时兼并战争多（engine/systems/tide.py）
 # 宣战意愿（_appetite，0–1，全是平滑的打分，不设门槛）：
 OFFENSIVE_RATIO = 1.2  # 连同双方盟友的兵力比到这么多倍时，“占优”这一项给一半分（越占优越高）

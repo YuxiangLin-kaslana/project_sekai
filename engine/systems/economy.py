@@ -50,10 +50,24 @@ def _construction(ctx: StepContext) -> None:
 
 
 def _spawn_tile(state: GameState, rules: Ruleset, city: City, unit_id: str) -> int | None:
-    """新单位出现在哪：先市中心，满了就放到相邻的本国格子（舰船放到相邻水域）。"""
+    """新单位出现在哪：先市中心，满了就放到相邻的本国格子（舰船放到相邻水域）；飞机出生在本城辖区的
+    机场（城市本身不能停飞机）。"""
     ut = rules.units[unit_id]
     g = state.grid
     cls = ut.stack_class
+    if ut.domain == "air":
+        from engine.systems.movement import is_air_base
+
+        fields = sorted(
+            (int(t) for t in np.flatnonzero((g.city_of == city.id) & (g.facility > 0))),
+            key=lambda t: (g.distance(t, city.tile), t),
+        )
+        for t in fields:
+            if is_air_base(state, rules, city.nation, t) and has_room(
+                state, rules, t, cls, city.nation
+            ):
+                return t
+        return None
     candidates = [] if ut.domain == "sea" else [city.tile]
     if ut.domain == "sea":
         # 舰船默认出生在本城的港口区域

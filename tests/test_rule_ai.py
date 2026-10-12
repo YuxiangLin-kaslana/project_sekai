@@ -578,7 +578,8 @@ def test_ai_fighters_intercept_incoming_bombers(board):
     g = board.grid
     add(board, "infantry", 1, (5, 10))  # 城市守军
     victim = add(board, "infantry", 1, (8, 10), hp=180)
-    fighter = add(board, "fighter", 1, (4, 10))  # 停在首都（机场）
+    g.facility[g.idx(4, 11)] = RULES.facility_index("airfield")
+    fighter = add(board, "fighter", 1, (4, 11))  # 停在首都旁边的机场
     bomber = add(board, "bomber", 2, (8, 10))
     bomber.sortie = {"stage": "outbound", "target": victim.tile, "base": g.idx(28, 10),
                      "carrier": None, "turn": board.turn - 1}  # fmt: skip

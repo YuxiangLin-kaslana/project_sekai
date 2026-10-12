@@ -45,8 +45,7 @@ def is_air_base(state: GameState, rules: Ruleset, nation: int, tile: int) -> boo
         return True
     if int(state.grid.owner[tile]) != nation:
         return False
-    if state.city_at(tile) is not None:
-        return True
+    # 城市本身不能停飞机：只有机场（和航母）能起降
     b = rules.facility_at(int(state.grid.facility[tile]))
     if b is None or not b.air_base:
         return False

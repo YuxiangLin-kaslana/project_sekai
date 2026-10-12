@@ -1,7 +1,9 @@
 """飞机出击。
 
+基地：只有本国机场和本方航母能起降，城市本身不能停飞机。
+
 轰炸机（没有 air_superiority 标签的飞机）：两回合一个来回。
-- 第 1 回合（下令出击）：从基地（本国城市、机场、本方航母）起飞，飞到作战半径内的目标格上空，
+- 第 1 回合（下令出击）：从基地（本国机场、本方航母）起飞，飞到作战半径内的目标格上空，
   当回合就轰炸（投弹前，作战半径够得着的敌方战斗机先拦截一次，intercept），然后转入返航。
 - 第 2 回合：飞回原基地降落（降落占一个回合）。
 
@@ -13,7 +15,11 @@
 这回合还能出击的；轰炸机在它机场的作战半径里）自动拦截一次——机场待命的战斗机就此起飞，算作这次出击
 的第一次攻击。每架轰炸机最多被拦截一次。
 
-降落：原基地丢了、满了，就去最近的本国机场 / 城市 / 航母；哪里都降不了就坠毁。降落当回合不能再行动。
+降落：原基地丢了、满了，就去最近的本国机场 / 航母；哪里都降不了就坠毁。降落当回合不能再行动。
+
+机场失守（stranded，占领结算和动荡结算之后）：停在地上的飞机脚下的机场不再是本国的（被敌军占领、
+所属城市陷落、分裂出去）或者机场没了：敌方陆军就站在这格上的，飞机就地投降（记进那支部队的战绩）；
+否则紧急转场到作战半径内最近的本国机场 / 航母，哪里都去不了就放弃（损失）。
 
 防空：飞机每飞一段航线，航线进入敌方防空圈（高射炮 range、舰艇 flak_range 以内）时这个防空单位
 开火一次，飞出防空圈时再开火一次（同一段航线最多打掉 FLAK_CAP 点生命）。在防空圈里盘旋不挨打。
@@ -270,8 +276,8 @@ def land(ctx, plane) -> None:
     if carrier is not None and carrier.nation == plane.nation:
         options.append(carrier.tile)
     options.append(sortie["base"])
-    # 原基地不行时：最近的本国城市、机场、航母
-    bases = [c.tile for c in s.nation_cities(plane.nation)]
+    # 原基地不行时：最近的本国机场、航母
+    bases = _airfields(s, rules, plane.nation)
     bases += [
         v.tile
         for v in s.units.values()
@@ -300,3 +306,102 @@ def land(ctx, plane) -> None:
     from engine.systems.combat import _destroy
 
     _destroy(ctx, plane, plane.tile, "没有机场可降落，坠毁")
+
+
+def _airfields(s, rules, nation) -> list[int]:
+    """本国的机场格（不管现在能不能起降；调用方再用 is_air_base 筛）。"""
+    import numpy as np
+
+    g = s.grid
+    return [
+        int(t)
+        for t in np.flatnonzero((g.owner == nation) & (g.facility > 0))
+        if (b := rules.facility_at(int(g.facility[t]))) is not None and b.air_base
+    ]
+
+
+def stranded(ctx) -> None:
+    """机场失守：停在地上、脚下已经不是本国机场的飞机就地投降或紧急转场（见模块说明）。"""
+    from engine.systems.combat import _destroy
+    from engine.systems.movement import air_radius, is_air_base
+    from engine.systems.stacking import has_room
+
+    s, rules, g = ctx.state, ctx.rules, ctx.state.grid
+    for plane in sorted(
+        (
+            u
+            for u in s.units.values()
+            if u.layer == "air" and u.sortie is None and u.carried_by is None
+        ),
+        key=lambda u: u.id,
+    ):
+        if plane.id not in s.units:
+            continue
+        b = rules.facility_at(int(g.facility[plane.tile]))
+        if int(g.owner[plane.tile]) == plane.nation and b is not None and b.air_base:
+            continue
+        if any(
+            rules.units[v.type].air_capacity
+            for v in s.units_at(plane.tile, "surface")
+            if v.nation == plane.nation
+        ):
+            continue  # 停在本方航母上
+        captor = next(
+            (
+                v
+                for v in s.units_at(plane.tile, "surface")
+                if v.nation != plane.nation
+                and rules.units[v.type].category == "military"
+                and _hostile(s, v.nation, plane.nation)
+            ),
+            None,
+        )
+        if captor is not None:
+            _destroy(ctx, plane, plane.tile, "机场失守，就地投降", by=captor)
+            continue
+        reach = air_radius(g, rules.units[plane.type])
+        bases = _airfields(s, rules, plane.nation) + [
+            v.tile
+            for v in s.units.values()
+            if v.nation == plane.nation and rules.units[v.type].air_capacity
+        ]
+        options = sorted(
+            (t for t in set(bases) if g.distance(plane.tile, t) <= reach),
+            key=lambda t: (g.distance(plane.tile, t), t),
+        )
+        target = next(
+            (
+                t
+                for t in options
+                if is_air_base(s, rules, plane.nation, t)
+                and has_room(s, rules, t, "air", plane.nation)
+            ),
+            None,
+        )
+        if target is None:
+            _destroy(ctx, plane, plane.tile, "机场失守，无处转场")
+            continue
+        source = plane.tile
+        if not fly(ctx, plane, target):
+            continue
+        if g.is_water[target]:
+            from engine.systems.naval import carrier_at
+
+            ship = carrier_at(s, rules, plane.nation, target)
+            plane.carried_by = ship.id if ship is not None else None
+        plane.moves_left = plane.road_credit = 0
+        plane.attacked_turn = s.turn
+        ctx.log.add(
+            "air_returned",
+            unit=ref("unit", plane.id),
+            unit_type=plane.type,
+            source=source,
+            tile=target,
+            reason="机场失守，紧急转场",
+        )
+
+
+def _hostile(s, a, b) -> bool:
+    from engine.systems.diplomacy import at_war
+
+    return at_war(s, a, b)

@@ -26,6 +26,10 @@ def resolve(ctx) -> None:
             touched.add(parse_ref(e["previous"], "nation"))
     if touched:
         rebalance(ctx.state, touched)
+    # 机场所在的土地易手了：停在上面的飞机投降或紧急转场
+    from engine.systems.air import stranded
+
+    stranded(ctx)
 
 
 def _occupy(ctx) -> None:
