@@ -101,7 +101,7 @@ class Budget:
     want_lift: int = 0  # 跨海作战还缺的运兵船运力（能载几支陆军）
     lift_seas: frozenset = frozenset()  # 出发港所在的海域：只有通这片海的城市造运兵船才有用
     naval_want: int = 0  # 还缺几艘战舰（炮击靠海的战线目标、对付本国沿海的敌舰）
-    carrier_want: int = 0  # 要不要造航母（有飞机、有靠海的战线目标、还没有航母）
+    carrier_want: int = 0  # 还要造几艘航母（打仗、有靠海的战线目标；减去现有的和在造的）
     want_general: int = 0  # 没人统率的野战陆军比将领的统御空位多出多少（多于 GENERAL_MIN 就造将领）
     engineer_want: int = 0  # 还缺几个随战线修路的工兵
     air_want: int = 0  # 飞机还缺几架（按野战军规模的一成半）
@@ -313,6 +313,12 @@ def budget_for(state, rules, nation, cities):
         and rules.units[item[5:]].category == "military"
         and not {"carrier", "unarmed"} & set(rules.units[item[5:]].tags)
     )
+    queued_carriers = sum(
+        1
+        for c in cities
+        for item in c.queue
+        if item.startswith("unit:") and "carrier" in rules.units[item[5:]].tags
+    )
     # 金币补足建设：扣掉储备金和排队部队（含开拓团）要付的金币后，每多 150 金给一座城开，
     # 产出低、城外工程停摆的小城优先，已开的同档城市优先保留（避免来回开关）
     unit_gold = sum(
@@ -372,7 +378,7 @@ def budget_for(state, rules, nation, cities):
         frozenset(strategy.get("lift_seas") or (strategy.get("sea") or {}).get("seas") or ()),
         # 海军缺口减去已经在造的战舰（不然同一回合每座沿海城市都去造，大大超量）
         max(0, strategy.get("naval_want", 0) - queued_warships),
-        strategy.get("carrier_want", 0),
+        max(0, strategy.get("carrier_want", 0) - queued_carriers),  # 已经在造的航母不重复造
         want_general,
         strategy.get("engineer_want", 0),
         air_want,
@@ -668,8 +674,10 @@ def decide_city(state, rules, city, budget):
                 score += 35 + 15 * min(3, budget.naval_want) + (15 if u.ranged_strength else 0)
                 reason = f"海上还缺 {budget.naval_want} 艘战舰：炮击沿海目标、护卫海岸"
             if "carrier" in u.tags:
-                score += 60
-                reason = "有飞机、有靠海的战线目标：造航空母舰，让飞机从海上出击"
+                # 航母贵（360 生产力），按“战斗力 ÷ 造价”永远比不过步兵；国家要航母时给足加分，
+                # 让一座有港口的沿海城市真的造出来（其余城市看到在造了就不重复造）
+                score += 140
+                reason = "打仗、有靠海的战线目标：造航空母舰，舰载机群从海上对地打击"
             if lift:
                 # 跨海作战缺运力：载得越多越值（在沿海城市才造得出舰船）。每条船都占一个人口，
                 # 运输船（载 4）一个人口运 4 支，比驱逐舰（载 1）划算得多
@@ -804,6 +812,8 @@ def decide_city(state, rules, city, budget):
                 picked = rules.units[item[5:]]
                 if picked.domain == "sea" and not {"carrier", "unarmed"} & set(picked.tags):
                     budget.naval_want -= 1  # 一座城在造了，别的城少造一艘
+                if "carrier" in picked.tags:
+                    budget.carrier_want -= 1
                 if picked.carry:
                     budget.want_lift -= picked.carry
             intents.append((CityOrder(issuer=issuer, city=cid, queue=[item]), "production", reason))
