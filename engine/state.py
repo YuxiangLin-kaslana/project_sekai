@@ -63,6 +63,12 @@ class Nation:
     upheaval_turn: int = -1000  # 上一次内战 / 将领叛变的回合（冷却，见 engine/systems/upheaval.py）
     coalition_turn: int = -1000  # 上一次成为反霸同盟的目标的回合
     decay: int = 0  # 大一统之后积累的腐败 / 离心（见 engine/systems/upheaval.py），远方城市因此不稳
+    # 大模型 agent 当这个国家的战略层（controllers/agent/）：{enabled, every, provider, model, last_turn,
+    # summary, error}。外交、科研、方针由 agent 自己下指令；规则 AI 照常执行，并读取 directive 的软权重
+    agent: dict = field(default_factory=dict)
+    # agent 的方针（规则 AI 当软权重读）：{aggression: -1…1, nations: {国家 ID: -1…1},
+    # cities: {城市 ID: 0…1}, units: {兵种 ID: -1…1}, summary, reason, turn}
+    directive: dict = field(default_factory=dict)
 
 
 @dataclass(slots=True)

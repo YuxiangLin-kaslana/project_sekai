@@ -215,6 +215,13 @@ def break_alliance(ctx, a: int, b: int) -> str | None:
     return None
 
 
+def automatic(state, n: int) -> bool:
+    """这个国家的外交由规则 AI 当场决定：开了 AI、又不是大模型 agent 当战略层的国家。
+    agent 国家（和玩家国家一样）自己宣战、求和、结盟，别国给它的提议挂起等它答复。"""
+    nation = state.nations[n]
+    return nation.ai_enabled and not (nation.agent or {}).get("enabled")
+
+
 def propose(ctx, kind: str, a: int, b: int) -> str | None:
     """a 向 b 提议（peace 求和 / alliance 结盟）。对方是 AI：当场决定；是玩家：留一份待处理的提议。"""
     s = ctx.state
@@ -227,7 +234,7 @@ def propose(ctx, kind: str, a: int, b: int) -> str | None:
             return "只能和处于和平的国家结盟"
         if len(allies(s, a)) >= MAX_ALLIES or len(allies(s, b)) >= MAX_ALLIES:
             return f"每个国家最多 {MAX_ALLIES} 个盟友"
-    if s.nations[b].ai_enabled:
+    if automatic(s, b):
         ok, why = accepts(s, kind, b, a, power(s, ctx.rules))
         if ok:
             (make_peace if kind == "peace" else make_alliance)(ctx, a, b)
@@ -456,7 +463,7 @@ def resolve(ctx) -> None:
     pw = power(s, rules)
     borders = _border_pairs(s)
     update_relations(ctx, pw, borders)
-    ai = [n for n in alive if s.nations[n].ai_enabled]
+    ai = [n for n in alive if automatic(s, n)]
     rng = ctx.rng.child("diplomacy").generator()
     for nid in ai:
         # 求和：打了 MIN_WAR 回合以上，打不过（连同盟友）或者僵持
@@ -478,7 +485,7 @@ def resolve(ctx) -> None:
             elif st == "peace" and v > ALLY_AT:
                 if len(allies(s, nid)) >= MAX_ALLIES or len(allies(s, other)) >= MAX_ALLIES:
                     continue
-                if s.nations[other].ai_enabled:
+                if automatic(s, other):
                     ok, _ = accepts(s, "alliance", other, nid, pw)
                     if ok:
                         make_alliance(ctx, nid, other)
@@ -541,7 +548,7 @@ def _maybe_declare(ctx, nid, alive, pw, borders, rng) -> None:
 def _propose_ai(ctx, kind, a, b, pw):
     """AI 之间的提议用这回合统一算好的兵力（不每次重算）；对玩家国家照常留提议。"""
     s = ctx.state
-    if not s.nations[b].ai_enabled:
+    if not automatic(s, b):
         propose(ctx, kind, a, b)
         return
     ok, why = accepts(s, kind, b, a, pw)

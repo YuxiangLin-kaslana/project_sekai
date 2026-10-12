@@ -25,6 +25,7 @@ from collections import Counter
 
 import numpy as np
 
+from controllers.agent.directive import attack_need, city_weight, nation_weight
 from engine.hexmap import kernels
 from engine.ids import ref
 from engine.state import City, Unit
@@ -184,7 +185,11 @@ def _objective(ctx, nation, seg, components):
         if c.nation != seg["enemy"] or int(components[c.tile]) != comp:
             continue
         d = min(g.distance(t, c.tile) for t in sample)
-        key = (d - (3 if c.capital else 0) - c.population // 4, c.id)
+        # agent 方针里的重点城市：明显更想打（软权重）
+        key = (
+            d - (3 if c.capital else 0) - c.population // 4 - 8 * city_weight(s, nation.id, c.id),
+            c.id,
+        )
         if best is None or key < best[0]:
             best = (key, c)
     return best[1] if best else None
@@ -302,6 +307,10 @@ def _main_effort(ctx, nation, segs, pool, unit_power):
         gap = min(g.distance(t, city.tile) for t in seg["tiles"][:: max(1, len(seg["tiles"]) // 8)])
         foes = seg["enemy_strength"] / max(1.0, unit_power)
         score = near - 1.5 * foes - 0.3 * gap + (3 if city.capital else 0)
+        # agent 方针：优先打的国家、重点城市所在的方向更可能成为主攻方向
+        score += 4 * nation_weight(s, nation.id, seg["enemy"]) + 6 * city_weight(
+            s, nation.id, city.id
+        )
         if best is None or (score, -seg["id"]) > (best[0], -best[1]["id"]):
             best = (score, seg)
     for seg in segs:
@@ -434,6 +443,7 @@ def _stance(ctx, nation, seg):
     share = unrest(s, rules, nation.id)
     main = seg.get("main")
     need = (MAIN_OFFENSE if main else OFFENSE) * (1 + CONSOLIDATE * share * (1 if main else 3))
+    need *= attack_need(s, nation.id, seg["enemy"])  # agent 方针：越激进、越想打它，要的优势越小
     attack = bool(seg["units"]) and mine >= need * max(theirs, share * mine)
     hold = share * need > 0.5  # 只用于说明：没打是因为在巩固
     seg["stance"] = "进攻" if attack else "防守"

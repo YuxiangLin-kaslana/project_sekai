@@ -192,6 +192,10 @@
   .chronicle-row .turn { color: var(--muted); white-space: nowrap; }
   .chronicle-row.civil_war .text, .chronicle-row.defection .text, .chronicle-row.coalition .text { color: #f0c27a; font-weight: 600; }
   .chronicle-row.capital .text, .chronicle-row.eliminated .text { color: #f0a08c; }
+  .agent-panel { margin: 8px 0; padding: 8px 10px; border: 1px solid rgba(110, 160, 220, 0.45); border-radius: 8px; background: rgba(110, 160, 220, 0.07); }
+  .agent-panel .card-head { display: flex; align-items: center; gap: 6px; }
+  .agent-panel .card-head button { padding: 3px 8px; font-size: 12px; }
+  .agent-summary { margin: 6px 0 2px; font-weight: 600; color: #a9c9f0; }
   .tech-era { margin: 10px 0 4px; font-size: 11px; letter-spacing: 0.08em; color: var(--gold); }
   .tech-row { display: grid; grid-template-columns: 1fr auto auto; gap: 8px; align-items: center; padding: 5px 4px; border-bottom: 1px solid var(--line); font-size: 13px; }
   .tech-row .sub { display: block; color: var(--muted); font-size: 11px; }
@@ -572,6 +576,7 @@
         <p class="hint">点一个国家：地图跳到它的首都，城市 / 军队分类和外交视角也切到这个国家。</p>
         <div class="list-head"><h3>外交</h3><small id="diplo-summary"></small></div>
         <div class="filter-row"><label class="hint" for="diplo-nation" style="align-self:center">视角</label><select id="diplo-nation" aria-label="外交视角国家"></select></div>
+        <div id="agent-panel" class="agent-panel" hidden></div>
         <div id="diplo-offers"></div>
         <div class="list" id="diplo-list"></div>
         <p class="hint">关系值低于 0% 两国开战，高于 100% 结盟。和平：不能攻击，边境关闭（部队进不了对方领土）；同盟：开放边境，对方被宣战时一起参战；求和、结盟向 AI 国家提出时对方当场答复，向玩家国家提出时等对方处理。和约签订后 15 回合内不能再宣战。</p>
@@ -968,7 +973,7 @@ const EVENT_KIND = {
   city_founded: 'build', building_completed: 'build', facility_built: 'build', unit_created: 'build',
   level_up: 'build', gold_assist: 'build', facility_repaired: 'build',
   facility_bombed: 'war', unit_captured: 'war', nation_eliminated: 'alert', base_fire: 'war', district_captured: 'war',
-  partisans: 'war', civil_war: 'alert', surrendered: 'alert', city_revolt: 'alert', general_defected: 'alert', coalition: 'alert',
+  partisans: 'war', civil_war: 'alert', surrendered: 'alert', city_revolt: 'alert', directive_set: 'alert', general_defected: 'alert', coalition: 'alert',
   tech_researched: 'build', road_built: 'build',
   war_declared: 'alert', peace_signed: 'alert', alliance_formed: 'alert', alliance_broken: 'alert', diplomatic_offer: 'alert',
 };
@@ -999,6 +1004,8 @@ const EVENT_TEXT = {
   base_fire: (e) => `${game.nationOf(e.nation)?.name ?? ''}的${game.G.rules.buildings[e.facility]?.name ?? '军事基地'}炮击敌军：敌方损失 ${e.damage}${e.target_hp <= 0 ? '，被消灭' : ''}`,
   district_captured: (e) => `${game.nationOf(e.nation)?.name ?? e.nation} 占领了${game.nationOf(e.previous)?.name ?? ''}的${game.G.rules.buildings[e.facility]?.name ?? '区域'}${e.tiles?.length > 1 ? `，连同 ${e.tiles.length - 1} 格土地` : ''}，划归 ${cityName(e.city)}`,
   city_revolt: (e) => `${cityName(e.city)} 爆发起义，赶走${game.nationOf(e.previous)?.name ?? ''}的占领军，重归${game.nationOf(e.nation)?.name ?? ''}`,
+  directive_set: (e) => `${game.nationOf(e.nation)?.name ?? ''}（大模型统帅）定下方针：${e.summary}`,
+  agent_changed: (e) => `${game.nationOf(e.nation)?.name ?? ''}${e.enabled ? `交给大模型统帅（每 ${e.every} 回合决策）` : '收回大模型控制'}`,
   surrendered: (e) => `${game.nationOf(e.nation)?.name ?? ''}向${game.nationOf(e.winner)?.name ?? ''}投降，${e.cities.length} 座城市并入`,
   partisans: (e) => `${cityName(e.city)} 附近冒出${game.nationOf(e.nation)?.name ?? ''}的游击队，袭扰${game.nationOf(e.occupier)?.name ?? ''}的占领军后方`,
   civil_war: (e) => `内战爆发：${e.cities.length} 座城市脱离${game.nationOf(e.previous)?.name ?? ''}，组建${e.name}，带走 ${e.units} 支部队`,
@@ -1691,6 +1698,7 @@ function renderDiplomacy() {
   game.G.diploNation = diploNation;
   const me = game.nationOf(diploNation);
   if (!me) return;
+  renderAgentPanel(me);
   const rels = alive.filter((n) => n.id !== me.id).map((n) => ({ n, r: relationOf(me.id, n.id) }));
   const count = (st) => rels.filter((x) => x.r.status === st).length;
   $("diplo-summary").textContent = `交战 ${count("war")} · 同盟 ${count("alliance")} · 和平 ${count("peace")}`;
@@ -1733,6 +1741,33 @@ function renderDiplomacy() {
     list.appendChild(row);
   }
   renderTechs();
+}
+
+// 大模型 agent：把视角国家交给大模型当战略层（外交、科研、方针、战线目标、造兵偏好），规则 AI 执行
+function renderAgentPanel(me) {
+  const el = $("agent-panel"), snap = game.G.snap;
+  if (!el) return;
+  if (!snap.agents_available) { el.hidden = true; return; }
+  el.hidden = false;
+  const a = me.agent ?? {}, on = !!a.enabled, d = me.directive ?? {};
+  const names = (m) => Object.entries(m ?? {}).filter(([, v]) => Math.abs(v) >= 0.1).sort((x, y) => y[1] - x[1])
+    .map(([k, v]) => `${esc(game.nationOf(`nation:${k}`)?.name ?? game.G.cities.get(`city:${k}`)?.name ?? game.G.rules.units[k]?.name ?? k)} ${v > 0 ? "+" : ""}${v.toFixed(1)}`).join("、");
+  const log = (snap.agent_log ?? []).filter((x) => x.nation === me.id).slice(0, 4);
+  el.innerHTML = `<div class="card-head"><b>大模型统帅</b><span class="grow"></span><small>${on ? `DeepSeek · 每 ${a.every ?? 8} 回合决策，大事立即决策` : "未启用"}</small></div>` +
+    (on ? `<p class="agent-summary">${esc(a.summary || "等待第一次决策…")}</p>` +
+      (d.reason ? `<p class="hint">${esc(d.reason)}</p>` : "") +
+      `<div class="kv"><span>进攻性</span><b>${(d.aggression ?? 0).toFixed(1)}（−1 防守 … 1 进攻）</b>` +
+      (names(d.nations) ? `<span>对各国</span><b>${names(d.nations)}</b>` : "") +
+      (names(d.cities) ? `<span>重点城市</span><b>${names(d.cities)}</b>` : "") +
+      (names(d.units) ? `<span>兵种偏好</span><b>${names(d.units)}</b>` : "") + `</div>` +
+      (a.error ? `<div class="management-alert">上次调用失败：${esc(a.error)}（几回合后重试）</div>` : "") +
+      (log.length ? `<details class="fold"><summary>最近的决策</summary>${log.map((x) => `<p class="hint">第 ${x.turn} 回合 · ${esc(x.why ?? "")}${x.seconds ? ` · ${x.seconds} 秒` : ""}：${esc(x.summary ?? x.error ?? "")}</p>`).join("")}</details>` : "")
+      : `<p class="hint">交给大模型后，它负责这个国家的外交（宣战、求和、结盟、答复提议）、科研、发展方针、战线目标与攻守、造兵偏好；规则 AI 照它的方针执行每个单位和城市。</p>`);
+  const b = document.createElement("button");
+  b.type = "button"; b.className = on ? "" : "primary"; b.disabled = commandBusy;
+  b.textContent = on ? "收回大模型控制" : `把${me.name}交给大模型`;
+  b.onclick = () => executeCommand({ type: "set_agent", issuer: me.id, enabled: !on, every: 8 });
+  el.querySelector(".card-head").appendChild(b);
 }
 
 function renderTechs() {

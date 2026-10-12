@@ -82,6 +82,9 @@ class Game:
     lock: threading.RLock = field(default_factory=threading.RLock)
     stress: dict | None = None
     rules: Ruleset | None = None  # 这局用的剧本
+    # 大模型 agent 的记忆（不进对局状态）：{国家: {events, seen_offers, urgent, error, last, ...}}
+    agent_memory: dict = field(default_factory=dict)
+    agent_log: list = field(default_factory=list)  # 最近的 agent 决策记录（给前端看）
     _hash: tuple | None = (
         None  # (局面对象, 哈希)：局面每次结算都换成新对象，按对象缓存（大地图一次几百毫秒）
     )
@@ -148,10 +151,50 @@ def advance(
                 u.id for u in game.state.units.values() if game.state.nations[u.nation].ai_enabled
             )
             orders = list(orders) + random_walk_orders(game.state, rules, skip=given)
+        decisions = {}
+        if not immediate and any(
+            (n.agent or {}).get("enabled") for n in game.state.nations.values()
+        ):
+            # 大模型 agent（国家的战略层）：该决策的国家先调用大模型，决定以指令形式进入这一回合
+            from controllers.agent import runner
+            from engine.actions import parse_orders
+
+            raw, decisions = runner.run(game.state, rules, game.agent_memory)
+            if raw:
+                try:
+                    orders = list(orders) + parse_orders(raw)
+                except ValueError:
+                    for one in raw:  # 有一条格式不对：逐条解析，坏的丢掉
+                        try:
+                            orders = list(orders) + parse_orders([one])
+                        except ValueError:
+                            pass
         result = step(game.state, orders, rules, immediate=immediate)
         game.state = result.state
         game.state_hash(result.state_hash)  # step 已经算过哈希：记下来，快照和各接口不用再算
         game.events = result.events
+        if not immediate and any(
+            (n.agent or {}).get("enabled") for n in game.state.nations.values()
+        ):
+            from controllers.agent import runner
+
+            runner.remember(game.state, game.agent_memory, result.events)
+        for nid, rec in decisions.items():
+            n = game.state.nations.get(nid)
+            game.agent_log.append(
+                {
+                    "turn": game.state.turn - 1,
+                    "nation": f"nation:{nid}",
+                    "name": n.name if n else "",
+                    "why": rec.get("why"),
+                    "error": rec.get("error"),
+                    "summary": (rec.get("answer") or {}).get("summary"),
+                    "analysis": (rec.get("answer") or {}).get("analysis"),
+                    "seconds": (rec.get("usage") or {}).get("seconds"),
+                    "tokens": (rec.get("usage") or {}).get("total_tokens"),
+                }
+            )
+        del game.agent_log[:-50]
         if game.stress is not None:
             game.stress["last_action_ms" if immediate else "last_turn_ms"] = round(
                 (time.perf_counter() - started) * 1000, 1
@@ -347,6 +390,13 @@ def snapshot(game: Game, rules: Ruleset) -> dict:
         s._yield_cache.clear()
 
 
+def _agents_available() -> bool:
+    """有没有配置大模型 API key（前端据此显示“交给大模型”的开关）。"""
+    from controllers.agent.llm import available
+
+    return available()
+
+
 def _snapshot(game: Game, rules: Ruleset) -> dict:
     started = time.perf_counter()
     s = game.state
@@ -377,6 +427,18 @@ def _snapshot(game: Game, rules: Ruleset) -> dict:
                 "management": n.management,
                 "road_plan": n.road_plan,
                 "ai_enabled": n.ai_enabled,
+                # 大模型 agent：开关、多少回合决策一次、上次决策的回合与战略总结、出错信息；方针
+                "agent": {
+                    **{
+                        k: v
+                        for k, v in (n.agent or {}).items()
+                        if k in ("enabled", "every", "provider", "model", "last_turn", "summary")
+                    },
+                    "error": (game.agent_memory.get(nid) or {}).get("error"),
+                }
+                if n.agent
+                else None,
+                "directive": n.directive or None,
                 "strategy": n.strategy,
                 "resources": sorted(nation_resources(s, rules, nid)),
             }
@@ -553,6 +615,8 @@ def _snapshot(game: Game, rules: Ruleset) -> dict:
             ],
         },
         "turn": s.turn,
+        "agent_log": list(reversed(game.agent_log[-20:])),  # 最近的 agent 决策（新的在前）
+        "agents_available": _agents_available(),
         # 世界大事记（最近 80 条，新的在前）：首都陷落、灭国、内战、将领叛变、反霸同盟……
         "chronicle": list(reversed(s.chronicle[-80:])),
         "state_hash": game.state_hash(),

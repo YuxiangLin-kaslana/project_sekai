@@ -169,6 +169,29 @@ class SetResearch(_Order):
     tech: str
 
 
+class SetAgent(_Order):
+    """让大模型 agent 当本国的战略层（controllers/agent/）：every 回合决策一次，大事发生时立即决策。"""
+
+    type: Literal["set_agent"] = "set_agent"
+    enabled: bool
+    every: int = Field(8, ge=1, le=100)
+    provider: str = "deepseek"
+    model: str | None = None
+
+
+class SetDirective(_Order):
+    """agent 下达的方针（规则 AI 当软权重读）：进攻性、对各国的敌意 / 友好、重点城市、兵种偏好，
+    附一句战略总结和理由。"""
+
+    type: Literal["set_directive"] = "set_directive"
+    aggression: float = Field(0.0, ge=-1, le=1)
+    nations: dict[str, float] = {}  # "nation:3": -1…1（正 = 优先打它，负 = 避免和它打）
+    cities: dict[str, float] = {}  # "city:12": 0…1（重点攻取）
+    units: dict[str, float] = {}  # 兵种 ID: -1…1（多造 / 少造）
+    summary: str = Field("", max_length=400)
+    reason: str = Field("", max_length=2000)
+
+
 class BuildRoad(_Order):
     """城市修路：从市中心修到 to（本城还没连路的住宅区 / 工厂、本国别的城市、本国工兵所在位置），
     加进这座城的生产队列，用生产力付造价。"""
@@ -201,7 +224,9 @@ Order = Annotated[
     | UnitManagement
     | Diplomacy
     | RespondOffer
-    | SetResearch,
+    | SetResearch
+    | SetAgent
+    | SetDirective,
     Field(discriminator="type"),
 ]
 ORDERS = TypeAdapter(list[Order])
@@ -214,6 +239,8 @@ ORDER_PRIORITY = {
     "break_alliance": -4,
     "respond_offer": -4,
     "set_research": -3,
+    "set_agent": -3,
+    "set_directive": -3,
     "set_ai": -3,
     "unit_management": -1,
     "set_policy": -2,

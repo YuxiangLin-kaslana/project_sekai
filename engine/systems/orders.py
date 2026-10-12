@@ -29,7 +29,9 @@ from engine.actions import (
     Order,
     Pillage,
     RespondOffer,
+    SetAgent,
     SetAI,
+    SetDirective,
     SetPolicy,
     SetResearch,
     Ungroup,
@@ -121,6 +123,52 @@ def _apply(ctx: StepContext, order: Order) -> None:
         if n.research != order.tech:
             n.research, n.research_progress = order.tech, 0
         log.add("research_set", nation=order.issuer, tech=order.tech)
+        return
+
+    if isinstance(order, SetAgent):
+        n = state.nations[nation]
+        if order.enabled:
+            n.agent = {
+                **n.agent,
+                "enabled": True,
+                "every": order.every,
+                "provider": order.provider,
+                "model": order.model,
+            }
+            n.agent.setdefault("last_turn", -1000)
+            n.ai_enabled = n.city_management = True  # 执行层还是规则 AI
+        else:
+            n.agent = {**n.agent, "enabled": False}
+        log.add("agent_changed", nation=order.issuer, enabled=order.enabled, every=order.every)
+        return
+
+    if isinstance(order, SetDirective):
+        n = state.nations[nation]
+
+        def ids(raw, kind, pool):
+            out = {}
+            for k, v in raw.items():
+                try:
+                    i = parse_ref(k, kind)
+                except ValueError:
+                    continue
+                if i in pool:
+                    out[str(i)] = max(-1.0, min(1.0, float(v)))
+            return out
+
+        n.directive = {
+            "aggression": order.aggression,
+            "nations": ids(order.nations, "nation", state.nations),
+            "cities": ids(order.cities, "city", state.cities),
+            "units": {
+                k: max(-1.0, min(1.0, float(v))) for k, v in order.units.items() if k in rules.units
+            },
+            "summary": order.summary,
+            "reason": order.reason,
+            "turn": state.turn,
+        }
+        n.agent = {**n.agent, "last_turn": state.turn, "summary": order.summary}
+        log.add("directive_set", nation=order.issuer, summary=order.summary, reason=order.reason)
         return
 
     if isinstance(order, SetAI):

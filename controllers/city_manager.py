@@ -8,6 +8,7 @@ import math
 from collections import Counter
 from dataclasses import dataclass, field, replace
 
+from controllers.agent.directive import unit_weight
 from engine.actions import CityOrder, DevelopCity, GoldAssist
 from engine.ids import ref
 from engine.systems.cities import (
@@ -641,6 +642,8 @@ def decide_city(state, rules, city, budget):
             score = power * 80 / max(1, u.cost) + (45 if nation.policy == "military" else 10)
             # 每支部队都永久占一个人口：人口才是兵源的瓶颈，单兵越强越值（坦克 24 → +48，步兵 10 → +20）
             score += 2 * power
+            # agent 方针的兵种偏好：多造 / 少造（软权重）
+            score += 60 * unit_weight(state, nation.id, u.id)
             scarce = [r for r in u.requires_resources if r in KEY_RESOURCES]
             if scarce and all(r in budget.have for r in scarce):
                 # 有石油 / 铝：坦克、飞机很强，资源在手就多造（资源随时可能被炸掉、被占）

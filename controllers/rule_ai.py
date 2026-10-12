@@ -44,6 +44,7 @@ from collections import Counter, deque
 
 import numpy as np
 
+from controllers.agent.directive import city_weight, nation_weight
 from engine.actions import (
     AssignCorps,
     Attack,
@@ -1121,6 +1122,8 @@ def choose_target(
             )
         value = 30 + 6 * c.population + (40 if c.capital else 0)
         value += 25 * airfields.get(c.id, 0)  # 夺取机场：辖区里有机场的城更值得打
+        # agent 方针：优先打的国家、重点城市更值得打，想避开的国家打折（软权重）
+        value += 60 * nation_weight(s, nation.id, c.nation) + 80 * city_weight(s, nation.id, c.id)
         cost = 4 * d / map_scale(g) + 1.5 * defense + 0.8 * garrison + _hp(ctx, c) / 10
         if any(g.distance(c.tile, t) < FRONT_SPREAD * map_scale(g) for t in taken):
             cost += 40  # 离别的战线目标太近：战线挤在一个方向

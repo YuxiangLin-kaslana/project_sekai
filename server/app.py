@@ -397,6 +397,23 @@ def play_actions(game_id: str, body: TurnSubmit) -> dict:
         return {**snapshot(game, game.rules), "rejected": result["rejected"]}
 
 
+@app.get("/api/games/{game_id}/nations/{nation}/brief")
+def nation_brief(game_id: str, nation: str) -> dict:
+    """大模型 agent 看到的局势简报（调试、或者外部 agent 自己调用）。nation 可以写 3 或 nation:3。"""
+    from controllers.agent import brief
+    from engine.ids import parse_ref
+
+    game = _game(game_id)
+    try:
+        nid = int(nation) if nation.isdigit() else parse_ref(nation, "nation")
+    except ValueError as e:
+        raise HTTPException(422, str(e)) from e
+    with game.lock:
+        if nid not in game.state.nations:
+            raise HTTPException(404, "没有这个国家")
+        return brief.build(game.state, game.rules, nid, game.agent_memory.get(nid))
+
+
 @app.get("/api/games/{game_id}/tactics")
 def game_tactics(game_id: str, actor: str, col: int | None = None, row: int | None = None) -> dict:
     from engine.ids import parse_ref, ref
