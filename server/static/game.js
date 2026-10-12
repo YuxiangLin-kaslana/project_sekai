@@ -2025,6 +2025,18 @@ function drawCard(ctx, x, y, w, h, u, count, c, full) {
       ctx.fillStyle = "#ffd479";
       ctx.fillText(`建${u.task.turns_left}`, x + w / 2 - w * 0.05, y + h * 0.12);
     }
+  } else if (u.corps != null && G.units.get(u.corps)) {
+    // 小牌：左上角一个军团番号圆标（和远景兵牌一样），一眼分出哪几支是同一个军团
+    const no = corpsNumber(G.units.get(u.corps));
+    const br = Math.max(6, h * 0.3);
+    ctx.save();
+    ctx.beginPath(); ctx.arc(x - w / 2, y - h / 2, br, 0, Math.PI * 2);
+    ctx.fillStyle = "#fbf3dc"; ctx.fill();
+    ctx.lineWidth = 1.6; ctx.strokeStyle = shade(c, -0.35); ctx.stroke();
+    ctx.fillStyle = "#1f1a12"; ctx.font = `800 ${Math.round(br * 1.15)}px ${FONT}`;
+    ctx.textAlign = "center"; ctx.textBaseline = "middle";
+    ctx.fillText(no, x - w / 2, y - h / 2 + 0.5);
+    ctx.restore();
   }
   if (count > 1) {
     const br = Math.max(6, fs * 0.62);
