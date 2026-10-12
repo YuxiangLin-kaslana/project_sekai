@@ -916,3 +916,40 @@ def test_civ6_move_then_attack_costs_movement_and_only_once_a_turn(board):
     assert p.engaged_turn == s2.turn and p.moves_left * MOVE_STEPS + p.road_credit > 0
     assert action(s2, order(p, "move", to=[3, 5])).rejected
     assert not action(s2, order(p, "attack", to=[6, 3])).rejected
+
+
+def test_bombers_carpet_bomb_a_four_hex_rhombus(board):
+    """轰炸机地毯式轰炸：目标格和它沿进攻方向往前的菱形共 4 格，菱形里每支敌军都挨炸（外面三格 70%）。"""
+    from engine.systems.combat import AREA_OUTER, carpet, preview
+
+    base(board, 1, 1, 3)
+    bomber = add(board, "bomber", 1, 1, 3)
+    g = board.grid
+    target = g.idx(6, 3)
+    shape = carpet(g, bomber.tile, target)
+    assert len(shape) == 4 and shape[0] == target
+    assert all(g.distance(t, target) == 1 for t in shape[1:])
+    for t in shape:
+        add(board, "infantry", 2, t % g.width, t // g.width)
+    info, problem = preview(board, RULES, bomber, target)
+    assert problem is None and info["area_tiles"] == shape
+    hit = {a["tile"] for a in info["area"]}
+    assert hit == set(shape[1:])  # 目标格本身是主目标，另外三格各有一支被波及
+    outer = [a["damage"] for a in info["area"] if a["tile"] != target]
+    assert max(outer) <= info["damage"] * AREA_OUTER // 100 + 1
+
+
+def test_fighters_intercept_bombers_before_they_drop_their_bombs(board):
+    """拦截先于投弹：轰炸机飞到目标上空的下一回合，战斗机在它投弹之前打它。"""
+    base(board, 1, 1, 3)
+    base(board, 2, 10, 3)
+    bomber = add(board, "bomber", 1, 1, 3)
+    victim = add(board, "infantry", 2, 6, 3)
+    s = step(board, parse_orders([order(bomber, "attack", to=[6, 3])]), RULES).state
+    assert s.units[bomber.id].sortie["stage"] == "outbound"  # 飞到目标上空，下回合投弹
+    fighter = add(s, "fighter", 2, 10, 3)
+    res = step(s, parse_orders([order(fighter, "attack", to=[6, 3])]), RULES)
+    fights = [e for e in res.events if e["type"] == "combat"]
+    first = fights[0]
+    assert first["attacker"] == f"unit:{fighter.id}" and first["defender"] == f"unit:{bomber.id}"
+    assert victim.id in res.state.units

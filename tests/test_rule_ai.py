@@ -568,3 +568,19 @@ def test_decision_budget_is_per_nation(board, monkeypatch):
     assert rule_ai.actor_budget(board) == 64 and len(big) == 90
     board.grid.tuning = {"ai_budget": 999}
     assert rule_ai.actor_budget(board) == 256  # 每国最多 256 支
+
+
+def test_ai_fighters_intercept_incoming_bombers(board):
+    """制空权：敌方轰炸机飞到本国部队上空（下回合投弹），AI 的战斗机先把它打掉，炸弹落不下来。"""
+    board.nations[1].ai_enabled = True
+    g = board.grid
+    add(board, "infantry", 1, (5, 10))  # 城市守军
+    victim = add(board, "infantry", 1, (8, 10), hp=180)
+    fighter = add(board, "fighter", 1, (4, 10))  # 停在首都（机场）
+    bomber = add(board, "bomber", 2, (8, 10))
+    bomber.sortie = {"stage": "outbound", "target": victim.tile, "base": g.idx(28, 10),
+                     "carrier": None, "turn": board.turn - 1}  # fmt: skip
+    result = step(board, [], RULES)
+    fights = [e for e in result.events if e["type"] == "combat"]
+    assert fights and fights[0]["attacker"] == f"unit:{fighter.id}"
+    assert fights[0]["defender"] == f"unit:{bomber.id}"  # 拦截在投弹之前

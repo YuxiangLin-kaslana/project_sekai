@@ -146,6 +146,9 @@ class UnitType(_Strict):
     flak_range: int = Field(2, ge=1)
     carry: int = Field(0, ge=0)  # 舰船能载运几支陆军（登船 / 下船）
     air_capacity: int = Field(0, ge=0)  # 航空母舰能搭载几支航空单位（移动机场）
+    # 一次攻击覆盖几格：1 = 只打目标格；4 = 目标格和它沿进攻方向往前的菱形（轰炸机地毯式轰炸），
+    # 目标格外的三格按 AREA_OUTER% 伤害（engine/systems/combat.py）
+    area_tiles: int = Field(1, ge=1, le=4)
     moves: int = Field(2, ge=1)  # 每回合移动力
     hp: int = Field(100, ge=1, le=1000)  # 生命上限（满血）
     sight: int = Field(2, ge=0)  # 视野半径

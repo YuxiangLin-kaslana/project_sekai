@@ -55,7 +55,9 @@ def test_three_warship_tiers_differ_in_speed_cargo_and_reach():
     assert d.torpedo and not d.ranged_strength and d.range < c.range  # 鱼雷射程最近
     assert c.range < b.range and c.ranged_strength < b.ranged_strength
     carrier = RULES.units["carrier"]
-    assert carrier.air_capacity and not carrier.ranged_strength and not carrier.torpedo
+    # 航母：搭载飞机，自带舰载机群（远程、间接，射程比战列舰远），没有鱼雷
+    assert carrier.air_capacity and carrier.ranged_strength and not carrier.torpedo
+    assert carrier.range > b.range and "indirect" in carrier.tags
 
 
 def test_destroyer_torpedoes_only_hit_ships_hard_at_close_range(board):
@@ -74,11 +76,15 @@ def test_destroyer_torpedoes_only_hit_ships_hard_at_close_range(board):
     assert result.state.units[tin.id].hp == 100  # 鱼雷没有反击
 
 
-def test_carrier_has_no_strike_of_its_own(board):
+def test_carrier_air_wing_strikes_ships_and_shore(board):
+    """航母自带舰载机群：不靠另外搭载的飞机也能对海、对岸打击（不看视线，没有反击）。"""
     carrier = add(board, "carrier", 1, 6, 3)
-    add(board, "destroyer", 2, 7, 3)
-    assert lock_reason(board, RULES, carrier) == "航空母舰没有攻击手段，靠舰载机作战"
-    assert act(board, order(carrier, "attack", to=[7, 3])).rejected
+    ship = add(board, "destroyer", 2, 7, 3)
+    assert lock_reason(board, RULES, carrier) is None
+    result = act(board, order(carrier, "attack", to=[7, 3]))
+    assert not result.rejected
+    assert result.state.units[ship.id].hp < 100
+    assert result.state.units[carrier.id].hp == RULES.units["carrier"].hp
 
 
 def test_troops_embark_sail_and_land(board):

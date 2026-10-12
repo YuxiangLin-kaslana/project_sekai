@@ -2960,6 +2960,11 @@ function drawTactics(ctx, v) {
   if (tile != null) {
     if (moving && t.move_paths?.[tile]) traceTiles(ctx, v, t.move_paths[tile], '#a7e7f2');
     const actor = G.units.get(G.actor) ?? G.cities.get(G.actor);
+    // 地毯式轰炸：标出这次会一起挨炸的菱形四格
+    const shown = attacking ? (t.targets.find(x => x.tile === tile) ?? t.approach?.find(x => x.tile === tile)) : null;
+    if (shown?.area_tiles?.length > 1) {
+      for (const a of shown.area_tiles) if (a !== tile) tacticalHex(ctx, v, a, 'rgba(213,79,55,.18)', '#f0b08a', Math.max(1.2, v.z*.03), [Math.max(3, v.z*.1), Math.max(2, v.z*.08)]);
+    }
     if (attacking && targetSet.has(tile)) {
       if (actor) traceTiles(ctx, v, [actor.tile, tile], '#ffbc87', true);
     } else if (attacking && approach.has(tile) && actor) {

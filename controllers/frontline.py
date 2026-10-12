@@ -491,6 +491,20 @@ def _as_front(ctx, nation, seg) -> dict:
     want_melee = max(0, min(12, len(seg["tiles"]) + seg["enemy_units"] // 2) - melee)
     want_siege = max(0, min(6, 1 + len(seg["tiles"]) // 4) - guns) if seg["stance"] == "进攻" else 0
     tiles = seg["tiles"]
+    # 海上能不能打到目标城（舰炮、航母舰载机）：目标城 3 格内有本国舰船开得到的海面
+    seas = []
+    city = s.cities.get(seg.get("objective"))
+    if city is not None:
+        R = _r()
+        dist = R.sea_reach(ctx, nation.id)
+        wc = R.geography(s, rules)["water_components"]
+        seas = sorted(
+            {
+                int(wc[t])
+                for t in s.grid.within(city.tile, 3)
+                if wc[t] >= 0 and dist[t] < R.UNREACHED
+            }
+        )
     arrow = None
     city = s.cities.get(seg.get("objective"))
     if seg["stance"] == "进攻" and city is not None and len(members) >= 2:
@@ -520,6 +534,7 @@ def _as_front(ctx, nation, seg) -> dict:
         "stage": tiles[len(tiles) // 2],
         "edges": seg["edges"],
         "arrow": arrow,
+        "bombard_seas": seas,
         "want_melee": want_melee,
         "want_siege": want_siege,
         "want_lift": 0,

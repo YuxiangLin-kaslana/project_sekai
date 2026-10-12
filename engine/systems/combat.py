@@ -131,7 +131,7 @@ def lock_reason(state, rules, actor) -> str | None:
         return "只有军事单位可以攻击"
     if actor.layer == "cargo":
         return "在船上，先下船"
-    if "carrier" in ut.tags:
+    if "carrier" in ut.tags and not ut.ranged_strength:
         return "航空母舰没有攻击手段，靠舰载机作战"
     if "unarmed" in ut.tags:
         return f"{ut.name}没有攻击手段"
@@ -688,37 +688,50 @@ def preview(state, rules, actor, tile) -> tuple[dict | None, str | None]:
         mult = rules.encirclement.damage_taken
         damage = damage * mult // 100
         tactical = [*tactical, ("目标被包围", mult - 100)]
-    # 炮击整格：其余敌军（和城市）各按自己的防御力受伤
+    # 炮击整格：其余敌军（和城市）各按自己的防御力受伤；地毯式轰炸（area_tiles = 4）再覆盖目标格往前的
+    # 菱形三格，那三格里的敌军、敌城按 AREA_OUTER% 伤害
     area = []
+    area_tiles = [tile]
     if (
         kind != "melee"
         and isinstance(actor, Unit)
         and "area_damage" in rules.units[actor.type].tags
     ):
-        others = [
-            u
-            for u in state.units_at(tile, target.layer if isinstance(target, Unit) else "surface")
-            if _war(state, u.nation, actor.nation)
-            and rules.units[u.type].category == "military"
-            and u is not target
-        ]
-        city = state.city_at(tile)
-        if city is not None and _war(state, city.nation, actor.nation) and city is not target:
-            others.append(city)
-        for o in sorted(others, key=lambda o: (isinstance(o, City), o.id)):
-            hit = max(
-                8,
-                min(65, 30 * a // strength(state, rules, o, defending=True, against=actor.nation)),
-            )
-            hit = hit * _damage_scale(rules, actor, o) // 100
-            area.append(
-                {
-                    "target": ref("city" if isinstance(o, City) else "unit", o.id),
-                    "damage": min(
-                        city_defense(state, rules, o) if isinstance(o, City) else o.hp, hit
+        ut_a = rules.units[actor.type]
+        if ut_a.area_tiles > 1:
+            area_tiles = carpet(state.grid, origin, tile)[: ut_a.area_tiles]
+        layer = target.layer if isinstance(target, Unit) else "surface"
+        for t in area_tiles:
+            others = [
+                u
+                for u in state.units_at(t, layer if t == tile else "surface")
+                if _war(state, u.nation, actor.nation)
+                and rules.units[u.type].category == "military"
+                and u is not target
+            ]
+            city = state.city_at(t)
+            if city is not None and _war(state, city.nation, actor.nation) and city is not target:
+                others.append(city)
+            for o in sorted(others, key=lambda o: (isinstance(o, City), o.id)):
+                hit = max(
+                    8,
+                    min(
+                        65,
+                        30 * a // strength(state, rules, o, defending=True, against=actor.nation),
                     ),
-                }
-            )
+                )
+                hit = hit * _damage_scale(rules, actor, o) // 100
+                if t != tile:
+                    hit = hit * AREA_OUTER // 100
+                area.append(
+                    {
+                        "target": ref("city" if isinstance(o, City) else "unit", o.id),
+                        "tile": t,
+                        "damage": min(
+                            city_defense(state, rules, o) if isinstance(o, City) else o.hp, hit
+                        ),
+                    }
+                )
     retaliation = max(6, min(60, 25 * d // a)) if kind == "melee" else 0
     if (city_defense(state, rules, target) if isinstance(target, City) else target.hp) <= 0:
         retaliation = 0
@@ -751,7 +764,24 @@ def preview(state, rules, actor, tile) -> tuple[dict | None, str | None]:
         ]
         + [{"side": "defender", "label": label, "value": value} for label, value in notes_d],
         "area": area,
+        "area_tiles": area_tiles,
     }, None
+
+
+AREA_OUTER = 70  # 地毯式轰炸：目标格之外那三格的伤害（%）
+
+
+def carpet(grid, origin: int, tile: int) -> list[int]:
+    """地毯式轰炸的菱形：目标格、沿进攻方向往前一格、以及这两格共同的两个邻格（共 4 格）。"""
+    from engine.systems.zoc import bearing
+
+    d = bearing(grid, origin, tile) if origin != tile else 0
+    out = [tile]
+    for k in (d, (d + 5) % 6, (d + 1) % 6):
+        n = int(grid.neighbors[tile, k])
+        if n >= 0:
+            out.append(n)
+    return out
 
 
 def tactics(state, rules, actor) -> dict:
@@ -1104,12 +1134,27 @@ def _settle(ctx: StepContext, tile: int) -> None:
             _destroy(ctx, stranded, tile, "被消灭")  # 留在格里的敌方平民（含将领）被消灭
 
 
+def _intercept(state, rules, order) -> bool:
+    """战斗机打空中目标的攻击（拦截）：目标格上有交战国的飞机。"""
+    if isinstance(order, CityAttack):
+        return False
+    unit = state.units.get(parse_ref(order.unit, "unit"))
+    if unit is None or "air_superiority" not in rules.units[unit.type].tags:
+        return False
+    tile = state.grid.idx(*order.to)
+    return any(_war(state, v.nation, unit.nation) for v in state.units_at(tile, "air"))
+
+
 def _resolve(ctx: StepContext) -> None:
     s, rules = ctx.state, ctx.rules
     from engine.systems import air
 
     _skirmish(ctx)
-    for order in [*air.strike_orders(ctx), *ctx.attacks]:
+    # 拦截在投弹之前：战斗机打空中目标（来袭的轰炸机、敌方战斗机）先结算，轰炸机再投弹，
+    # 其余攻击按提交顺序（远程先于近战）
+    intercepts = [o for o in ctx.attacks if _intercept(s, rules, o)]
+    rest = [o for o in ctx.attacks if not _intercept(s, rules, o)]
+    for order in [*intercepts, *air.strike_orders(ctx), *rest]:
         is_city = isinstance(order, CityAttack)
         collection, key = (s.cities, "city") if is_city else (s.units, "unit")
         automatic_order = (order.type, getattr(order, key), order.to) in ctx.automatic_attacks

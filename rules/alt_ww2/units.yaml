@@ -254,6 +254,9 @@ carrier:
   short: 航
   domain: sea
   strength: 8
+  ranged_strength: 20    # 舰载机群：从海上对地、对海打击（不看视线），不靠另外搭载的飞机也能打
+  range: 6
+  damage_vs_city: 130
   moves: 9
   sight: 4
   cost: 360
@@ -262,7 +265,7 @@ carrier:
   upkeep: 4
   air_capacity: 3
   requires_resources: [iron, oil]
-  tags: [carrier]
+  tags: [carrier, indirect, suppress]
   icon: carrier
 
 # ---- 空军（P3 实装空战，先定义数据和单位牌） ----
@@ -271,7 +274,7 @@ fighter:
   short: 歼
   layer: air
   domain: air
-  strength: 10
+  strength: 13
   range: 8
   moves: 8
   sight: 3
@@ -290,7 +293,8 @@ bomber:
   layer: air
   domain: air
   strength: 4
-  ranged_strength: 20
+  ranged_strength: 28
+  area_tiles: 4          # 地毯式轰炸：目标格和它往前的菱形共 4 格
   range: 14
   moves: 14
   sight: 2
@@ -298,7 +302,7 @@ bomber:
   population: 1
   gold: 70
   upkeep: 3
-  tags: [siege, suppress]
+  tags: [siege, suppress, area_damage]
   requires_resources: [aluminum]   # 有铝才能造飞机；没有石油，飞机战斗力 −30%
   fuel: true
   icon: bomber
