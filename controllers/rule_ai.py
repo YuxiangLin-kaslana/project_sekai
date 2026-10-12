@@ -4164,7 +4164,7 @@ def _idle(ctx, unit, armies):
 
 def resolve(ctx):
     """国家 AI：各国在回合开始时的同一份局面上各自规划（谁先谁后不影响别国，可以分到多个进程并行，
-    见 controllers/parallel.py），主进程再按国家编号依次重放各国的指令。"""
+    见 controllers/parallel.py），主进程再按本回合的先后名次（轮流先手）依次重放各国的指令。"""
     s = ctx.state
     if ctx.immediate or not any(n.ai_enabled for n in s.nations.values()):
         return
@@ -4221,7 +4221,12 @@ def resolve(ctx):
         job["flow_budget"] = max(FLOW_MIN, round(len(job["active"]) * FLOWS_PER_ACTOR))
     from controllers import parallel
 
-    for result in parallel.run(s, ctx.rules, [jobs[n] for n in sorted(jobs)]):
+    # 各国的指令按本回合的先后名次重放（轮流先手，engine/systems/turn_order.py）
+    from engine.systems.turn_order import rotation
+
+    rank = rotation(s)
+    order = sorted(jobs, key=lambda n: (rank.get(n, len(rank)), n))
+    for result in parallel.run(s, ctx.rules, [jobs[n] for n in order]):
         merge(ctx, result)
 
 

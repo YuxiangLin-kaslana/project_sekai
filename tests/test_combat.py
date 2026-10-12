@@ -1052,3 +1052,42 @@ def test_an_airfield_holds_six_planes_and_a_carrier_four(board):
         assert has_room(board, RULES, sea, "air", 1)
         add(board, "fighter", 1, 8, 3)
     assert not has_room(board, RULES, sea, "air", 1)  # 一艘航母最多 4 架
+
+
+def test_first_move_rotates_between_nations_every_turn(board):
+    from engine.systems.turn_order import rotation
+
+    board.nations[3] = Nation(3, "C", "#33aa33", None)
+    seen = []
+    for turn in range(1, 4):
+        board.turn = turn
+        rank = rotation(board)
+        seen.append(min(rank, key=rank.get))
+    assert sorted(seen) == [1, 2, 3]  # 三个回合三个国家轮流先手
+    board.nations[3].eliminated = True
+    board.turn = 4
+    assert rotation(board)[3] == 2  # 灭亡的国家排在最后、不占先手
+    firsts = set()
+    for turn in (4, 5):
+        board.turn = turn
+        rank = rotation(board)
+        firsts.add(min(rank, key=rank.get))
+    assert firsts == {1, 2}  # 两国时一回合一换
+
+
+def test_mirrored_duel_is_decided_by_who_moves_first_this_turn(board):
+    """两门炮隔着射程互射：本回合先手的一方先开火。下一回合先手换人。"""
+    from engine.systems.turn_order import rotation
+
+    a = add(board, "artillery", 1, 3, 3, hp=20)
+    b = add(board, "artillery", 2, 5, 3, hp=20)
+    board.relations["1:2"] = {"status": "war", "since": 0}
+    raw = [order(a, "attack", to=[5, 3]), order(b, "attack", to=[3, 3])]
+    first = {}
+    for turn in (6, 7):
+        board.turn = turn
+        rank = rotation(board)
+        out = action(board, *raw).state
+        survivor = 1 if a.id in out.units and b.id not in out.units else 2 if b.id in out.units and a.id not in out.units else 0
+        first[min(rank, key=rank.get)] = survivor
+    assert first == {1: 1, 2: 2}

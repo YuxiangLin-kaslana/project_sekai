@@ -1219,8 +1219,13 @@ def _resolve(ctx: StepContext) -> None:
     _skirmish(ctx)
     # 战斗机打空中目标（敌方飞机）先结算，其余攻击按提交顺序（远程先于近战）；轰炸机起飞当回合投弹，
     # 投弹前先挨敌方战斗机拦截一次（air.intercept）
-    intercepts = [o for o in ctx.attacks if _intercept(s, rules, o)]
-    rest = [o for o in ctx.attacks if not _intercept(s, rules, o)]
+    # 轮流先手（engine/systems/turn_order.py）：各国的攻击按本回合的先后名次结算，同一国家内保持提交顺序
+    from engine.systems.turn_order import rotation
+
+    rank = rotation(s)
+    attacks = sorted(ctx.attacks, key=lambda o: rank.get(parse_ref(o.issuer, "nation"), 0))
+    intercepts = [o for o in attacks if _intercept(s, rules, o)]
+    rest = [o for o in attacks if not _intercept(s, rules, o)]
     for order in [*intercepts, *rest]:
         _execute(ctx, order)
 

@@ -461,6 +461,9 @@ def move_target_problem(ctx: StepContext, unit: Unit, tile: int) -> str | None:
 
 def resolve(ctx: StepContext) -> None:
     state, rules = ctx.state, ctx.rules
+    from engine.systems.turn_order import rotation
+
+    rank = rotation(state)  # 轮流先手：各国按本回合的先后名次走
     movers = sorted(
         (
             u
@@ -470,7 +473,7 @@ def resolve(ctx: StepContext) -> None:
             and u.engaged_turn != state.turn
             and (not ctx.immediate or u.id in ctx.moving)
         ),
-        key=lambda u: (u.nation, u.id),
+        key=lambda u: (rank.get(u.nation, 0), u.id),
     )
     handled = set()
     for unit in movers:

@@ -473,7 +473,19 @@ def _sort_key(order: Order) -> tuple:
 
 
 def resolve(ctx: StepContext) -> None:
-    for order in sorted(ctx.orders, key=_sort_key):
+    from engine.systems.turn_order import rotation
+
+    rank = rotation(ctx.state)  # 轮流先手：同一优先级里各国按本回合的先后名次
+
+    def key(order):
+        prio, issuer, target = _sort_key(order)
+        try:
+            nation = parse_ref(issuer, "nation")
+        except ValueError:
+            nation = -1
+        return (prio, rank.get(nation, len(rank)), issuer, target)
+
+    for order in sorted(ctx.orders, key=key):
         try:
             _apply(ctx, order)
             if isinstance(order, FormGroup):
