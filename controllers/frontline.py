@@ -44,6 +44,25 @@ ARROW_REACH = 12  # 进攻箭头只画离目标城这么近（× 地图尺度的
 DEFENSIVE_SCORE = 20  # 防守时只打这么划算以上的（或者能击杀）
 MAIN_WEIGHT = 2.5  # 主攻方向分兵的份额加倍（集中兵力在一处突破，其余地段薄守）
 MAIN_OFFENSE = 1.0  # 主攻方向兵力和对面相当就进攻（别的地段要 OFFENSE 倍）
+CONSOLIDATE = 0.25  # 动荡、刚打下来的城占到这么多：巩固占领区（只有主攻方向还能进攻，而且要占优）
+
+
+def consolidating(state, rules, nid) -> bool:
+    """国家在巩固占领区：动荡（稳定度低于 unrest）或刚打下来（conquest_turns 回合内）的城占到 CONSOLIDATE。
+    打得太快、新占领的地方民心未附时先停一停（也给反霸同盟、起义留出翻盘的机会）。"""
+    cities = state.nation_cities(nid)
+    if len(cities) < 4:
+        return False
+    cfg = rules.stability
+    shaky = sum(
+        1
+        for c in cities
+        if c.stability < cfg.unrest
+        or (c.captured_turn is not None and state.turn - c.captured_turn < cfg.conquest_turns)
+    )
+    return shaky >= CONSOLIDATE * len(cities)
+
+
 UNREACHED = 1 << 20
 
 
@@ -365,8 +384,14 @@ def _stance(ctx, nation, seg):
     mine = sum(combat.strength(s, rules, s.units[uid]) for uid in seg["units"] if uid in s.units)
     seg["strength"] = round(mine)
     theirs = seg["enemy_strength"]
-    need = MAIN_OFFENSE if seg.get("main") else OFFENSE
-    attack = bool(seg["units"]) and (theirs == 0 or mine >= need * theirs)
+    hold = consolidating(s, rules, nation.id)
+    if hold:
+        need = (
+            OFFENSE if seg.get("main") else math.inf
+        )  # 巩固占领区：只有主攻方向还能进攻，而且要占优
+    else:
+        need = MAIN_OFFENSE if seg.get("main") else OFFENSE
+    attack = bool(seg["units"]) and (theirs == 0 and not hold or mine >= need * theirs)
     seg["stance"] = "进攻" if attack else "防守"
     who = s.nations[seg["enemy"]].name if seg["enemy"] in s.nations else "敌军"
     if attack:
@@ -377,6 +402,8 @@ def _stance(ctx, nation, seg):
             if city
             else f"{lead}对 {who} 的战线兵力占优（{mine:.0f} 对 {theirs}），肃清敌军"
         )
+    elif hold:
+        seg["reason"] = f"巩固新占领区（动荡、刚打下来的城太多），对 {who} 的战线暂取守势"
     else:
         seg["reason"] = f"对 {who} 的战线兵力不足（{mine:.0f} 对 {theirs}），就地防守，只打划算的仗"
 

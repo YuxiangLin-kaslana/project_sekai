@@ -485,6 +485,10 @@ def _maybe_declare(ctx, nid, alive, pw, borders, rng) -> None:
     strategy = s.nations[nid].strategy or {}
     if strategy.get("posture") != "战争":
         return  # 还在扩张期（国家 AI 还没转入战争姿态）：先发展
+    from controllers.frontline import consolidating
+
+    if consolidating(s, ctx.rules, nid):
+        return  # 正在巩固新占领区：不开新仗
     mine = _bloc(s, nid, pw)
     foes = set(enemies(s, nid))
     if sum(pw.get(e, 0) for e in foes) > WAR_LOAD * pw.get(nid, 0):
