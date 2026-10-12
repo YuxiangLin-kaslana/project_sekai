@@ -71,8 +71,9 @@ def city_defense(state, rules, city) -> int:
     return max(0, city.hp) + sum(u.hp // 2 for u in garrison(state, rules, city))
 
 
-def damage_city(ctx, city, amount: int) -> None:
-    """城防挨打：先打城市本体，打空了再打守城部队（城防值 1 点 = 部队 2 点生命，生命多的先挨）。"""
+def damage_city(ctx, city, amount: int, by=None) -> None:
+    """城防挨打：先打城市本体，打空了再打守城部队（城防值 1 点 = 部队 2 点生命，生命多的先挨）。
+    by：攻击方（打死守城部队记进它的战绩）。"""
     s, rules = ctx.state, ctx.rules
     take = min(city.hp, amount)
     city.hp -= take
@@ -85,7 +86,7 @@ def damage_city(ctx, city, amount: int) -> None:
         u.damaged_turn = s.turn
         left -= (hit + 1) // 2
         if u.hp <= 0:
-            _destroy(ctx, u, u.tile, "守城阵亡")
+            _destroy(ctx, u, u.tile, "守城阵亡", by=by)
 
 
 def _war(state, a, b) -> bool:
@@ -972,6 +973,7 @@ def _capture(ctx, city, unit):
     # Aircraft on a captured base and noncombatants surrender with the city.
     for parked in list(s.units_at(city.tile)):
         if parked.nation == previous:
+            credit(unit, parked, s)  # 城里投降的飞机、平民记进占城部队的战绩
             ctx.log.add(
                 "unit_destroyed",
                 unit=ref("unit", parked.id),
@@ -1012,8 +1014,18 @@ def _lost_aboard(ctx, ship) -> None:
         )
 
 
-def _destroy(ctx, unit, tile, reason=None):
+def credit(unit, victim, state) -> None:
+    """战绩：unit 击败了 victim（连同 victim 搭载的舰载机一起算）。城市、设施的攻击不记。"""
+    if isinstance(unit, Unit) and unit.id in state.units and victim is not unit:
+        unit.kills += 1 + len(state.aboard(victim))
+
+
+def _destroy(ctx, unit, tile, reason=None, by=None):
+    """消灭 unit（by：击败它的单位，记进 by 的战绩）。"""
+    credit(by, unit, ctx.state)
     extra = {"reason": reason} if reason else {}
+    if unit.name:
+        extra["name"] = unit.name  # 舰名、将领姓名
     ctx.log.add(
         "unit_destroyed",
         unit=ref("unit", unit.id),
@@ -1148,9 +1160,9 @@ def _skirmish(ctx: StepContext) -> None:
             gain(ctx, u, 4 + (8 if target.hp <= 0 else 0), "unit")
             gain(ctx, target, 3, "unit")
             if target.hp <= 0:
-                _destroy(ctx, target, tile)
+                _destroy(ctx, target, tile, by=u)
             if u.hp <= 0:
-                _destroy(ctx, u, tile)
+                _destroy(ctx, u, tile, by=target)
         _settle(ctx, tile)
 
 
@@ -1170,7 +1182,7 @@ def _advance(ctx: StepContext, actor, start: int, tile: int) -> None:
         return
     for stranded in list(here):
         if stranded.nation != actor.nation:
-            _destroy(ctx, stranded, tile, "被消灭")
+            _destroy(ctx, stranded, tile, "被消灭", by=actor)
     s.move_unit(actor, tile)
     ctx.log.add("unit_moved", unit=ref("unit", actor.id), path=[start, tile])
 
@@ -1188,7 +1200,7 @@ def _settle(ctx: StepContext, tile: int) -> None:
         _capture(ctx, city, winner)
     for stranded in list(s.units_at(tile, "surface")):
         if stranded.nation != winner.nation and not _military(rules, stranded):
-            _destroy(ctx, stranded, tile, "被消灭")  # 留在格里的敌方平民（含将领）被消灭
+            _destroy(ctx, stranded, tile, "被消灭", by=winner)  # 留在格里的敌方平民（含将领）被消灭
 
 
 def _intercept(state, rules, order) -> bool:
@@ -1296,7 +1308,7 @@ def _execute(ctx: StepContext, order) -> None:
         return
     target = target_at(s, rules, actor, tile)
     if isinstance(target, City):
-        damage_city(ctx, target, info["damage"])  # 先打城市本体，再打守城部队
+        damage_city(ctx, target, info["damage"], by=actor)  # 先打城市本体，再打守城部队
     else:
         target.hp = max(0, target.hp - info["damage"])
     if isinstance(actor, Unit) and actor.tile != tile:
@@ -1310,7 +1322,7 @@ def _execute(ctx: StepContext, order) -> None:
         if other is None:
             continue
         if isinstance(other, City):
-            damage_city(ctx, other, hit["damage"])
+            damage_city(ctx, other, hit["damage"], by=actor)
         else:
             other.hp = max(0, other.hp - hit["damage"])
         other.damaged_turn = s.turn
@@ -1349,19 +1361,22 @@ def _execute(ctx: StepContext, order) -> None:
     gain(ctx, target, 3, "city" if isinstance(target, City) else "unit")
     for other in splashed:
         if isinstance(other, Unit) and other.hp <= 0 and other.id in s.units:
-            _destroy(ctx, other, other.tile, "炮击")
+            _destroy(ctx, other, other.tile, "炮击", by=actor)
     dead_target = (city_defense(s, rules, target) if isinstance(target, City) else target.hp) <= 0
     if dead_target and isinstance(target, Unit):
+        credit(actor, target, s)
         ctx.log.add(
             "unit_destroyed",
             unit=ref("unit", target.id),
             tile=target.tile,
             unit_type=target.type,
             nation=ref("nation", target.nation),
+            **({"name": target.name} if target.name else {}),
         )
         _lost_aboard(ctx, target)
         s.remove_unit(target.id)
     if actor.hp <= 0 and isinstance(actor, Unit):
+        credit(target, actor, s)  # 反击打死了攻击方
         ctx.log.add(
             "unit_destroyed",
             unit=ref("unit", actor.id),
@@ -1387,6 +1402,6 @@ def _execute(ctx: StepContext, order) -> None:
             elif city is None:
                 for stranded in list(s.units_at(tile, actor.layer)):
                     if stranded.nation != actor.nation:
-                        _destroy(ctx, stranded, tile, "被消灭")
+                        _destroy(ctx, stranded, tile, "被消灭", by=actor)
             s.move_unit(actor, tile)
             ctx.log.add("unit_moved", unit=ref("unit", actor.id), path=[start, tile])

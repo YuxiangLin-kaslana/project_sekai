@@ -149,12 +149,13 @@ class Unit:
     sortie: dict | None = (
         None  # 飞机出击中：{stage: outbound|patrol|return, target, base, carrier, turn, strikes}
     )
-    name: str = ""  # 将领姓名
+    name: str = ""  # 将领姓名；战舰的舰名（“定远号”）
     rank: int = 0  # 将领星级（★1…★5，出生时抽签）
     title: str = ""  # 将领统率的军团番号（第 N 军团）
     facing: int = 0  # 朝向（0 东 1 东北 2 西北 3 西 4 西南 5 东南），见 engine/systems/zoc.py
     home: int | None = None  # 供养它的城市（造出它的城）：活着的单位照样吃这座城的粮食、耗生产力
     engaged_turn: int = -1  # 走进敌方控制区的回合：这回合不能再移动，但剩下的移动力还能攻击
+    kills: int = 0  # 战绩：击败了几个敌方单位（部队、平民、舰载机都算）
 
 
 _UNIT_FIELDS = operator.attrgetter(*Unit.__slots__)

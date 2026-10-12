@@ -127,7 +127,7 @@ def fly(ctx, plane, dst) -> bool:
         )
         gain(ctx, gun, 3 + (6 if plane.hp <= 0 else 0), "unit")
         if plane.hp <= 0:
-            _destroy(ctx, plane, src, "被防空火力击落")
+            _destroy(ctx, plane, src, "被防空火力击落", by=gun)
             return False
     if dst != plane.tile:
         s.move_unit(plane, dst)

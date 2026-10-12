@@ -164,6 +164,35 @@ def west_people(rng):
     return _pick(rng, [f"{g}·{s}" for g in WEST_GIVEN for s in WEST_SURNAMES], COUNT, set())
 
 
+# ---- 舰名（战舰造出来时从本系列里挑，engine/systems/names.py 的 ship_name）
+SHIP_COUNT = 200
+EAST_SHIP_HEAD = "定镇致经靖济平威扬超宁肇永逸应建飞振广保武安海长鸿腾凌御"
+EAST_SHIP_TAIL = "远海安宁威勇捷胜清和平霆云龙鹏涛澜疆"
+WEST_SHIPS = [
+    "无畏", "不屈", "胜利", "光辉", "可畏", "坚定", "勇敢", "凯旋", "荣耀", "决心", "复仇", "反击",
+    "狂怒", "无敌", "不倦", "警惕", "果敢", "雷霆", "风暴", "飓风", "闪电", "利剑", "长矛", "猎户座",
+    "天狼星", "北极星", "阿波罗", "海神", "雅典娜", "密涅瓦", "朱诺", "狄安娜", "玛尔斯", "赫拉克勒斯",
+    "阿喀琉斯", "阿贾克斯", "尤利西斯", "埃涅阿斯", "无惧", "坚毅", "英勇", "荣誉", "正义", "自由",
+    "团结", "黎明", "晨星", "暮光", "海燕", "信天翁", "雄鹰", "猎鹰", "渡鸦", "狮心", "王冠", "权杖",
+    "宝剑", "盾牌", "铁甲", "征服者", "守护者", "开拓者", "远征", "冒险", "探索", "发现", "进取",
+    "挑战", "胜利女神", "凤凰", "独角兽", "狮鹫", "巨人", "泰坦", "海妖", "三叉戟", "堡垒", "哨兵",
+]  # fmt: skip
+
+
+def east_ships(rng):
+    pool = [h + t for h in EAST_SHIP_HEAD for t in EAST_SHIP_TAIL if h != t]
+    return [n + "号" for n in _pick(rng, pool, SHIP_COUNT, set())]
+
+
+def west_ships(rng):
+    # 美德、星辰、神话的名字，再加上本系列的名和姓（“威廉号”“施密特号”）
+    people = [s.split("·")[-1] for s in WEST_SURNAMES] + list(WEST_GIVEN)
+    pool = list(
+        dict.fromkeys(WEST_SHIPS + [p for p in people if len(p) >= 2])
+    )  # “让号”这种单字名不用
+    return [n + "号" for n in _pick(rng, pool, SHIP_COUNT, set())]
+
+
 def main():
     rng = random.Random(20261010)
     taken: set[str] = set(EAST_NATIONS) | set(WEST_NATIONS)
@@ -184,8 +213,12 @@ def main():
             "people": west_people(rng),
         },
     }
+    # 舰名放在最后抽：不改变前面国名、城市名、人名的抽样结果
+    data["east"]["ships"] = east_ships(rng)
+    data["west"]["ships"] = west_ships(rng)
     head = (
-        "# 名字库（架空）：东方 / 西方两个系列，各 20 个国名、1000 个城市名、1000 个人名（将领）。\n"
+        "# 名字库（架空）：东方 / 西方两个系列，各 20 个国名、1000 个城市名、1000 个人名（将领）、"
+        "200 个舰名。\n"
         "# 由 tools/names/generate.py 生成；国名和城市名在同一系列里可以互用（见 engine/systems/names.py）。\n"
     )
     body = yaml.safe_dump(data, allow_unicode=True, sort_keys=False, width=200)

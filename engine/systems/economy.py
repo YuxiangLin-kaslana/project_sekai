@@ -131,12 +131,16 @@ def _produce(ctx: StepContext, city: City) -> None:
                 home=city.id,  # 这座城供养它：照样吃这座城的粮食、耗生产力
             )
         )
+        from engine.systems.names import name_unit
+
+        name_unit(state, rules, unit)  # 战舰起舰名
         ctx.log.add(
             "unit_created",
             unit=ref("unit", unit.id),
             unit_type=key,
             city=ref("city", city.id),
             tile=tile,
+            **({"name": unit.name} if unit.name else {}),
         )
         if "general" in ut.tags:
             from engine.systems.generals import appoint

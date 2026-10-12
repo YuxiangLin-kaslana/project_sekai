@@ -23,6 +23,7 @@ from engine.systems.cities import (
     tile_yields,
     yield_value,
 )
+from engine.systems.names import name_unit
 from engine.systems.stacking import has_room
 
 START_RING = 2  # 开局单位最远放到首都几格外
@@ -143,7 +144,7 @@ def new_game(world: World, rules: Ruleset, tuning: dict | None = None) -> GameSt
             if spot is None:
                 continue
             ut = rules.units[kind]
-            state.add_unit(
+            unit = state.add_unit(
                 Unit(
                     id=state.new_id(),
                     type=kind,
@@ -154,4 +155,5 @@ def new_game(world: World, rules: Ruleset, tuning: dict | None = None) -> GameSt
                     moves_left=ut.moves,
                 )
             )
+            name_unit(state, rules, unit)  # 开局送的驱逐舰也有舰名
     return state

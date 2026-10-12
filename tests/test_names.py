@@ -64,3 +64,27 @@ def test_nations_names_and_colors_change_with_the_seed_and_stay_distinct():
     seen = {p["name"] for seed in range(20) for p in names.pick_nations(RULES, seed, 8)}
     assert seen & set(RULES.names["east"].nations + RULES.names["west"].nations)
     assert len(seen) > 30
+
+
+def test_warships_get_unique_names_from_their_series():
+    from engine.state import Unit
+
+    g = HexGrid.empty(20, 10, wrap_x=False)
+    s = GameState(1, 1, RULES.id, g)
+    s.nations = {
+        1: Nation(1, "东国", "#aa3333", None, culture="east"),
+        2: Nation(2, "西国", "#3333aa", None, culture="west"),
+    }
+    assert len(RULES.names["east"].ships) == 200 == len(set(RULES.names["west"].ships))
+    seen = []
+    for k in range(30):
+        nation = 1 + k % 2
+        ship = s.add_unit(Unit(s.new_id(), "destroyer", nation, g.idx(k % 20, k // 20), "surface"))
+        names.name_unit(s, RULES, ship)
+        pool = RULES.names["east" if nation == 1 else "west"].ships
+        assert ship.name in pool and ship.name.endswith("号")
+        seen.append(ship.name)
+    assert len(set(seen)) == len(seen)  # 现存的战舰不重名
+    foot = s.add_unit(Unit(s.new_id(), "infantry", 1, g.idx(5, 5), "surface"))
+    names.name_unit(s, RULES, foot)
+    assert foot.name == ""  # 只有战舰起舰名

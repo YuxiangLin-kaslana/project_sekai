@@ -985,7 +985,7 @@ const EVENT_TEXT = {
   directive_report: e => `${e.city ? cityName(e.city) : game.nationOf(e.nation)?.name ?? '国家'}：${e.reason}`,
   combat: (e) => `${e.kind === 'air' ? '起飞出击，' : ''}${KIND_TEXT[e.kind] ?? "远程攻击"}：敌方损失 ${e.damage}${e.retaliation ? `，己方损失 ${e.retaliation}` : ""}${e.suppressed?.length ? `，压制 ${e.suppressed.length} 支部队的驻守` : ""}${e.kind === 'air' ? (e.attacker_hp > 0 ? '，返航降落' : '，飞机没能返航') : ''}`,
   anti_air_fire: (e) => `${e.phase === 'enter' ? '敌机飞进防空圈' : e.phase === 'leave' ? '敌机飞出防空圈' : '防空火力开火'}：飞机损失 ${e.damage}${e.target_hp <= 0 ? "，被击落" : ""}`,
-  unit_destroyed: (e) => `${unitName(e.unit_type)} 损失${e.reason ? `（${e.reason}）` : ""}`,
+  unit_destroyed: (e) => `${unitName(e.unit_type)}${e.name ? `「${e.name}」` : ""} 损失${e.reason ? `（${e.reason}）` : ""}`,
   unit_moved: (e) => `部队沿路线移动 ${e.path.length-1} 格`,
   group_formed: (e) => `${e.units.length} 支部队合成编队，按最慢成员移动`,
   group_disbanded: () => '编队已解散；分散到不同格子后可以攻击',
@@ -1007,7 +1007,7 @@ const EVENT_TEXT = {
   tech_researched: (e) => `${game.nationOf(e.nation)?.name ?? e.nation} 研究完成：${e.name}`,
   research_set: (e) => `${game.nationOf(e.nation)?.name ?? e.nation} 开始研究 ${game.G.rules.techs?.[e.tech]?.name ?? e.tech}`,
   city_founded: (e) => `建立城市 ${e.name}`,
-  unit_created: (e) => `${unitName(e.unit_type)} 编成`,
+  unit_created: (e) => `${unitName(e.unit_type)}${e.name ? `「${e.name}」` : ""} 编成`,
   building_completed: (e) => `${cityName(e.city)} 建成 ${game.G.rules.buildings[e.building].name}`,
   facility_built: (e) => `${game.G.rules.buildings[e.facility].name} 竣工`,
   city_grew: (e) => `${cityName(e.city)} 人口增长到 ${e.population}`,
@@ -1379,7 +1379,8 @@ function unitRow(u) {
   const mid = document.createElement("div");
   mid.className = "grow";
   const str = u.rank ? `${u.title} 统帅 ${u.name} ${'★'.repeat(u.rank)}` : def.category === "civilian" ? "平民" : def.ranged_strength ? `战斗力 ${u.combat_strength??def.strength} · 远程 ${u.ranged_strength??def.ranged_strength}（射程 ${def.range}）` : def.anti_air ? `战斗力 ${u.combat_strength??def.strength} · 防空 ${u.ranged_strength??def.anti_air}（覆盖 ${def.range} 格）` : def.torpedo ? `战斗力 ${u.combat_strength??def.strength} · 鱼雷 ${u.ranged_strength??def.torpedo}（${def.range} 格，只打舰船）` : `战斗力 ${u.combat_strength??def.strength}`;
-  mid.innerHTML = `<div>${esc(def.name)} <span class="pill">Lv.${u.level??0}</span> <span class="num">${esc(nation.name)}</span></div><div>${str} · ${esc(unitStatus(u))}</div>`;
+  const record = def.category === 'military' ? ` · 击败 ${u.kills ?? 0}` : '';
+  mid.innerHTML = `<div>${esc(def.name)}${u.name && !u.rank ? `「${esc(u.name)}」` : ''} <span class="pill">Lv.${u.level??0}</span> <span class="num">${esc(nation.name)}</span></div><div>${str}${record} · ${esc(unitStatus(u))}</div>`;
   row.appendChild(mid);
   const hp = document.createElement("div");
   hp.className = "hp";
@@ -1950,12 +1951,12 @@ function tacticalCard(actor) {
   const box=document.createElement('div');box.className='card tactical-card';
   const unit=!!actor.type, def=unit?game.unitDef(actor):null;
   const name=unit?def.name:actor.name, nation=game.nationOf(actor.nation);
-  box.innerHTML=`<div class="tactical-heading"><div><small>${esc(nation.name)} · ${unit?'单位指挥':'城市防御'}</small><b>${esc(actor.rank?`${actor.title} · ${actor.name}`:name)}${actor.formation!=null?'编队':''}</b></div><span class="tactical-health">${actor.hp}<small> / ${unit?(actor.max_hp??100):200}</small></span></div>${xpHtml(actor,unit?'unit':'city')}`;
+  box.innerHTML=`<div class="tactical-heading"><div><small>${esc(nation.name)} · ${unit?'单位指挥':'城市防御'}</small><b>${esc(actor.rank?`${actor.title} · ${actor.name}`:unit&&actor.name?`${actor.name} · ${name}`:name)}${actor.formation!=null?'编队':''}</b></div><span class="tactical-health">${actor.hp}<small> / ${unit?(actor.max_hp??100):200}</small></span></div>${xpHtml(actor,unit?'unit':'city')}`;
   const stats=document.createElement('div');stats.className='tactical-stats';
   const move=unit?(game.G.tactics?.movement_left??actor.moves_left+(actor.road_credit??0)/(game.G.rules.move_steps??3)):null;
   const combat=game.G.tactics?.combat_strength??def?.strength;
   const ranged=game.G.tactics?.ranged_strength??def?.ranged_strength;
-  stats.innerHTML=unit?`<span>移动 <b>${move}</b></span><span>战力 <b>${combat}${ranged?'/'+ranged:''}</b></span><span>射程 <b>${game.G.tactics?.attack_range??(def.ranged_strength||def.anti_air||def.domain==='air'?def.range:1)}</b></span>`:`<span>攻击范围 <b>2 格</b></span><span>城防 <b>${actor.defense}</b></span>`;
+  stats.innerHTML=unit?`<span>移动 <b>${move}</b></span><span>战力 <b>${combat}${ranged?'/'+ranged:''}</b></span><span>射程 <b>${game.G.tactics?.attack_range??(def.ranged_strength||def.anti_air||def.domain==='air'?def.range:1)}</b></span><span title="战绩：击败了几个敌方单位">击败 <b>${actor.kills??0}</b></span>`:`<span>攻击范围 <b>2 格</b></span><span>城防 <b>${actor.defense}</b></span>`;
   box.appendChild(stats);
   const buttons=document.createElement('div');buttons.className='command-grid';
   if(unit)buttons.appendChild(commandButton('移动','move',()=>setCommandMode('move'),commandBusy||move<=0));

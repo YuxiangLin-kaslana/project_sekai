@@ -1981,18 +1981,24 @@ function drawCard(ctx, x, y, w, h, u, count, c, full) {
     ctx.font = `600 ${Math.max(8, fs * .75)}px ${FONT}`;
     ctx.fillStyle = "#ffe2a0"; ctx.textAlign = "left";
     if (!u.rank) ctx.fillText(`L${u.level ?? 0}`, x - w / 2 + w * .07, y + h * .23);
+    // 战绩：右上角标击败了几个敌方单位
+    if (u.kills) {
+      ctx.textAlign = "right"; ctx.fillStyle = "#ffb4a0";
+      ctx.fillText(`击${u.kills}`, x + w / 2 - w * .06, y - h / 2 + fs * 0.62);
+      ctx.textAlign = "left";
+    }
     // 军团成员：右下角标军团番号（第 3 军团 → 3军）
     const corps = u.corps != null ? G.units.get(u.corps) : null;
     if (corps?.title) {
       ctx.textAlign = "right"; ctx.fillStyle = "#ffd479";
       ctx.fillText(`${corps.title.replace(/[^0-9]/g, "")}军`, x + w / 2 - w * .06, y + h * .23);
     }
-    // 将领：牌下方写名字和番号
-    if (u.rank && u.name) {
+    // 将领：牌下方写名字和番号；战舰写舰名
+    if (u.name) {
       ctx.save();
       ctx.font = `700 ${Math.max(9, fs * .8)}px ${FONT}`; ctx.textAlign = "center";
       ctx.lineJoin = "round"; ctx.lineWidth = Math.max(2, fs * .28); ctx.strokeStyle = "rgba(20,16,10,.85)";
-      const label = `${u.title} · ${u.name}`;
+      const label = u.rank ? `${u.title} · ${u.name}` : u.name;
       ctx.strokeText(label, x, y + h / 2 + fs * .75);
       ctx.fillStyle = "#ffe7b0"; ctx.fillText(label, x, y + h / 2 + fs * .75);
       ctx.restore();

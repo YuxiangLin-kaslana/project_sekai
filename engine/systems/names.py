@@ -10,6 +10,8 @@
 - 新国家（独立、内战）：本系列国名库里随机挑一个没人用过的；用完了依次用“后 + 灭亡国家名”、
   “城市名 + 国号”、“方位 + 国名”。
 - 将领：本系列的人名库里随机抽（同一局里尽量不重名）。
+- 战舰：造出来（或开局送的）时从本系列的舰名库里随机抽一个现存战舰没用的（“定远号”）；舰名库用完了
+  用本国的城市名（“长京号”），再不够加序号（“定远二号”）。
 全局不重名：已经有城市、国家用了的名字不再取。
 """
 
@@ -137,6 +139,45 @@ def person_name(state, rules, culture: str, rng) -> str | None:
         if name not in taken:
             return name
     return people[start]
+
+
+def ship_name(state, rules, nation_id: int) -> str:
+    """战舰的舰名：本国所属系列的舰名库里随机挑一个现存战舰没在用的（按对局种子和单位编号）。"""
+    culture = state.nations[nation_id].culture
+    pool = _pool(rules, culture)
+    taken = {u.name for u in state.units.values() if u.name and not u.rank}
+    rng = RngTree(state.seed, "names", "ship", state.next_id).generator()
+    ships = list(pool.ships) if pool is not None else []
+    if ships:
+        start = int(rng.integers(0, len(ships)))
+        for i in range(len(ships)):
+            name = ships[(start + i) % len(ships)]
+            if name not in taken:
+                return name
+    for c in state.nation_cities(nation_id):
+        if f"{c.name}号" not in taken:
+            return f"{c.name}号"
+    base = ships[0] if ships else "无名号"
+    k = 2
+    while f"{base[:-1]}{_numeral(k)}号" in taken:
+        k += 1
+    return f"{base[:-1]}{_numeral(k)}号"
+
+
+def _numeral(k: int) -> str:
+    digits = "零一二三四五六七八九"
+    if k < 10:
+        return digits[k]
+    if k < 20:
+        return "十" + (digits[k % 10] if k % 10 else "")
+    return digits[k // 10] + "十" + (digits[k % 10] if k % 10 else "")
+
+
+def name_unit(state, rules, unit) -> None:
+    """新单位起名：战舰（海军的军事单位）从舰名库挑名字；将领在 generals.appoint 里另起。"""
+    ut = rules.units[unit.type]
+    if ut.domain == "sea" and ut.category == "military" and not unit.name:
+        unit.name = ship_name(state, rules, unit.nation)
 
 
 # ---------------------------------------------------------------- 国家颜色

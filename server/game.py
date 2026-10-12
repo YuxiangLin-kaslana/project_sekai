@@ -493,6 +493,8 @@ def _snapshot(game: Game, rules: Ruleset) -> dict:
                     else {}
                 ),
                 "max_moves": full_moves(s, rules, u),  # 下了海的陆军按海上的移动力
+                "kills": u.kills,  # 战绩：击败了几个敌方单位
+                **({"name": u.name} if u.name and not u.rank else {}),  # 舰名
                 "afloat": rules.units[u.type].domain == "land" and afloat(s, rules, u),
                 "attack_range": attack_range(rules, u, s.grid),
                 **({"name": u.name, "rank": u.rank, "title": u.title} if u.rank else {}),

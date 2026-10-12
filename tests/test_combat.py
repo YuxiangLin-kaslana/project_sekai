@@ -970,3 +970,15 @@ def test_fighters_strike_at_most_twice_per_sortie(board):
         s.units[a.id].hp < RULES.units["infantry"].hp
         and s.units[b.id].hp < RULES.units["infantry"].hp
     )
+
+
+def test_units_keep_a_record_of_how_many_enemies_they_defeated(board):
+    gun = add(board, "artillery", 1, 3, 3)
+    tank = add(board, "armor", 1, 4, 4)
+    weak = add(board, "infantry", 2, 5, 3, hp=5)
+    s = action(board, order(gun, "attack", to=[5, 3])).state
+    assert weak.id not in s.units and s.units[gun.id].kills == 1  # 炮兵打死了步兵
+    assert s.units[tank.id].kills == 0
+    foe = add(s, "infantry", 2, 5, 4, hp=5)
+    s = action(s, order(s.units[tank.id], "attack", to=[5, 4])).state
+    assert foe.id not in s.units and s.units[tank.id].kills == 1

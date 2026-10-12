@@ -268,11 +268,12 @@ class NationTemplate(_Strict):
 
 
 class NamePool(_Strict):
-    """一个名字系列（东方 / 西方）：国名、城市名、人名（将领）。国名和城市名在系列内可以互用。"""
+    """一个名字系列（东方 / 西方）：国名、城市名、人名（将领）、舰名。国名和城市名在系列内可以互用。"""
 
     nations: list[str] = []
     cities: list[str] = []
     people: list[str] = []
+    ships: list[str] = []  # 战舰造出来时从这里挑名字（“定远号”）
 
 
 class CityConfig(_Strict):
