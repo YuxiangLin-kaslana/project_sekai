@@ -351,22 +351,26 @@ function isWaterTile(v, t) {
   return w === 1;
 }
 
+// 远景、中景的领土按回合画成一张图（每帧只贴图，不再逐格重画几万个六边形）；清晰度按缩放分两档，
+// 图太大（超过 ATLAS_PIXELS）就退回逐格画
+const ATLAS_MAX_Z = 6, ATLAS_PIXELS = 14_000_000;
 function drawTerritory(ctx, v) {
-  // The world overview uses a cached atlas; close views visit only visible hexes.
-  if (v.z < 3 && !v.atlas) {
-    const key = `${G.political}:${G.diplomacy && diplomacyPerspective()}`;
+  const scale = v.z < 3 ? 2 : 4;
+  const atlasPixels = (v.PW * scale + 4) * (G.H * 1.5 * scale + 4);
+  if (v.z < ATLAS_MAX_Z && !v.atlas && (scale === 2 || atlasPixels <= ATLAS_PIXELS)) {
+    const key = `${G.political}:${G.diplomacy && diplomacyPerspective()}:${scale}`;
     let cv = G.territoryOverview.get(key);
     if (!cv) {
       cv = document.createElement('canvas');
-      cv.width = Math.ceil(v.PW * 2 + 4); cv.height = G.H * 3 + 4;
-      const view = { ...v, atlas: true, z: 2, x0: 0, x1: v.PW, y0: 0, y1: G.H * 1.5,
-        k0: -1, k1: 1, vw: cv.width, vh: cv.height, sx: (x,k=0)=>(x+k*v.PW)*2+2, sy: y=>y*2+2 };
+      cv.width = Math.ceil(v.PW * scale + 4); cv.height = Math.ceil(G.H * 1.5 * scale + 4);
+      const view = { ...v, atlas: true, gameTiles: null, z: scale, x0: 0, x1: v.PW, y0: 0, y1: G.H * 1.5,
+        k0: -1, k1: 1, vw: cv.width, vh: cv.height, sx: (x,k=0)=>(x+k*v.PW)*scale+2, sy: y=>y*scale+2 };
       const cc = cv.getContext('2d',{willReadFrequently:true});
       const borders = drawTerritory(cc, view); borders();
       G.territoryOverview.set(key, cv);
     }
     for (let k=v.k0;k<=v.k1;k++) {
-      ctx.drawImage(cv, v.sx(-1,k), v.sy(-1), cv.width*v.z/2, cv.height*v.z/2);
+      ctx.drawImage(cv, v.sx(-2/scale,k), v.sy(-2/scale), cv.width*v.z/scale, cv.height*v.z/scale);
     }
     return null;
   }
@@ -495,18 +499,23 @@ function visibleEntries(map, v) {
 }
 
 // 开发地块铺满六边形，不在城市或设施景观内烘焙道路。
+const FACILITY_ART_FROM = 8; // 缩放到这么近才画设施插画；远一点只铺一层淡淡的底色（快，也不抢部队、战线的眼）
 function drawFacilities(ctx, v) {
   const z = v.z;
-  if(G.snap.stress && z<28) {
+  if(z < (G.snap.stress ? 28 : FACILITY_ART_FROM)) {
     const fills=new Map();
     for(const [t,fid] of visibleEntries(G.facilityAt,v)) {
       const icon=G.rules.buildings[fid].icon;
       const color=icon==='farm'?'#91a346':TILE_GROUND[icon];
+      if(!color)continue;
       if(!fills.has(color))fills.set(color,new Path2D());
       const [wx,wy]=center(t);
       eachCopy(v,wx,wy,z*1.8,(x,y)=>hexPath(fills.get(color),x,y,z));
     }
+    ctx.save();
+    if(!G.snap.stress)ctx.globalAlpha=0.42;
     for(const [color,path] of fills){ctx.fillStyle=color;ctx.fill(path);}
+    ctx.restore();
     return;
   }
   for (const [t, fid] of visibleEntries(G.facilityAt,v)) {
@@ -2173,14 +2182,15 @@ function drawToken(ctx, x, y, z, units) {
   const fs = Math.max(8, Math.min(12, 7 + z * 0.8));
   const h = Math.round(fs + 6);
   const w = Math.round(h * 1.4);
-  ctx.shadowColor = "rgba(0,0,0,0.45)";
-  ctx.shadowBlur = 3;
-  ctx.shadowOffsetY = 1;
+  // 投影用错开一点的深色底（不用 shadowBlur：满屏几百块牌时模糊阴影很费）
+  ctx.beginPath();
+  roundRect(ctx, x - w / 2 + 1, y - h / 2 + 1.5, w, h, 2.5);
+  ctx.fillStyle = "rgba(0,0,0,0.35)";
+  ctx.fill();
   ctx.beginPath();
   roundRect(ctx, x - w / 2, y - h / 2, w, h, 2.5);
   ctx.fillStyle = shade(c, -0.05);
   ctx.fill();
-  ctx.shadowColor = "transparent";
   ctx.lineWidth = 2.4;
   ctx.strokeStyle = "rgba(16,13,9,0.85)";
   ctx.stroke();
@@ -2479,13 +2489,14 @@ function drawCorps(ctx, v) {
         }
       });
     }
+    // 军团区域铺浅色（叠在同色的本国领土上也看得出），外缘一圈深色虚线
     ctx.save();
-    ctx.fillStyle = rgba(c, 0.2); ctx.fill(fill);
-    ctx.setLineDash([Math.max(3, z * 0.35), Math.max(2, z * 0.22)]);
-    ctx.lineWidth = Math.max(1.6, Math.min(3, z * 0.08));
-    ctx.strokeStyle = 'rgba(18,14,10,0.55)'; ctx.stroke(edge);
-    ctx.lineWidth = Math.max(1, Math.min(2.2, z * 0.06));
-    ctx.strokeStyle = shade(c, 0.35); ctx.stroke(edge);
+    ctx.fillStyle = 'rgba(255,246,222,0.16)'; ctx.fill(fill);
+    ctx.setLineDash([Math.max(4, z * 0.4), Math.max(3, z * 0.25)]);
+    ctx.lineWidth = Math.max(2.4, Math.min(3.6, z * 0.1));
+    ctx.strokeStyle = 'rgba(255,246,222,0.75)'; ctx.stroke(edge);
+    ctx.lineWidth = Math.max(1.4, Math.min(2.4, z * 0.065));
+    ctx.strokeStyle = shade(c, -0.45); ctx.stroke(edge);
     ctx.restore();
   }
 }
@@ -2505,10 +2516,10 @@ function drawCorpsLabels(ctx, v) {
     eachCopy(v, wx, wy, 120, (x, y) => {
       const w = ctx.measureText(text).width + 14, h = fs + 8;
       const ly = y - Math.max(z * 1.15, 14) - h / 2;
-      ctx.shadowColor = 'rgba(0,0,0,0.45)'; ctx.shadowBlur = 4; ctx.shadowOffsetY = 1;
+      ctx.beginPath(); roundRect(ctx, x - w / 2 + 1, ly - h / 2 + 1.5, w, h, 4);
+      ctx.fillStyle = 'rgba(0,0,0,0.35)'; ctx.fill();
       ctx.beginPath(); roundRect(ctx, x - w / 2, ly - h / 2, w, h, 4);
       ctx.fillStyle = shade(c, -0.12); ctx.fill();
-      ctx.shadowColor = 'transparent';
       ctx.lineWidth = 2.2; ctx.strokeStyle = 'rgba(16,13,9,0.85)'; ctx.stroke();
       ctx.lineWidth = 1; ctx.strokeStyle = 'rgba(255,240,200,0.9)'; ctx.stroke();
       ctx.fillStyle = inkOn(c); ctx.fillText(text, x, ly + 0.5);

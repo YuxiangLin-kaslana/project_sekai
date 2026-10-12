@@ -18,7 +18,8 @@ DEFAULT（交战）处理——老存档、测试棋盘照旧；新开的对局�
 - 50 起；领土接壤 −BORDER_RIVALRY；一方没地方扩张了（扩张期结束、没有城址），对邻国 −CROWDED；
   接壤且一方兵力是另一方的 PREY_RATIO 倍以上（弱肉强食）−PREY；
 - 有共同的交战国（敌人的敌人就是朋友）+COMMON_ENEMY；有共同的威胁（第三国兵力是两国各自的 THREAT_RATIO
-  倍以上，而且和两国都接壤或交战）+COMMON_THREAT；已经结盟 +ALLIED（同盟自己会维持）；
+  倍以上，而且和两国都接壤或交战）+COMMON_THREAT；已经结盟 +ALLIED，但没有共同的敌人、也没有共同的
+  威胁时 −NO_CAUSE（同盟失去意义，慢慢瓦解，不会全世界结成一团谁也打不了谁）；
 - 正在交战 −AT_WAR；刚打完仗（RECENT_WAR 回合内）−RECENT_DROP，随时间减弱；
 - 某国兵力远超其余各国平均（DOMINANT_POWER 倍）：和它的关系 −DOMINANT_DROP；只剩 FEW_NATIONS 国及以下：
   所有关系 −FEW_DROP（统一在望，谁都不放过谁）。
@@ -51,7 +52,7 @@ DOMINATE = 1.6  # 兵力是对方这么多倍以上：占上风，不接受求�
 MAX_ALLIES = 3
 # 关系值（每对国家，开局 START_VALUE）：低于 WAR_AT 才可能开战、高于 ALLY_AT 结盟
 START_VALUE = 50
-WAR_AT, ALLY_AT = 20, 85
+WAR_AT, ALLY_AT = 20, 75
 VALUE_MIN, VALUE_MAX = -50, 150
 VALUE_PULL, VALUE_STEP = 0.08, 3.0  # 每回合向目标值靠拢差距的 8%，最多 3 点
 PEACE_VALUE = 15  # 签和约后关系值落到这里（再按目标值慢慢恢复）
@@ -60,9 +61,10 @@ ALLY_JOIN = 70  # 进攻方的盟友关系值不低于它就一起参战
 BORDER_RIVALRY = 15  # 领土接壤
 CROWDED = 15  # 一方没地方扩张了，对邻国（每个没地方扩张的一方）
 PREY, PREY_RATIO = 10, 2.0  # 接壤且一方兵力是另一方 2 倍以上
-COMMON_ENEMY = 40  # 有共同的交战国
-COMMON_THREAT, THREAT_RATIO = 25, 1.4  # 有共同的威胁：第三国兵力是两国各自的 1.4 倍以上
-ALLIED = 25  # 已经结盟
+COMMON_ENEMY = 45  # 有共同的交战国
+COMMON_THREAT, THREAT_RATIO = 30, 1.4  # 有共同的威胁：第三国兵力是两国各自的 1.4 倍以上
+ALLIED = 10  # 已经结盟
+NO_CAUSE = 25  # 结了盟却既没有共同的敌人、也没有共同的威胁：同盟失去意义，慢慢瓦解
 AT_WAR = 30  # 正在交战
 RECENT_WAR, RECENT_DROP = 60, 20  # 刚打完仗：这么多回合内关系目标值 −20（随时间减弱）
 DOMINANT_POWER, DOMINANT_DROP = 1.6, 15  # 兵力超过其余各国平均的 1.6 倍：和它的关系 −15
@@ -358,14 +360,17 @@ def target_value(state, a, b, pw, borders, wars, crowded, dominant, few) -> floa
         hi, lo = max(pw.get(a, 0), pw.get(b, 0)), min(pw.get(a, 0), pw.get(b, 0))
         if hi >= PREY_RATIO * max(lo, 1.0):
             t -= PREY
+    cause = True
     if wars[a] & wars[b]:
         t += COMMON_ENEMY  # 敌人的敌人就是朋友
     elif _common_threat(state, pw, a, b, borders) is not None:
         t += COMMON_THREAT
+    else:
+        cause = False
     rel = relation(state, a, b)
     st = rel["status"]
     if st == "alliance":
-        t += ALLIED
+        t += ALLIED if cause else ALLIED - NO_CAUSE
     elif st == "war":
         t -= AT_WAR
     since = state.turn - rel.get("peace_turn", -(10**6))
