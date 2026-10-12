@@ -277,7 +277,7 @@ def build(ctx, nation, p, units, cities, components, guards) -> list[dict]:
     _assign(ctx, nation, p, segs, pool, units)
     for seg in segs:
         _stance(ctx, nation, seg)
-        _slots(ctx, seg)
+        _slots(ctx, seg, ours)
     return [_as_front(ctx, nation, seg) for seg in segs]
 
 
@@ -451,9 +451,10 @@ def _stance(ctx, nation, seg):
         seg["reason"] = f"对 {who} 的战线兵力不足（{mine:.0f} 对 {theirs}），就地防守，只打划算的仗"
 
 
-def _slots(ctx, seg):
+def _slots(ctx, seg, ours=None):
     """站位：近战均匀站到战线格上（每格先一支铺满，再加到 LINE_STACK 支；对面有敌军、离目标近的格子优先），
-    远程和高射炮站后面一排。写进 AI 草稿的 fslot。"""
+    远程和高射炮站后面一排。站满了的（军团整支编进来、一段战线放不下）往后一排一排排开，不全挤在
+    战线上把路堵死（一格最多站 3 个单位）。写进 AI 草稿的 fslot。"""
     R = _r()
     s, rules, g = ctx.state, ctx.rules, ctx.state.grid
     slots = R._ai(ctx).setdefault("fslot", {})
@@ -467,11 +468,34 @@ def _slots(ctx, seg):
 
     line = sorted(seg["tiles"], key=pressure)
     back = seg["back"] or line
+    rows = [line, back]  # 后面的几排按需要再往后推
+    seen = set(line) | set(back)
+
+    def deeper():
+        nxt = sorted(
+            {
+                n
+                for t in rows[-1]
+                for n in g.neighbors_of(t)
+                if n not in seen and not g.is_water[n] and (ours is None or ours[n])
+            }
+        )
+        if nxt:
+            rows.append(nxt)
+            seen.update(nxt)
+        return bool(nxt)
+
     fill = Counter()
     members = sorted((s.units[uid] for uid in seg["units"] if uid in s.units), key=lambda u: u.id)
     for u in members:
         rear = R.is_siege(rules, u) or R.is_air_defense(rules, u)
-        options = back if rear else line
+        k = 1 if rear else 0
+        while k < len(rows) and all(fill[t] >= LINE_STACK for t in rows[k]):
+            k = k + 1 if k > 0 or rear else 2  # 近战站满了战线就排到远程后面一排
+            if k >= len(rows) and not deeper():
+                k = None
+                break
+        options = rows[k] if k is not None and k < len(rows) else (back if rear else line)
         if not options:
             continue
         # 先铺满再加厚：同样的填充程度挑近的
