@@ -442,13 +442,15 @@ def test_big_armies_open_several_fronts_against_different_cities(board):
         add(board, "infantry", 1, (3 + k % 6, 4 + k // 6 * 3))
     for k in range(8):
         add(board, "artillery", 1, (9 + k % 2, 5 + k))
-    s = board
-    for _ in range(PLAN_PERIOD * 2 + 1):  # 每 PLAN_PERIOD 回合可以多开一条战线
+    s, seen = board, []
+    for _ in range(PLAN_PERIOD * 3):  # 每 PLAN_PERIOD 回合可以多开一条战线（打下一座城就少一条）
         s = step(s, [], RULES).state
-    fronts = s.nations[1].strategy["fronts"]
-    targets = [f["target_city"] for f in fronts]
-    assert len(fronts) >= 2 and len(set(targets)) == len(targets)  # 不一股脑打同一座城
-    assert not set(fronts[0]["units"]) & set(fronts[1]["units"])  # 各条战线各有部队
+        fronts = s.nations[1].strategy["fronts"]
+        if len(fronts) >= 2:
+            seen = fronts
+    targets = [f["target_city"] for f in seen]
+    assert len(seen) >= 2 and len(set(targets)) == len(targets)  # 不一股脑打同一座城
+    assert not set(seen[0]["units"]) & set(seen[1]["units"])  # 各条战线各有部队
 
 
 def test_border_posts_watch_where_foreign_armies_are(board):

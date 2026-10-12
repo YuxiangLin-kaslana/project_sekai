@@ -27,9 +27,10 @@ AI（resolve，每回合在国家 AI 规划之前，按国家编号依次）：
 - 求和：打了 MIN_WAR 回合以上，打不过（连同盟友兵力不到对方 PEACE_RATIO）或僵持（STALEMATE 回合没有城市
   易手）就求和；对方占上风（DOMINATE 倍）且不僵持时拒绝；只剩 FEW_NATIONS 国及以下时占上风的一方僵持也拒绝。
   签和约后关系值落到 PEACE_VALUE，休战 TRUCE 回合。
-- 宣战：扩张期结束（或没地方扩张了）才打仗，同一时间只主动打一场（手上的仗兵力负担不重时才开新仗）；
-  对关系值低于 WAR_AT 的邻国（没有陆上邻国时看隔海够得着的国家），连同双方盟友算兵力占优（OFFENSIVE_RATIO）
-  才宣战，每回合按 WAR_CHANCE 的概率动手（开战时机有起伏）；不打正在和自己的敌人交战的国家。
+- 宣战：扩张期结束（或没地方扩张了）才打仗。对每个够得着的和平国家（陆上邻国，隔海够得着的打折）算
+  宣战意愿（_appetite，平滑打分，不设门槛）：连同双方盟友越占优、关系越差越想打；国家越少越敢打；刚打
+  下来的城越多、手上的仗越重越不想打；正在和自己的敌人交战的（敌人的敌人）打折。每回合按 意愿 × WAR_CHANCE
+  的概率对意愿最高的那个动手（开战时机有起伏）。
   宣战时进攻方的盟友（关系值 ≥ ALLY_JOIN）一起参战，被宣战方的盟友援助被宣战方。
 - 结盟：关系值高于 ALLY_AT、有共同的敌人或共同的威胁就结盟（最多 MAX_ALLIES 个盟友）；
   同盟的关系值跌破 ALLY_BREAK 同盟解除。
@@ -72,15 +73,18 @@ AT_WAR = 30  # 正在交战
 RECENT_WAR, RECENT_DROP = 60, 20  # 刚打完仗：这么多回合内关系目标值 −20（随时间减弱）
 DOMINANT_POWER, DOMINANT_DROP = 1.6, 15  # 兵力超过其余各国平均的 1.6 倍：和它的关系 −15
 FEW_NATIONS, FEW_DROP = 4, 20  # 只剩 4 国及以下：所有关系 −20
-OFFENSIVE_RATIO = 1.2  # 连同双方盟友，兵力是对方的这么多倍以上才主动宣战
-CRUSH = (
-    2.5  # 巩固占领区时只打实力悬殊的残余小国（连同盟友兵力是对方的这么多倍）：后期不再拖着统一不了
+# 宣战意愿（_appetite，0–1，全是平滑的打分，不设门槛）：
+OFFENSIVE_RATIO = 1.2  # 连同双方盟友的兵力比到这么多倍时，“占优”这一项给一半分（越占优越高）
+ENDGAME_SPAN = (
+    4  # 国家越少越敢打：只剩 2 国时要的兵力比降到 1.0，多出 ENDGAME_SPAN 国以上按 OFFENSIVE_RATIO
 )
-REMNANT = 3  # “残余小国”：连同盟友一共不超过这么多座城
-ENDGAME = 3  # 只剩这么多国（含）时进入终局：兵力占优就宣战（不要求 OFFENSIVE_RATIO），两强不会永远相安无事
-WAR_LOAD = 0.5  # 手上交战国的兵力合计不到本国这么多倍，才开新仗
-WAR_CHANCE = 0.08  # 条件都满足时，每回合宣战的概率
-SEA_WAR_REACH = 25  # 没有陆上邻国时，城市之间这么多格（× 地图尺度）以内的国家也能打（跨海）
+CONSOLIDATE_PULL = 2.0  # 刚打下来的城每占本国 10%，要的兵力比再高 20%（巩固占领区）
+HATE_SPAN = 30  # 关系值从 WAR_AT + 10 往下这么多点，“关系差”这一项从 0 涨到满分
+OVERSEAS = 0.5  # 隔海的对象（不是陆上邻国）意愿打这么多折
+ENEMY_OF_ENEMY = 0.25  # 对方正在和我的敌人交战（敌人的敌人）：意愿打这么多折
+WAR_LOAD = 0.5  # 手上交战国的兵力合计占本国的比例到这么多时，开新仗的意愿降到 0（之前线性下降）
+WAR_CHANCE = 0.08  # 意愿到满分附近时，每回合宣战的概率（开战时机有起伏）
+SEA_WAR_REACH = 25  # 城市之间这么多格（× 地图尺度）以内的非接壤国家也算够得着（跨海）
 
 
 def key(a: int, b: int) -> str:
@@ -425,8 +429,7 @@ def _bloc(s, n, pw) -> float:
 
 
 def _war_targets(s, rules, nid, borders) -> tuple[list[int], list[int]]:
-    """nid 能开战的对象：(陆上邻国, 隔海够得着的国家)。宣战先在陆上邻国里挑，陆上没有能打的
-    （都是盟友、已经在打、或者打不过）再看隔海的——不然后期隔海的残余国家永远没人去打，统一不了。"""
+    """nid 能开战的对象：(陆上邻国, 隔海够得着的国家)。隔海的意愿打折（OVERSEAS），不是排除。"""
     near = _neighbors(borders, nid)
     from engine.systems.settlement import map_scale
 
@@ -484,47 +487,53 @@ def resolve(ctx) -> None:
         _maybe_declare(ctx, nid, alive, pw, borders, rng)
 
 
+def _appetite(odds, need, hate, factor) -> float:
+    """宣战意愿（0–1）：兵力比（odds 对 need 的平滑 S 形，odds = need 时给一半）× 关系差 × 其余折扣。"""
+    r = (odds / need) ** 4
+    return r / (1 + r) * hate * factor
+
+
 def _maybe_declare(ctx, nid, alive, pw, borders, rng) -> None:
-    """AI 主动宣战：扩张期过了、手上的仗不重、对关系差的国家（连同盟友）兵力占优，按概率动手。"""
+    """AI 主动宣战：扩张期过了，对每个够得着、和平中的国家算宣战意愿（_appetite，全是平滑打分）——
+    连同盟友越占优、关系越差越想打；国家越少越敢打（终局两强不会永远相安无事）；刚打下来的城越多、
+    手上的仗越重越不想打；隔海的、正在和我的敌人交战的打折。挑意愿最高的，按意愿 × WAR_CHANCE 的概率动手。"""
     s = ctx.state
     strategy = s.nations[nid].strategy or {}
     if strategy.get("posture") != "战争":
         return  # 还在扩张期（国家 AI 还没转入战争姿态）：先发展
-    from controllers.frontline import consolidating
+    from controllers.frontline import unrest
 
-    # 正在巩固新占领区：不开新仗，只收拾实力悬殊的残余小国
-    hold = consolidating(s, ctx.rules, nid)
     mine = _bloc(s, nid, pw)
     foes = set(enemies(s, nid))
-    if sum(pw.get(e, 0) for e in foes) > WAR_LOAD * pw.get(nid, 0):
-        return  # 手上的仗已经够打了
-    best = None
+    load = sum(pw.get(e, 0) for e in foes) / max(1.0, pw.get(nid, 0))
+    calm = max(0.0, 1 - load / WAR_LOAD)  # 手上的仗越重，越不想开新仗
+    if calm <= 0:
+        return
+    need = 1 + (OFFENSIVE_RATIO - 1) * min(1.0, max(0, len(alive) - 2) / ENDGAME_SPAN)
+    need *= 1 + CONSOLIDATE_PULL * unrest(s, ctx.rules, nid)
     land, sea = _war_targets(s, ctx.rules, nid, borders)
+    best = None
     for other in land + sea:
-        if best is not None and other in sea:
-            break  # 陆上有能打的，就不跨海
         if other not in alive or status(s, nid, other) != "peace":
             continue
         rel = relation(s, nid, other)
-        if rel.get("truce", -1) > s.turn or value(s, nid, other) >= WAR_AT:
+        if rel.get("truce", -1) > s.turn:
+            continue  # 和约的休战期（条约规定）
+        v = value(s, nid, other)
+        hate = min(1.0, max(0.0, (WAR_AT + 10 - v) / HATE_SPAN))
+        if hate <= 0:
             continue
-        if foes & set(enemies(s, other)):
-            continue  # 它正在和我的敌人交战：敌人的敌人不打
         theirs = _bloc(s, other, pw) + sum(
             pw.get(x, 0) for x in allies(s, nid) if allied(s, x, other)
         )  # 两边都结盟的不会来帮我
         odds = mine / max(1.0, theirs)
-        if hold and (
-            odds < CRUSH
-            or sum(len(s.nation_cities(x)) for x in [other, *allies(s, other)]) > REMNANT
-        ):
-            continue
-        if odds < (1.0 if len(alive) <= ENDGAME else OFFENSIVE_RATIO):
-            continue
-        score = odds * (1 + (WAR_AT - value(s, nid, other)) / 50)
-        if best is None or score > best[0]:
-            best = (score, other)
-    if best is not None and rng.random() < WAR_CHANCE:
+        factor = calm * (OVERSEAS if other in sea else 1.0)
+        if foes & set(enemies(s, other)):
+            factor *= ENEMY_OF_ENEMY  # 它正在和我的敌人交战：敌人的敌人，不太想打
+        want = _appetite(odds, need, hate, factor)
+        if best is None or (want, -other) > (best[0], -best[1]):
+            best = (want, other)
+    if best is not None and rng.random() < WAR_CHANCE * best[0]:
         v = value(s, nid, best[1])
         declare_war(ctx, nid, best[1], why=f"关系恶化（关系值 {v:.0f}），兵力占优")
 

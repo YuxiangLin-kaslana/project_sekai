@@ -64,7 +64,7 @@ DEV_WAIT_REASON = "暂无合适的开发项目，过几回合再看"
 RICH_RESERVE_MULTIPLE = 4  # 国库超过储备金这么多倍算"富裕"：放宽维护费限制、扩大军备
 GENERAL_MIN = 6  # 没人统率的野战部队比将领空位多出这么多才造将领
 ADMIRAL_MIN = 3  # 没编进舰队的战舰比海军将领空位多出这么多艘，就造海军将领
-DESTROYER_RUSH = 3  # 本国沿海的敌舰有这么多艘：直接造驱逐舰（鱼雷专打舰船）
+DESTROYER_PULL = 80  # 本国沿海敌舰越多，驱逐舰（鱼雷专打舰船）加分越多：80 × 敌舰数 ÷ (敌舰数 + 3)
 WAR_MODES = (
     "进攻",
     "防守",
@@ -114,7 +114,7 @@ class Budget:
     posture: str = ""
     settler_want: int = 0  # 还缺几支开拓者（城址数 − 在路上和在造的开拓者）
     expanding: bool = False  # 扩张期、还有空地可以建城：先造开拓者、扩领土，放缓内部建设和造兵
-    enemy_fleet: int = 0  # 本国沿海（和交战国）的敌方战舰数：多了直接造驱逐舰
+    enemy_fleet: int = 0  # 本国沿海（和交战国）的敌方战舰数：越多驱逐舰加分越多
     airfield: dict | None = None  # 国家要修的前线机场（rule_ai._airfield_plan）：格子、哪座城修
     want_admiral: int = (
         0  # 没人统率的战舰比海军将领的统御空位多出多少（多于 ADMIRAL_MIN 就造海军将领）
@@ -675,10 +675,12 @@ def decide_city(state, rules, city, budget):
                 # 海军：炮击靠海的战线目标、对付本国沿海的敌舰；能炮击的（巡洋、战列）优先
                 score += 35 + 15 * min(3, budget.naval_want) + (15 if u.ranged_strength else 0)
                 reason = f"海上还缺 {budget.naval_want} 艘战舰：炮击沿海目标、护卫海岸"
-            if u.torpedo and budget.enemy_fleet >= DESTROYER_RUSH:
-                # 对手海军多：直接上驱逐舰（快、便宜，鱼雷专打舰船）
-                score += 40 + 15 * min(4, budget.enemy_fleet - DESTROYER_RUSH + 1)
-                reason = f"附近海上有 {budget.enemy_fleet} 艘敌舰：造驱逐舰，用鱼雷对付敌方海军"
+            if u.torpedo and budget.enemy_fleet:
+                # 对手海军越多越该上驱逐舰（快、便宜，鱼雷专打舰船）
+                bonus = DESTROYER_PULL * budget.enemy_fleet / (budget.enemy_fleet + 3)
+                score += bonus
+                if bonus >= 30:
+                    reason = f"附近海上有 {budget.enemy_fleet} 艘敌舰：造驱逐舰，用鱼雷对付敌方海军"
             if "carrier" in u.tags:
                 # 航母贵（360 生产力），按“战斗力 ÷ 造价”永远比不过步兵；国家要航母时给足加分，
                 # 让一座有港口的沿海城市真的造出来（其余城市看到在造了就不重复造）

@@ -45,20 +45,22 @@ DEFENSIVE_SCORE = 20  # 防守时只打这么划算以上的（或者能击杀�
 MAIN_WEIGHT = 2.5  # 主攻方向分兵的份额加倍（集中兵力在一处突破，其余地段薄守）
 MAIN_OFFENSE = 1.0  # 主攻方向兵力和对面相当就进攻（别的地段要 OFFENSE 倍）
 CAP_PER_ENEMY = 1.5  # 每段最多放 LINE_STACK × 格数 + 对面敌军数 × 这么多（主攻方向再 ×1.5）；多出来的留作机动兵力
-CONSOLIDATE = 0.2  # 动荡、刚打下来的城占到这么多：巩固占领区（只有主攻方向还能进攻，而且要占优）
+CONSOLIDATE = (
+    2.0  # 巩固占领区：刚打下来的城每占本国城市 10%，进攻要的兵力优势多 20%（次要方向再 ×3）
+)
 CONSOLIDATE_TURNS = 2  # “刚打下来”：被攻占后 conquest_turns 的这么多倍回合内
 
 
-def consolidating(state, rules, nid) -> bool:
-    """国家在巩固占领区：最近（conquest_turns × CONSOLIDATE_TURNS 回合内）打下来的城占到 CONSOLIDATE。
-    打得太快、新占领的地方民心未附时先停一停（也给反霸同盟、起义留出翻盘的机会）。只看新占领的城：
-    缺粮缺钱造成的动荡由稳定度自己管，不该让 AI 停战（不然后期各国都“在巩固”、谁也不打）。"""
+def unrest(state, rules, nid) -> float:
+    """刚打下来（conquest_turns × CONSOLIDATE_TURNS 回合内）的城占本国城市的比例（0–1），越高越该停下来巩固：
+    进攻要的兵力优势、开新仗的意愿都随它平滑变化（不设门槛）。城少的国家按 4 座算，几座城的小国打下
+    一座城不至于停摆。只看新占领的城：缺粮缺钱造成的动荡由稳定度自己管，不该让 AI 停战。"""
     cities = state.nation_cities(nid)
-    if len(cities) < 4:
-        return False
+    if not cities:
+        return 0.0
     window = CONSOLIDATE_TURNS * rules.stability.conquest_turns
     shaky = sum(1 for c in cities if state.turn - c.captured_turn < window)
-    return shaky >= CONSOLIDATE * len(cities)
+    return shaky / max(4, len(cities))
 
 
 UNREACHED = 1 << 20
@@ -422,19 +424,18 @@ def reinforce(ctx, nation, fronts, units) -> None:
 
 
 def _stance(ctx, nation, seg):
-    """攻守：本段兵力是对面的 OFFENSE 倍以上（或者对面没兵）就进攻。"""
+    """攻守：本段兵力是对面的 OFFENSE 倍以上（主攻方向 MAIN_OFFENSE 倍）就进攻。刚打下来的城越多
+    （unrest），要的兵力优势越大（次要方向涨得更快），对面没兵时也按本段兵力的这一成算——巩固占领区是
+    平滑地收紧，不是一刀切。"""
     s, rules = ctx.state, ctx.rules
     mine = sum(combat.strength(s, rules, s.units[uid]) for uid in seg["units"] if uid in s.units)
     seg["strength"] = round(mine)
     theirs = seg["enemy_strength"]
-    hold = consolidating(s, rules, nation.id)
-    if hold:
-        need = (
-            OFFENSE if seg.get("main") else math.inf
-        )  # 巩固占领区：只有主攻方向还能进攻，而且要占优
-    else:
-        need = MAIN_OFFENSE if seg.get("main") else OFFENSE
-    attack = bool(seg["units"]) and (theirs == 0 and not hold or mine >= need * theirs)
+    share = unrest(s, rules, nation.id)
+    main = seg.get("main")
+    need = (MAIN_OFFENSE if main else OFFENSE) * (1 + CONSOLIDATE * share * (1 if main else 3))
+    attack = bool(seg["units"]) and mine >= need * max(theirs, share * mine)
+    hold = share * need > 0.5  # 只用于说明：没打是因为在巩固
     seg["stance"] = "进攻" if attack else "防守"
     who = s.nations[seg["enemy"]].name if seg["enemy"] in s.nations else "敌军"
     if attack:
@@ -675,8 +676,10 @@ def approach_attack(ctx, unit, *, offensive: bool) -> bool:
         left = R._hp(ctx, victim) - planned.get(R._target_key(victim), 0)
         if left <= 0 and not isinstance(victim, City):
             continue
-        tier = R._tier(ctx, unit, victim)  # 对自己有威胁的敌人先打（见 rule_ai._tier）
-        foes.append((tier, left, g.distance(unit.tile, t), t, victim))
+        bonus = R._priority(
+            ctx, unit, victim
+        )  # 对自己有威胁的、海上的敌人加分（见 rule_ai._priority）
+        foes.append((left - 2 * bonus, left, g.distance(unit.tile, t), t, victim))
     if not foes:
         return False
     ai["approach_used"] = ai.get("approach_used", 0) + 1
@@ -690,7 +693,9 @@ def approach_attack(ctx, unit, *, offensive: bool) -> bool:
     if not spots:
         return False
     choice = None
-    for tier, left, _, tile, victim in sorted(foes, key=lambda f: f[:4])[:APPROACH_TARGETS]:
+    for _, left, _, tile, victim in sorted(foes, key=lambda f: (f[0], f[2], f[3]))[
+        :APPROACH_TARGETS
+    ]:
         options = [sp for sp in spots if g.distance(sp, tile) <= reach]
         if not options:
             continue
@@ -707,7 +712,7 @@ def approach_attack(ctx, unit, *, offensive: bool) -> bool:
         score = info["damage"] - loss * weight + (60 if kill else 0)
         if info.get("capture") or (isinstance(victim, City) and R._hp(ctx, victim) == 0):
             score += 200
-            tier = -1
+        score += R._priority(ctx, unit, victim)
         if planned.get(R._target_key(victim)):
             score += 15
         score += R.learned_bias(
@@ -717,11 +722,11 @@ def approach_attack(ctx, unit, *, offensive: bool) -> bool:
             continue
         if score < 0 and loss > 0:
             continue
-        if choice is None or (-tier, score, -tile) > (-choice[0], choice[1], -choice[3]):
-            choice = (tier, score, spot, tile, info, victim)
+        if choice is None or (score, -tile) > (choice[0], -choice[2]):
+            choice = (score, spot, tile, info, victim)
     if choice is None:
         return False
-    _, _, spot, tile, info, victim = choice
+    _, spot, tile, info, victim = choice
     path = [spot]
     while path[-1] != unit.tile:
         path.append(parents[path[-1]])

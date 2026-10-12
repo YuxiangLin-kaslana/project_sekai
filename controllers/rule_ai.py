@@ -141,7 +141,7 @@ OVERSEAS_STEPS = (
 SEA_REACH = 80  # 海路最远算这么多步（随地图放大）
 BEACH_RANGE = 8  # 登陆场离目标城最多这么多步陆路（随地图放大）
 WAVE = 6  # 第一波登陆最多要这么多支部队在滩头站稳
-ESCORT_LOAD = 2  # 一艘护航战舰同格带几支下了海的部队（一格最多 3 个地表单位，给战舰留一个）
+ESCORT_LOAD = 2  # 估算护航要几艘战舰：一艘同格带两支下了海的部队（一格最多 3 个地表单位）
 SEA_PATIENCE = 40  # 渡海这么多回合还没在对岸凑齐，就放弃这个目标
 UNREACHED = 1 << 20
 
@@ -348,33 +348,46 @@ def _bomber(rules, actor) -> bool:
     return ut.domain == "air" and "air_superiority" not in ut.tags and bool(ut.ranged_strength)
 
 
-def _tier(ctx, actor, target, facility=None) -> int:
-    """攻击目标的优先级（小的先打）：
-    - 轰炸机：军团（敌方将领的部队）→ 机场 → 城市 → 重要资源（石油、铝等）→ 部队 → 港口；别的设施不炸；
-    - 其余（陆军、舰船、城市防御射击）：对自己有威胁的敌人 → 海上的敌方陆军 → 其余。
-    facility：轰炸设施时设施的种类（"airfield" / "resource" / "port"）。"""
+# 攻击目标的偏好加分（_priority）：只是加在攻击收益上的分，收益差得多时照样能压过去，不是硬性的先后
+THREAT_BONUS = 60  # 对自己有威胁的敌人（下回合打得到自己）
+AFLOAT_BONUS = 40  # 海上的敌方陆军（没有攻击力、一打就沉）
+BOMBER_BONUS = {  # 轰炸机：军团 → 机场 → 城市 → 重要资源 → 部队 → 港口，别的设施分很低
+    "corps": 140,
+    "airfield": 180,
+    "city": 70,
+    "resource": 120,
+    "unit": 0,
+    "port": 40,
+    "other": 10,
+}
+
+
+def _priority(ctx, actor, target, facility=None) -> float:
+    """攻击 target（或轰炸 facility 种类的设施）的偏好加分：
+    - 轰炸机按 BOMBER_BONUS（军团、机场、城市、重要资源、部队、港口依次递减；住宅区、农场这类改良很低）；
+    - 战斗机不加（它自己按“先打来袭的轰炸机”打分）；
+    - 陆军、舰船、城市防御射击：对自己有威胁的敌人 +THREAT_BONUS，海上的敌方陆军 +AFLOAT_BONUS。"""
     s, rules = ctx.state, ctx.rules
     if _bomber(rules, actor):
         if facility is not None:
-            return {"airfield": 1, "resource": 3, "port": 5}[facility]
+            return BOMBER_BONUS[facility]
         if isinstance(target, City):
-            return 2
+            return BOMBER_BONUS["city"]
         if target.corps is not None or target.rank:
-            return 0
-        return 4
+            return BOMBER_BONUS["corps"]
+        return BOMBER_BONUS["unit"]
     if isinstance(actor, Unit) and rules.units[actor.type].domain == "air":
-        return 0  # 战斗机按得分（先打来袭的轰炸机）
-    if target is None:
-        return 3
-    if _threat(ctx, actor, target):
-        return 0
+        return 0.0
+    bonus = 0.0
+    if target is not None and _threat(ctx, actor, target):
+        bonus += THREAT_BONUS
     if isinstance(target, Unit) and naval.afloat(s, rules, target):
-        return 1
-    return 2
+        bonus += AFLOAT_BONUS
+    return bonus
 
 
-def _facility_kind(ctx, tile, airfield) -> str | None:
-    """轰炸机眼里这个设施算什么：机场、重要资源、港口；别的（住宅区、农场、矿场……）不值得炸。"""
+def _facility_kind(ctx, tile, airfield) -> str:
+    """轰炸机眼里这个设施算什么：机场、重要资源、港口，其余（住宅区、农场、矿场……）算 other（分很低）。"""
     if airfield:
         return "airfield"
     if _key_resource(ctx, tile):
@@ -382,13 +395,13 @@ def _facility_kind(ctx, tile, airfield) -> str | None:
     b = ctx.rules.facility_at(int(ctx.state.grid.facility[tile]))
     if b is not None and "ships" in b.enables:
         return "port"
-    return None
+    return "other"
 
 
 def attack_choice(ctx, actor, *, only_static=False):
-    """在射程内挑攻击目标（返回格子）：先按优先级（_tier：对自己有威胁的敌人 → 海上的敌方陆军 → 其余；
-    轰炸机 军团 → 机场 → 城市 → 重要资源 → 部队 → 港口），同一级里挑最划算的。集火：已有其他单位打算打的
-    目标累计伤害，能凑够击杀的加分，已经会被打死的不再浪费火力；占领城市最优先。"""
+    """在射程内挑攻击目标（返回格子）：攻击收益（伤害、击杀、集火、占城……）加上偏好加分（_priority：
+    对自己有威胁的敌人、海上的敌方陆军；轰炸机 军团 → 机场 → 城市 → 重要资源 → 部队 → 港口），挑总分最高的。
+    集火：已有其他单位打算打的目标累计伤害，能凑够击杀的加分，已经会被打死的不再浪费火力。"""
     s, rules = ctx.state, ctx.rules
     if combat.lock_reason(s, rules, actor):
         return None
@@ -412,38 +425,37 @@ def attack_choice(ctx, actor, *, only_static=False):
         left = _hp(ctx, target) - planned.get(_target_key(target), 0)
         if left <= 0 and not isinstance(target, City):
             continue
-        tier = _tier(ctx, actor, target)
-        candidates.append((tier, left, s.grid.distance(actor.tile, tile), tile, target, None))
+        bonus = _priority(ctx, actor, target)
+        candidates.append((left - 2 * bonus, left, s.grid.distance(actor.tile, tile), tile, target))
     if _bomber(rules, actor) and actor.sortie is None:
-        # 轰炸机：敌方的机场（炸坏了对方飞机就起降不了）、重要资源设施、港口也是目标
+        # 轰炸机：敌方的设施也是目标（机场炸坏了对方飞机就起降不了；住宅区、农场这类分很低）
         for tile, airfield in _enemy_facilities(ctx, actor.nation):
-            kind = _facility_kind(ctx, tile, airfield)
             if (
-                kind is not None
-                and s.grid.distance(origin, tile) <= radius
+                s.grid.distance(origin, tile) <= radius
                 and combat.bombable(s, rules, actor, tile)
                 and not planned.get(("facility", tile))
             ):
-                tier = _tier(ctx, actor, None, kind)
-                candidates.append((tier, 0, s.grid.distance(actor.tile, tile), tile, None, kind))
+                bonus = _priority(ctx, actor, None, _facility_kind(ctx, tile, airfield))
+                candidates.append((-2 * bonus, 0, s.grid.distance(actor.tile, tile), tile, None))
     best = []
-    # 只细算优先级最高、最脆弱的八个目标；同样的状态选出同样的目标。
-    for tier, left, _, tile, target, kind in sorted(candidates, key=lambda c: c[:4])[:8]:
+    # 只细算偏好高、最脆弱的八个目标；同样的状态选出同样的目标。
+    for _, left, _, tile, target in sorted(candidates, key=lambda c: (c[0], c[2], c[3]))[:8]:
         info, problem = combat.preview(s, rules, actor, tile)
         if problem:
             continue
         if info.get("facility_strike"):
             if info["flak"] >= actor.hp:
                 continue
-            score = 100 - info["flak"]
+            airfield = rules.buildings[info["facility"]].air_base
+            kind_of = _facility_kind(ctx, tile, airfield)
+            score = _priority(ctx, actor, None, kind_of) - info["flak"]
             if score > 0:
-                best.append((tier, -score, tile, info, None))
+                best.append((-score, tile, info, None))
             continue
         if target is None:
             target = combat.target_at(s, rules, actor, tile)  # 设施格上也有敌军：按打部队算
             if target is None:
                 continue
-            tier = _tier(ctx, actor, target)
         kill = info["damage"] >= max(1, left)
         # 己方损失 = 对方反击 + 敌方高射火力（空袭进了防空范围）
         loss = info["retaliation"] + info.get("flak", 0)
@@ -458,7 +470,7 @@ def attack_choice(ctx, actor, *, only_static=False):
             score += 15  # 集火：别人已经在打的目标优先
         if info.get("capture") or (isinstance(target, City) and _hp(ctx, target) == 0):
             score += 200
-            tier = -1  # 占城最优先
+        score += _priority(ctx, actor, target)
         kind = rules.units[actor.type] if isinstance(actor, Unit) else None
         if info.get("area"):
             # 炮击整格 / 地毯式轰炸：一起挨炸的敌军也算收益（打密集的部队更值）
@@ -484,10 +496,10 @@ def attack_choice(ctx, actor, *, only_static=False):
                 s, rules, actor.nation, actor.type, isinstance(target, City), info.get("modifiers")
             )
         if score >= 0 or loss == 0:
-            best.append((tier, -score, tile, info, target))
+            best.append((-score, tile, info, target))
     if not best:
         return None
-    _, _, tile, info, target = min(best, key=lambda b: b[:3])
+    _, tile, info, target = min(best, key=lambda b: b[:2])
     return tile, info, target
 
 
@@ -1345,15 +1357,20 @@ def _convoy(ctx, unit, tile):
 
 
 def _sea_room(ctx, unit, tile):
-    """下了海的部队这回合还能不能停到 tile：没有外国单位、还有空位；每格最多 ESCORT_LOAD 支
-    下了海的部队（算上本回合已经认领的），给护航的战舰留一个位置。"""
+    """下了海的部队这回合还能不能停到 tile：没有外国单位，算上本回合已经认领的还有空位。"""
     s, rules = ctx.state, ctx.rules
     here = s.units_at(tile, "surface")
     if any(v.nation != unit.nation for v in here) or not movement.has_room(s, rules, unit, tile):
         return False
     claims = _ai(ctx).setdefault("sea_claims", Counter())
-    troops = sum(1 for v in here if naval.afloat(s, rules, v))
-    return troops + claims[tile] < ESCORT_LOAD
+    return len(here) + claims[tile] < stacking.surface_limit(s, rules, tile)
+
+
+def _crowd(ctx, tile) -> int:
+    """tile 上（连同本回合已经认领的）下了海的部队有几支：挑格子时越少越好，给护航的战舰留位置。"""
+    s, rules = ctx.state, ctx.rules
+    troops = sum(1 for v in s.units_at(tile, "surface") if naval.afloat(s, rules, v))
+    return troops + _ai(ctx).setdefault("sea_claims", Counter())[tile]
 
 
 def _embark_spot(ctx, unit, op):
@@ -1375,7 +1392,7 @@ def _embark_spot(ctx, unit, op):
             for t in [n, *g.neighbors_of(n)]
             if any(v.nation == unit.nation and _warship(rules, v) for v in s.units_at(t, "surface"))
         ]
-        key = (n not in ships, not ships, g.distance(n, op["beach"]), n)
+        key = (n not in ships, not ships, _crowd(ctx, n), g.distance(n, op["beach"]), n)
         if best is None or key < best:
             best = key
     return None if best is None else best[-1]
@@ -1482,7 +1499,7 @@ def _sail(ctx, unit, plan, target):
         if claims.get(land, 0) >= DROP_PER_TILE:
             continue
         spots = [w for w in seas if _sea_room(ctx, unit, w)]
-        for spot in sorted(spots, key=lambda w: (g.distance(unit.tile, w), w))[:2]:
+        for spot in sorted(spots, key=lambda w: (_crowd(ctx, w), g.distance(unit.tile, w), w))[:2]:
             if march(ctx, unit, spot, why):
                 claims[land] = claims.get(land, 0) + 1
                 _convoy(ctx, unit, ctx.planned_routes[unit.id][-1])
@@ -2874,7 +2891,7 @@ def _navy(ctx, unit, plan, target):
     seas = _sea_comps(ctx, unit.tile)
     wc = geography(s, rules)["water_components"]
     hunt = min(round(HUNT_RADIUS * map_scale(g)), ut.moves + reach + 2)  # 一两回合追得上的才追
-    # 先追对自己有威胁的敌舰，其次是海上的敌方陆军（没有攻击力、血量极低，一打就沉）
+    # 敌舰（对自己有威胁）和海上的敌方陆军（没有攻击力、血量极低，一打就沉）都追，敌舰略优先
     foes = [
         (convoy, g.distance(t, unit.tile), t)
         for convoy, ships in ((False, _enemy_ships(ctx)), (True, _enemy_convoys(ctx)))
@@ -2882,7 +2899,8 @@ def _navy(ctx, unit, plan, target):
         if at_war(s, n, unit.nation) and g.distance(t, unit.tile) <= hunt and int(wc[t]) in seas
     ]
     if foes and unit.hp * 100 // ut.hp >= 50:
-        convoy, _, foe = min(foes)
+        # 海上的敌方陆军按远 3 格算（先追有威胁的敌舰，不是硬性先后）
+        convoy, _, foe = min(foes, key=lambda f: (f[1] + 3 * f[0], f[2]))
         why = "截击海上的敌方陆军" if convoy else "追击敌方舰船"
         if g.distance(unit.tile, foe) > reach and march(ctx, unit, foe, why, stop_within=reach):
             return True
