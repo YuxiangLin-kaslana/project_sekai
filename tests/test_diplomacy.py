@@ -161,13 +161,19 @@ def test_relations_recover_after_war_and_enemies_of_an_enemy_become_allies():
     assert formed is not None and formed > 5  # 不是当场结盟，是一起打了一阵之后
 
 
-def test_dominant_side_refuses_peace_when_few_nations_remain():
+def test_dominant_side_refuses_peace_when_few_nations_remain(monkeypatch):
+    from engine.systems import tide
+
     s = board(2)
     rel = diplomacy.relation(s, 1, 2)
     s.relations[diplomacy.key(1, 2)] = {**rel, "status": "war", "since": 0, "progress": 0}
     s.turn = 500  # 早就僵持了
     pw = {1: 300.0, 2: 20.0}
+    monkeypatch.setattr(tide, "at", lambda seed, turn: 0.8)  # 天下大势偏“合”
     ok, _ = diplomacy.accepts(s, "peace", 1, 2, pw)
     assert not ok  # 只剩 2 国、我方占上风：僵持也不和
     ok, _ = diplomacy.accepts(s, "peace", 2, 1, pw)
     assert ok  # 弱的一方当然愿意和
+    monkeypatch.setattr(tide, "at", lambda seed, turn: -0.8)  # 偏“分”：终局推力弱，僵持就和
+    ok, _ = diplomacy.accepts(s, "peace", 1, 2, pw)
+    assert ok

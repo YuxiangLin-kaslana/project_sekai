@@ -195,3 +195,17 @@ def test_a_freshly_conquered_city_at_zero_stability_revolts_back_to_its_old_owne
     assert after.nation == 1 and occupier.id not in out.state.units  # 起义归附原主，占领军被消灭
     assert any(e["type"] == "city_revolt" for e in out.events)
     assert not any(e["type"] == "city_independence" for e in out.events)
+
+
+def test_tide_is_deterministic_and_varies_between_games():
+    import importlib
+
+    from engine.systems import tide
+
+    importlib.reload(tide)  # 绕开 conftest 里固定为 0 的大势
+    a = [tide.at(1, t) for t in range(0, 2000, 50)]
+    assert a == [tide.at(1, t) for t in range(0, 2000, 50)]  # 种子 + 回合决定，和调用顺序无关
+    assert all(-1 < x < 1 for x in a)
+    assert max(a) - min(a) > 0.5  # 同一局里有分有合
+    early = [sum(tide.at(s, t) for t in range(0, 300, 10)) / 30 for s in range(1, 101)]
+    assert any(e > 0.4 for e in early) and any(e < -0.4 for e in early)  # 有的局偏合、有的局偏分

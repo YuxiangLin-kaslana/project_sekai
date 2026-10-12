@@ -26,6 +26,7 @@ from engine.systems.context import StepContext
 from engine.systems.diplomacy import at_war
 from engine.systems.settlement import city_scale
 from engine.systems.soft import fade, ramp, roll
+from engine.systems.tide import boost
 
 SHORTAGE_NAMES = {"food": "缺粮", "gold": "缺钱", "production": "缺生产力"}
 WAR_NAMES = {
@@ -115,6 +116,7 @@ def war_pressures(ctx: StepContext) -> dict[int, list[str]]:
     far = max(1, cfg.far * city_scale(s.grid))
     sizes = Counter(c.nation for c in s.cities.values())
     drift = _drift(s, cfg)
+    tide_factor = boost(s, -TIDE_OVEREXTENSION)
     out = {}
     for city in sorted(s.cities.values(), key=lambda c: c.id):
         reasons = []
@@ -130,6 +132,7 @@ def war_pressures(ctx: StepContext) -> dict[int, list[str]]:
                 0.5
                 * ramp(sizes[city.nation], cfg.empire_size - 4, cfg.empire_size + 4)
                 * ramp(s.grid.distance(capital.tile, city.tile), 0.6 * far, 1.4 * far)
+                * tide_factor  # 天下大势偏“分”时更容易离心
             )
             if roll(ctx, p, "over", city.id):
                 reasons.append("overextension")
@@ -217,6 +220,7 @@ def resolve(ctx: StepContext) -> None:
                 _independence(ctx, city)
 
 
+TIDE_OVEREXTENSION = 0.5  # 过度扩张的概率乘 exp(−0.5 × 天下大势)（engine/systems/tide.py）
 REVOLT_TURNS = 60  # 稳定度降到 0 的城起义归附原主（而不是独立）的概率按这个尺度随占领时间衰减
 
 

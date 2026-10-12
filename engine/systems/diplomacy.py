@@ -21,11 +21,11 @@ DEFAULT（交战）处理——老存档、测试棋盘照旧；新开的对局�
   倍以上，而且和两国都接壤或交战）+COMMON_THREAT；已经结盟 +ALLIED，但没有共同的敌人、也没有共同的
   威胁时 −NO_CAUSE（同盟失去意义，慢慢瓦解，不会全世界结成一团谁也打不了谁）；
 - 正在交战 −AT_WAR；刚打完仗（RECENT_WAR 回合内）−RECENT_DROP，随时间减弱；
-- 某国兵力远超其余各国平均（DOMINANT_POWER 倍）：和它的关系 −DOMINANT_DROP；只剩 FEW_NATIONS 国及以下：
-  所有关系 −FEW_DROP（统一在望，谁都不放过谁）。
+- 某国兵力远超其余各国平均（DOMINANT_POWER 倍）：和它的关系 −DOMINANT_DROP；剩下的国家越少：
+  所有关系最多 −FEW_DROP（终局推力 endgame，乘天下大势的合力：偏“分”时两强对峙不会被推着打到底）。
 AI（resolve，每回合在国家 AI 规划之前，按国家编号依次）：
 - 求和：打了 MIN_WAR 回合以上，打不过（连同盟友兵力不到对方 PEACE_RATIO）或僵持（STALEMATE 回合没有城市
-  易手）就求和；对方占上风（DOMINATE 倍）且不僵持时拒绝；只剩 FEW_NATIONS 国及以下时占上风的一方僵持也拒绝。
+  易手）就求和；对方占上风（DOMINATE 倍）且不僵持时拒绝；僵持时按终局推力的概率拒绝（越到终局、大势越“合”越不和）。
   签和约后关系值落到 PEACE_VALUE，休战 TRUCE 回合。
 - 宣战：扩张期结束（或没地方扩张了）才打仗。对每个够得着的和平国家（陆上邻国，隔海够得着的打折）算
   宣战意愿（_appetite，平滑打分，不设门槛）：连同双方盟友越占优、关系越差越想打；国家越少越敢打；刚打
@@ -72,7 +72,8 @@ NO_CAUSE_STEP = (
 AT_WAR = 30  # 正在交战
 RECENT_WAR, RECENT_DROP = 60, 20  # 刚打完仗：这么多回合内关系目标值 −20（随时间减弱）
 DOMINANT_POWER, DOMINANT_DROP = 1.6, 15  # 兵力超过其余各国平均的 1.6 倍：和它的关系 −15
-FEW_NATIONS, FEW_DROP = 4, 20  # 只剩 4 国及以下：所有关系 −20
+FEW_NATIONS, FEW_DROP = 4, 20  # 剩下的国家从 FEW_NATIONS + 2 减到 FEW_NATIONS 时，所有关系平滑地 −20 × 合力
+TIDE_WAR = 0.4  # 宣战概率乘 exp(0.4 × 天下大势)：偏“合”时兼并战争多（engine/systems/tide.py）
 # 宣战意愿（_appetite，0–1，全是平滑的打分，不设门槛）：
 OFFENSIVE_RATIO = 1.2  # 连同双方盟友的兵力比到这么多倍时，“占优”这一项给一半分（越占优越高）
 ENDGAME_SPAN = (
@@ -235,7 +236,7 @@ def propose(ctx, kind: str, a: int, b: int) -> str | None:
         if len(allies(s, a)) >= MAX_ALLIES or len(allies(s, b)) >= MAX_ALLIES:
             return f"每个国家最多 {MAX_ALLIES} 个盟友"
     if automatic(s, b):
-        ok, why = accepts(s, kind, b, a, power(s, ctx.rules))
+        ok, why = accepts(s, kind, b, a, power(s, ctx.rules), ctx)
         if ok:
             (make_peace if kind == "peace" else make_alliance)(ctx, a, b)
         else:
@@ -299,15 +300,35 @@ def ratio(pw, a, b) -> float:
     return pw.get(a, 0) / max(1.0, pw.get(b, 0))
 
 
-def accepts(state, kind, nation, other, pw) -> tuple[bool, str]:
-    """AI 国家 nation 接不接受 other 的提议（pw：各国兵力，见 power）。"""
+def endgame(state) -> float:
+    """终局推力（0 … 1）：剩下的国家越少越大（FEW_NATIONS + 2 国时为 0，FEW_NATIONS 国及以下为 1），
+    乘天下大势的合力（engine/systems/tide.py）——大势偏“分”时，终局也不会被推着打到统一。"""
+    from engine.systems.soft import ramp
+    from engine.systems.tide import unity
+
+    alive = sum(1 for n in state.nations if state.nation_cities(n))
+    return ramp(FEW_NATIONS + 2 - alive, 0, 2) * unity(state)
+
+
+def accepts(state, kind, nation, other, pw, ctx=None) -> tuple[bool, str]:
+    """AI 国家 nation 接不接受 other 的提议（pw：各国兵力，见 power）。ctx：有的话，僵持时按终局推力
+    的概率拒绝求和（没有就按推力过半拒绝）。"""
     if kind == "peace":
         rel = relation(state, nation, other)
         stalled = state.turn - rel.get("progress", rel.get("since", 0)) >= STALEMATE
-        few = sum(1 for n in state.nations if state.nation_cities(n)) <= FEW_NATIONS
-        if ratio(pw, nation, other) >= DOMINATE and (not stalled or few):
-            # 占上风不和；只剩几个国家时（统一在望）僵持也不和
-            return False, "我方占上风，继续打"
+        if ratio(pw, nation, other) >= DOMINATE:
+            if not stalled:
+                return False, "我方占上风，继续打"
+            # 僵持：越到终局、天下大势越“合”越不肯和
+            push = endgame(state)
+            if ctx is not None:
+                from engine.systems.soft import roll
+
+                refuse = roll(ctx, push, "peace", nation, other)
+            else:
+                refuse = push > 0.5
+            if refuse:
+                return False, "我方占上风，继续打"
         return True, ""
     if kind == "alliance":
         if len(allies(state, nation)) >= MAX_ALLIES:
@@ -371,7 +392,7 @@ def _pair_keys(borders) -> set[str]:
     return {key(a, b) for a, b in borders}
 
 
-def target_value(state, a, b, pw, borders, wars, crowded, dominant, few) -> tuple[float, bool]:
+def target_value(state, a, b, pw, borders, wars, crowded, dominant, few=0.0) -> tuple[float, bool]:
     """a、b 两国关系值的目标值（每回合向它靠拢，见模块说明），以及这是不是一个失去意义的同盟。"""
     t = float(START_VALUE)
     cause = True
@@ -398,8 +419,7 @@ def target_value(state, a, b, pw, borders, wars, crowded, dominant, few) -> tupl
         t -= RECENT_DROP * (1 - since / RECENT_WAR)
     if a in dominant or b in dominant:
         t -= DOMINANT_DROP
-    if few:
-        t -= FEW_DROP
+    t -= FEW_DROP * few  # 终局推力（endgame，0 … 1）
     return t, st == "alliance" and not cause
 
 
@@ -414,7 +434,7 @@ def update_relations(ctx, pw, borders=None) -> None:
     mean = {n: sum(pw.get(m, 0) for m in alive if m != n) / max(1, len(alive) - 1) for n in alive}
     dominant = {n for n in alive if pw.get(n, 0) > DOMINANT_POWER * max(1.0, mean[n])}
     crowded = {n for n in alive if _crowded(s, n)}
-    few = len(alive) <= FEW_NATIONS
+    few = endgame(s)
     for i, a in enumerate(alive):
         for b in alive[i + 1 :]:
             v = value(s, a, b)
@@ -516,7 +536,12 @@ def _maybe_declare(ctx, nid, alive, pw, borders, rng) -> None:
     calm = max(0.0, 1 - load / WAR_LOAD)  # 手上的仗越重，越不想开新仗
     if calm <= 0:
         return
-    need = 1 + (OFFENSIVE_RATIO - 1) * min(1.0, max(0, len(alive) - 2) / ENDGAME_SPAN)
+    # 国家越少越敢打（终局两强不会永远相安无事）——这股推力乘天下大势的合力：偏“分”时照常要兵力优势
+    from engine.systems.tide import boost, unity
+
+    need = 1 + (OFFENSIVE_RATIO - 1) * (
+        1 - unity(s) * (1 - min(1.0, max(0, len(alive) - 2) / ENDGAME_SPAN))
+    )
     need *= 1 + CONSOLIDATE_PULL * unrest(s, ctx.rules, nid)
     land, sea = _war_targets(s, ctx.rules, nid, borders)
     best = None
@@ -540,7 +565,7 @@ def _maybe_declare(ctx, nid, alive, pw, borders, rng) -> None:
         want = _appetite(odds, need, hate, factor)
         if best is None or (want, -other) > (best[0], -best[1]):
             best = (want, other)
-    if best is not None and rng.random() < WAR_CHANCE * best[0]:
+    if best is not None and rng.random() < WAR_CHANCE * boost(s, TIDE_WAR) * best[0]:
         v = value(s, nid, best[1])
         declare_war(ctx, nid, best[1], why=f"关系恶化（关系值 {v:.0f}），兵力占优")
 
@@ -551,7 +576,7 @@ def _propose_ai(ctx, kind, a, b, pw):
     if not automatic(s, b):
         propose(ctx, kind, a, b)
         return
-    ok, why = accepts(s, kind, b, a, pw)
+    ok, why = accepts(s, kind, b, a, pw, ctx)
     if ok:
         (make_peace if kind == "peace" else make_alliance)(ctx, a, b)
 

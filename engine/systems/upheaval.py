@@ -29,6 +29,8 @@ from engine.state import Unit
 from engine.systems.diplomacy import at_war
 from engine.systems.settlement import city_scale
 from engine.systems.soft import fade, ramp, roll
+from engine.systems.tide import at as tide_at
+from engine.systems.tide import boost, phase, tide
 
 # 游击队：每回合基础概率 × 新占领程度（按 PARTISAN_FADE 回合衰减）× 不稳程度
 PARTISAN_RATE = 0.12
@@ -57,6 +59,12 @@ COALITION_TARGET_RECOVER = 240  # 同一个霸主再被反霸的恢复尺度
 # 投降并入
 SURRENDER_RATE = 0.25
 
+# 天下大势（engine/systems/tide.py）：各事件概率乘 exp(±k × 大势)，大势在 −1（分）… 1（合）之间
+TIDE_PARTISAN = 0.6
+TIDE_UPHEAVAL = 0.7  # 内战、将领叛变
+TIDE_COALITION = 0.8
+TIDE_SURRENDER = 1.0
+
 CHRONICLE_MAX = 300
 
 
@@ -79,6 +87,7 @@ def resolve(ctx) -> None:
     if ctx.immediate:
         return
     _chronicle_events(ctx)
+    _tide_events(ctx)
     _decay(ctx)
     _partisans(ctx)
     for nid in sorted(s.nations):
@@ -127,6 +136,21 @@ def _chronicle_events(ctx) -> None:
                 record(s, "great_war", f"大国开战：{_name(s, a)}向{_name(s, b)}宣战", (a, b))
 
 
+def _tide_events(ctx) -> None:
+    """天下大势换了一个阶段（天下思定 / 列强角逐 / 群雄并起）：记一条大事记。"""
+    s = ctx.state
+    if s.turn < 1:
+        return
+    now, before = phase(tide(s)), phase(tide_at(s.seed, s.turn - 1))
+    if now != before:
+        text = {
+            "天下思定": "天下大势转向“合”：天下思定，强国兼并之势渐成",
+            "列强角逐": "天下大势趋于平衡：列强角逐",
+            "群雄并起": "天下大势转向“分”：群雄并起，人心思变",
+        }[now]
+        record(s, "tide", text)
+
+
 def _great_powers(s, rules) -> set[int]:
     """兵力前三的国家（大事记里“大国开战”用）。"""
     from engine.systems.diplomacy import power
@@ -166,6 +190,7 @@ def _partisans(ctx) -> None:
             * ramp(70 - city.stability, 0, 50)  # 越不稳越可能
             * 0.15**here  # 这座城已经有游击队：再冒的可能小得多
             * fade(alive.get(owner, 0), PARTISAN_PER_NATION)  # 这个国家的游击队越多越少冒
+            * boost(s, -TIDE_PARTISAN)  # 天下大势偏“分”时更多
         )
         if not roll(ctx, p, "partisan", city.id):
             continue
@@ -219,6 +244,7 @@ def _civil_war(ctx, nid) -> bool:
             unrest, 0.1 - 0.05 * drift, 0.45 - 0.15 * drift
         )  # 越动荡越容易（离心中的帝国更低就够）
         * (1 - fade(s.turn - nation.upheaval_turn, UPHEAVAL_RECOVER))  # 刚乱过：慢慢恢复
+        * boost(s, -TIDE_UPHEAVAL)  # 天下大势偏“分”时更多
     )
     if not roll(ctx, p, "civil", nid):
         return False
@@ -347,6 +373,7 @@ def _defections(ctx) -> None:
             * ramp(75 - mood, 0, 40)  # 本国越不稳越可能
             * ramp(len(cities), 4, 12)  # 大国才有地方割据
             * (1 - fade(s.turn - nation.upheaval_turn, UPHEAVAL_RECOVER))
+            * boost(s, -TIDE_UPHEAVAL)
         )
         if not corps or not roll(ctx, p, "defect", gen.id):
             continue
@@ -423,6 +450,7 @@ def _coalition(ctx) -> None:
             * ramp(share, 0.28, 0.42)  # 霸主越强越可能
             * ramp(others / max(1.0, pw.get(hid, 0)), 0.1, 0.4)  # 其余各国合起来够不够分量
             * (1 - fade(s.turn - hegemon.coalition_turn, COALITION_TARGET_RECOVER))
+            * boost(s, -TIDE_COALITION)  # 天下大势偏“合”时各国更难联手
         )
         if not roll(ctx, p, "coalition", hid):
             continue
@@ -499,6 +527,7 @@ def _surrender(ctx) -> None:
             * ramp(gap, math.log(3), math.log(10))  # 兵力差距越大越可能
             * fade(count[nid] - 1, 1.5)  # 越小越可能（一座城的小国最可能）
             * ramp(s.turn - since, 10, 40)  # 打得越久越可能
+            * boost(s, TIDE_SURRENDER)  # 天下大势偏“合”时更可能
         )
         if not roll(ctx, p, "surrender", nid):
             continue
