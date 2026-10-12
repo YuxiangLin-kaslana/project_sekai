@@ -128,7 +128,8 @@ EXPLOIT_CAUTION = 0.4  # 侧翼暴露度（engine/systems/learning.exposure）�
 # 防穿插（plan_screens）：站在敌人的角度推演——敌方快速部队这回合够得着、站上去能切断 / 拉长我军补给线的格子，
 # 派附近不在第一线的部队去占住（保护侧翼、堵住战线缺口）。最近越常被侧击、背击、合围（暴露度越高），
 # 门槛越低、派得越多
-SCREEN_MIN = 60  # 威胁分（和穿插同样的算法）不到这么多不派兵
+SCREEN_MIN = 90  # 威胁分（和穿插同样的算法）不到这么多不派兵；暴露度满时降到 SCREEN_MIN × (1 − SCREEN_LEARN)
+SCREEN_LEARN = 0.6  # 吃过亏才学会防：开阔地上的对照实验里，不分情况地派兵堵缺口没有可测的好处
 SCREEN_MAX = 2  # 每国每回合最多派这么多支（暴露度满时再多 SCREEN_EXTRA 支）
 SCREEN_EXTRA = 3
 SCREEN_REAR = 3  # 只抽离敌军这么多格以外的部队（不削弱第一线、第二线）
@@ -1246,7 +1247,7 @@ def plan_screens(ctx, nid, units, guards):
                 score += EXPLOIT_STRETCH * max(0, min(EXPLOIT_STRETCH_CAP, longer))
         threats[t] = score
     risk = exposure(s, nid)
-    floor = SCREEN_MIN * (1 - 0.5 * risk)
+    floor = SCREEN_MIN * (1 - SCREEN_LEARN * risk)
     cap = SCREEN_MAX + round(SCREEN_EXTRA * risk)
     busy = set(guards) | set(_ai(ctx).get("encircle", {})) | set(_ai(ctx).get("exploit", {}))
     foes_at = {
