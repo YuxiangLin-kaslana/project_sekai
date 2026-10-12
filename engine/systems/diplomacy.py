@@ -420,22 +420,23 @@ def _bloc(s, n, pw) -> float:
 
 
 def _war_targets(s, rules, nid, borders) -> list[int]:
-    """nid 能开战的对象：陆上邻国；没有陆上邻国时，城市离得够近（隔海够得着）的国家。"""
+    """nid 能开战的对象：陆上邻国；陆上邻国都是盟友、或者已经在打（没有能新开战的）时，再加上城市
+    离得够近（隔海够得着）的国家——不然后期隔海的残余国家永远没人去打，统一不了。"""
     near = _neighbors(borders, nid)
-    if near:
+    if any(status(s, nid, n) == "peace" for n in near):
         return sorted(near)
     from engine.systems.settlement import map_scale
 
     reach = SEA_WAR_REACH * map_scale(s.grid)
     mine = [c.tile for c in s.nation_cities(nid)]
-    out = []
+    out = set(near)
     for other in sorted(s.nations):
-        if other == nid or not s.nation_cities(other):
+        if other == nid or other in out or not s.nation_cities(other):
             continue
         theirs = [c.tile for c in s.nation_cities(other)]
         if min(s.grid.distance(x, y) for x in mine for y in theirs) <= reach:
-            out.append(other)
-    return out
+            out.add(other)
+    return sorted(out)
 
 
 def resolve(ctx) -> None:
