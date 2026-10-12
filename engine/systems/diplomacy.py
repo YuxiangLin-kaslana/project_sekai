@@ -358,11 +358,6 @@ def _pair_keys(borders) -> set[str]:
 def target_value(state, a, b, pw, borders, wars, crowded, dominant, few) -> tuple[float, bool]:
     """a、b 两国关系值的目标值（每回合向它靠拢，见模块说明），以及这是不是一个失去意义的同盟。"""
     t = float(START_VALUE)
-    if (min(a, b), max(a, b)) in borders:
-        t -= BORDER_RIVALRY + CROWDED * ((a in crowded) + (b in crowded))
-        hi, lo = max(pw.get(a, 0), pw.get(b, 0)), min(pw.get(a, 0), pw.get(b, 0))
-        if hi >= PREY_RATIO * max(lo, 1.0):
-            t -= PREY
     cause = True
     if wars[a] & wars[b]:
         t += COMMON_ENEMY  # 敌人的敌人就是朋友
@@ -370,6 +365,12 @@ def target_value(state, a, b, pw, borders, wars, crowded, dominant, few) -> tupl
         t += COMMON_THREAT
     else:
         cause = False
+    if (min(a, b), max(a, b)) in borders and not cause:
+        # 邻国之间的摩擦（共同的敌人、共同的威胁面前先放下：大国的邻国才联合得起来）
+        t -= BORDER_RIVALRY + CROWDED * ((a in crowded) + (b in crowded))
+        hi, lo = max(pw.get(a, 0), pw.get(b, 0)), min(pw.get(a, 0), pw.get(b, 0))
+        if hi >= PREY_RATIO * max(lo, 1.0):
+            t -= PREY
     rel = relation(state, a, b)
     st = rel["status"]
     if st == "alliance":

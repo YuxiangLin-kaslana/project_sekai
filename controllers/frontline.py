@@ -44,7 +44,8 @@ ARROW_REACH = 12  # 进攻箭头只画离目标城这么近（× 地图尺度的
 DEFENSIVE_SCORE = 20  # 防守时只打这么划算以上的（或者能击杀）
 MAIN_WEIGHT = 2.5  # 主攻方向分兵的份额加倍（集中兵力在一处突破，其余地段薄守）
 MAIN_OFFENSE = 1.0  # 主攻方向兵力和对面相当就进攻（别的地段要 OFFENSE 倍）
-CONSOLIDATE = 0.25  # 动荡、刚打下来的城占到这么多：巩固占领区（只有主攻方向还能进攻，而且要占优）
+CONSOLIDATE = 0.2  # 动荡、刚打下来的城占到这么多：巩固占领区（只有主攻方向还能进攻，而且要占优）
+CONSOLIDATE_TURNS = 2  # “刚打下来”：被攻占后 conquest_turns 的这么多倍回合内
 
 
 def consolidating(state, rules, nid) -> bool:
@@ -58,7 +59,7 @@ def consolidating(state, rules, nid) -> bool:
         1
         for c in cities
         if c.stability < cfg.unrest
-        or (c.captured_turn is not None and state.turn - c.captured_turn < cfg.conquest_turns)
+        or state.turn - c.captured_turn < CONSOLIDATE_TURNS * cfg.conquest_turns
     )
     return shaky >= CONSOLIDATE * len(cities)
 
