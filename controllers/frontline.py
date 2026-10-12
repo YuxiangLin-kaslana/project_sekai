@@ -38,6 +38,7 @@ THREAT_WEIGHT = 1.5  # 分兵时对面每支敌军抵多少格战线长度
 CONVERGE = 5  # 进攻时离目标敌城这么近（× 地图尺度的平方根）的部队直接围城
 APPROACH_BUDGET = 64  # 每国每回合最多算多少次“先走再打”（每次要算一张移动范围、几次战斗预览）
 APPROACH_TARGETS = 4  # 每次最多细算几个目标
+ARROW_REACH = 12  # 进攻箭头只画离目标城这么近（× 地图尺度的平方根）的战线段
 DEFENSIVE_SCORE = 20  # 防守时只打这么划算以上的（或者能击杀）
 UNREACHED = 1 << 20
 
@@ -394,10 +395,12 @@ def _as_front(ctx, nation, seg) -> dict:
     tiles = seg["tiles"]
     arrow = None
     city = s.cities.get(seg.get("objective"))
-    if seg["stance"] == "进攻" and city is not None:
-        # 进攻箭头：从离目标城最近的战线格指向目标城（前端画成钢铁雄心式的进攻箭头）
+    if seg["stance"] == "进攻" and city is not None and len(members) >= 2:
+        # 进攻箭头：从离目标城最近的战线格指向目标城（前端画成钢铁雄心式的进攻箭头）；
+        # 目标太远（还谈不上直接进攻）不画，免得箭头横穿半张地图
         start = min(tiles, key=lambda t: (s.grid.distance(t, city.tile), t))
-        if s.grid.distance(start, city.tile) > 1:
+        reach = ARROW_REACH * math.sqrt(_r().map_scale(s.grid))
+        if 1 < s.grid.distance(start, city.tile) <= reach:
             arrow = [start, city.tile]
     return {
         "id": seg["id"],

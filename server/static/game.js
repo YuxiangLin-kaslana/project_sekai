@@ -2400,10 +2400,13 @@ const FRONT_INSET = 0.18;
 function drawFronts(ctx, v) {
   if (!G.layers.plans || G.political) return;
   const z = v.z;
-  const width = Math.max(2.4, Math.min(6, z * 0.13));
-  const tooth = Math.max(3, Math.min(10, z * 0.22));
+  // 远景、中景战线是主角（粗）；拉近以后让给兵牌和地形（细一点、淡一点）
+  const near = z >= 10;
+  const width = near ? 3 : Math.max(2.4, Math.min(5, z * 0.13));
+  const tooth = near ? 5 : Math.max(3, Math.min(8, z * 0.22));
   for (const n of G.nations.values()) {
-    const fronts = (n.strategy?.fronts ?? []).filter(f => f.kind === 'land' && f.edges?.length);
+    // 只有一格的小段（被敌军围住的孤立据点）不画，地图上不满是小圈
+    const fronts = (n.strategy?.fronts ?? []).filter(f => f.kind === 'land' && f.edges?.length > 1);
     if (!fronts.length) continue;
     const color = shade(n.rgb, 0.08);
     for (const f of fronts) {
@@ -2432,6 +2435,7 @@ function drawFronts(ctx, v) {
         });
       }
       ctx.save();
+      if (near) ctx.globalAlpha = 0.7;
       ctx.lineCap = 'round'; ctx.lineJoin = 'round';
       ctx.strokeStyle = 'rgba(18,14,10,0.78)'; ctx.lineWidth = width + 2.6; ctx.stroke(line);
       ctx.strokeStyle = color; ctx.lineWidth = width; ctx.stroke(line);
@@ -2440,7 +2444,7 @@ function drawFronts(ctx, v) {
         ctx.strokeStyle = 'rgba(18,14,10,0.6)'; ctx.lineWidth = 1; ctx.stroke(teeth);
       }
       ctx.restore();
-      if (attack && f.arrow) drawPlanArrow(ctx, v, { kind: 'main', from: f.arrow[0], to: f.arrow[1] }, n.rgb, 0.62, false);
+      if (attack && f.arrow && !near) drawPlanArrow(ctx, v, { kind: 'front', from: f.arrow[0], to: f.arrow[1] }, n.rgb, 0.5, false);
     }
   }
 }
@@ -2538,6 +2542,7 @@ function drawCorpsLabels(ctx, v) {
 // 本回合野战部队的包抄 / 包围动作是细箭头。备战时淡、推进 / 航渡时中、围城时最实。
 const PLAN_STYLE = {
   main: { w: 0.85, min: 8, head: 1.9 },
+  front: { w: 0.32, min: 4, max: 9, head: 2.4 }, // 陆上战线的进攻箭头：宽度封顶，不随缩放变成一大条
   flank: { w: 0.4, min: 4.5, head: 2.3, bend: 0.55, spread: 1.3 },
   assemble: { w: 0.2, min: 2.5, head: 3.2, dash: true },
   sail: { w: 0.45, min: 5, head: 2.2 },
@@ -2694,7 +2699,7 @@ function drawPlanArrow(ctx, v, a, rgb, alpha, dashed) {
   const s = PLAN_STYLE[a.kind] ?? PLAN_STYLE.flank_move;
   const p = planGeometry(v, a);
   if (p.len < 0.5) return;
-  const width = Math.max(s.min, v.z * s.w), head = width * s.head;
+  const width = Math.min(s.max ?? Infinity, Math.max(s.min, v.z * s.w)), head = width * s.head;
   const color = shade(rgb, 0.12);
   for (let k = v.k0; k <= v.k1; k++) {
     const x1 = v.sx(p.ax, k), y1 = v.sy(p.ay), x2 = v.sx(p.bx, k), y2 = v.sy(p.by), cx = v.sx(p.mx, k), cy = v.sy(p.my);
