@@ -1,4 +1,9 @@
-"""Shared movement planner: range, route preview and execution are identical."""
+"""Shared movement planner: range, route preview and execution are identical.
+
+陆军下海（engine/systems/naval.py）：陆军走进海面 / 从海面走上陆地这一步的代价是 EMBARK（远大于任何
+移动力），只有满移动力（本回合还没走过）才走得了，走完移动力清零——下海、上岸各花一整回合。在海上每回合
+的移动力按规则集 embark.moves（full_moves）。多回合寻路（A*、AI 距离场）里这一步按 EMBARK_ROUTE 算，
+能走陆路就不下海。"""
 
 from __future__ import annotations
 
@@ -15,8 +20,12 @@ from engine.state import MOVE_STEPS, GameState, Unit
 from engine.systems import zoc
 from engine.systems.cities import coastal
 from engine.systems.context import StepContext
+from engine.systems.naval import afloat, at_sea, bridges
 from engine.systems.roads import crosses_river
 from engine.systems.stacking import has_room as stack_room
+
+EMBARK = 10_000  # 下海 / 上岸这一步的代价：要满移动力才走得了，走完移动力清零（一整回合）
+EMBARK_ROUTE = 10 * MOVE_STEPS  # 多回合寻路里下海 / 上岸按 10 点移动力算（能走陆路就不绕海路）
 
 
 def group_members(state, unit):
@@ -110,15 +119,26 @@ def air_radius(grid, ut) -> int:
     return max(1, round(ut.range * grid.tuning.get("air_range", 100) / 100))
 
 
-def unit_moves(grid, ut) -> int:
+def unit_moves(grid, ut, sea_moves: int | None = None) -> int:
     """一回合的移动力：陆军、舰船随地图放大（地图尺度的平方根：80×50 不变，128×80 约 1.26 倍，
-    800×460 约 3.1 倍），大地图上走得过来；飞机不变（作战半径另算）。"""
+    800×460 约 3.1 倍），大地图上走得过来；飞机不变（作战半径另算）。
+    sea_moves：下了海的陆军在海上的移动力（规则集 embark.moves），和舰船一样放大。"""
     if ut.domain == "air":
         return ut.moves
     from engine.systems.settlement import map_scale
 
-    pct = grid.tuning.get("sea_speed" if ut.domain == "sea" else "land_speed", 100)
-    return max(1, round(ut.moves * map_scale(grid) ** 0.5 * pct / 100))
+    sea = ut.domain == "sea" or sea_moves is not None
+    pct = grid.tuning.get("sea_speed" if sea else "land_speed", 100)
+    base = ut.moves if sea_moves is None else sea_moves
+    return max(1, round(base * map_scale(grid) ** 0.5 * pct / 100))
+
+
+def full_moves(state, rules, unit) -> int:
+    """unit 现在的满移动力：下了海的陆军按规则集 embark.moves，其余按单位表。"""
+    ut = rules.units[unit.type]
+    if ut.domain == "land" and afloat(state, rules, unit):
+        return unit_moves(state.grid, ut, rules.embark.moves)
+    return unit_moves(state.grid, ut)
 
 
 def edge_table(state, rules, domain: str, nation: int) -> np.ndarray:
@@ -145,6 +165,18 @@ def edge_table(state, rules, domain: str, nation: int) -> np.ndarray:
                 (g.river_edges[safe[:, d]] & (1 << ((d + 3) % 6))) != 0
             )
             table[:, d] += np.where((table[:, d] > 0) & river, MOVE_STEPS, 0).astype(np.int16)
+        if domain == "amphibious":
+            # 下海 / 上岸按 EMBARK_ROUTE 算；桥（水面上的道路格）只能沿道路上去
+            sea = g.is_water.copy()
+            br = bridges(state)
+            if br:
+                sea[np.fromiter(br, dtype=np.int64)] = False
+            for d in range(6):
+                n = safe[:, d]
+                col = table[:, d]
+                cross = (sea != sea[n]) & (col > 0)
+                col = np.where(cross, EMBARK_ROUTE, col)
+                table[:, d] = np.where(g.is_water[n] & ~sea[n], 0, col).astype(np.int16)
         for a, b in state.roads:
             d = g.direction_to(a, b)
             table[a, d] = table[b, (d + 3) % 6] = 1
@@ -155,8 +187,31 @@ def edge_table(state, rules, domain: str, nation: int) -> np.ndarray:
 
 
 def move_domain(ut) -> str:
-    """通行方式：两栖单位（amphibious 标签，开拓者）陆地、水面都能走；其余按军种。"""
+    """寻路的通行方式：amphibious 标签（开拓者）把海路也算上（下海、上岸照常各花一回合）；其余按军种。"""
     return "amphibious" if "amphibious" in ut.tags else ut.domain
+
+
+def route_domain(state, rules, unit) -> str:
+    """unit 现在寻路用的通行方式：下了海的陆军走水陆两用（海上走，靠岸上陆），其余同 move_domain。"""
+    ut = rules.units[unit.type]
+    if ut.domain == "land" and afloat(state, rules, unit):
+        return "amphibious"
+    return move_domain(ut)
+
+
+def _sea_step(state, rules, a, b) -> int | None:
+    """陆军不沿道路从 a 走到 b、而且有一头是海面时的代价：海上走一格按水面地形，下海 / 上岸是 EMBARK，
+    走不了是 0；两头都不是海面返回 None（按陆地算）。"""
+    sa, sb = at_sea(state, a), at_sea(state, b)
+    if not (sa or sb):
+        return None
+    g = state.grid
+    if not sb and g.is_water[b]:
+        return 0  # 桥只能沿道路上去
+    c = rules.terrain_at(int(g.terrain[b])).move_cost or 0
+    if c <= 0:
+        return 0
+    return EMBARK if sa != sb else c * MOVE_STEPS
 
 
 def edge_cost(state, rules, unit, cost, overrides, a, b):
@@ -165,6 +220,12 @@ def edge_cost(state, rules, unit, cost, overrides, a, b):
         road = state.roads.get((min(a, b), max(a, b)))
         if road is not None:
             return 1  # 道路每段 1/MOVE_STEPS 点移动力（桥面、隧道也一样）
+        if ut.domain == "land":
+            step = _sea_step(state, rules, a, b)
+            if step is not None:
+                return step
+            if state.grid.is_water[b]:
+                return 0  # 不沿道路走不上桥
     c = overrides.get(b, int(cost[b]))
     if c <= 0:
         return 0
@@ -180,14 +241,24 @@ def _planner(state, rules, unit, cost=None):
     blocked = blocked_tiles(state, rules, unit, ut)
     # 和 edge_cost 同一套规则，预先把地形消耗、河流转成 Python 列表（寻路每条边都要算一次）
     land = move_domain(ut) in ("land", "amphibious")
+    soldier = ut.domain == "land"  # 陆军能下海（下海、上岸各花一整回合）
     costs = cost.tolist()
     roads = state.roads
     rivers = state.grid.river_edges.tolist()
     directions = _topology(state.grid)[1]
+    water = state._edge_cache.get("water_list")
+    if water is None:
+        water = state._edge_cache["water_list"] = state.grid.is_water.tolist()
 
     def enter(a, b):
         if land and ((a, b) if a < b else (b, a)) in roads:
             return 1  # 道路每段 1/MOVE_STEPS 点移动力（桥面、隧道也一样）
+        if soldier and (water[a] or water[b]):
+            step = _sea_step(state, rules, a, b)
+            if step is not None:
+                return step
+            if water[b]:
+                return 0  # 不沿道路走不上桥
         c = overrides.get(b, costs[b])
         if c <= 0:
             return 0
@@ -261,7 +332,7 @@ def movement_map(state, rules, unit, cost=None) -> tuple[dict[int, int], dict[in
     ut, blocked, enter = _planner(state, rules, unit, cost)
     members = group_members(state, unit)
     budget = min(u.moves_left * MOVE_STEPS + u.road_credit for u in members)
-    full = min(unit_moves(state.grid, rules.units[u.type]) * MOVE_STEPS for u in members)
+    full = min(full_moves(state, rules, u) * MOVE_STEPS for u in members)
     best, parents = {unit.tile: budget}, {}
     if budget <= 0:
         return best, parents
@@ -276,11 +347,7 @@ def movement_map(state, rules, unit, cost=None) -> tuple[dict[int, int], dict[in
     if unit.engaged_turn == state.turn:
         return best, parents  # 这回合已经走进敌方控制区：不能再走（还能就地攻击）
     shut = closed_for(state, unit)
-    stop = (
-        None
-        if zoc.ignores(rules, unit)
-        else zoc.mask(state, rules, unit.nation, "sea" if ut.domain == "sea" else "land")
-    )
+    stop = zoc.stop_mask(state, rules, unit)
     while heap:
         neg_left, cur = heapq.heappop(heap)
         left = -neg_left
@@ -311,7 +378,10 @@ def reachable_tiles(state, rules, unit, cost) -> list[int]:
     return sorted(t for t in best if t != unit.tile and has_room(state, rules, unit, t))
 
 
-def route_for(state, rules, unit, dest) -> list[int] | None:
+def route_for(state, rules, unit, dest, *, embark=None) -> list[int] | None:
+    """unit 走到 dest 的路线（含两端），走不到返回 None。陆军先找陆路，陆路不通再算上海路（下海、上岸各花
+    一回合）。embark：能不能下海绕路——None 时玩家指挥的部队能，AI 指挥的陆军（国家开了 AI、单位托管）
+    只有已经在海上的能（AI 跨海作战自己安排下海）；走海路的开拓团（amphibious）本来就能。"""
     ut, blocked, enter = _planner(state, rules, unit)
     if ut.domain == "air":
         best, _ = movement_map(state, rules, unit)
@@ -329,19 +399,29 @@ def route_for(state, rules, unit, dest) -> list[int] | None:
     mask = np.zeros(g.size, dtype=np.bool_) if shut is None else shut.copy()
     if blocked:
         mask[np.fromiter(blocked, dtype=np.int64)] = True
-    path = kernels.astar(
-        edge_table(state, rules, move_domain(ut), unit.nation),
-        g.neighbors,
-        mask,
-        int(unit.tile),
-        int(dest),
-        200_000,
-        g.axial_q,
-        g.axial_r,
-        g.width,
-        g.wrap_x,
-    )
-    return path.tolist() if len(path) else None
+    domains = [route_domain(state, rules, unit)]
+    if domains[0] == "land":
+        if embark is None:
+            nation = state.nations.get(unit.nation)
+            embark = not (unit.managed and nation is not None and nation.ai_enabled)
+        if embark:
+            domains.append("amphibious")  # 陆路走不到：下海绕过去
+    for domain in domains:
+        path = kernels.astar(
+            edge_table(state, rules, domain, unit.nation),
+            g.neighbors,
+            mask,
+            int(unit.tile),
+            int(dest),
+            200_000,
+            g.axial_q,
+            g.axial_r,
+            g.width,
+            g.wrap_x,
+        )
+        if len(path):
+            return path.tolist()
+    return None
 
 
 def move_target_problem(ctx: StepContext, unit: Unit, tile: int) -> str | None:
@@ -365,7 +445,10 @@ def move_target_problem(ctx: StepContext, unit: Unit, tile: int) -> str | None:
         return "那是和平国家的领土，边境关闭，不能进入（要先宣战或结盟）"
     if tile in blocked_tiles(state, rules, unit, ut) or not has_room(state, rules, unit, tile):
         return "目的地有敌军或容量不足"
-    if move_domain(ut) == "land" and ctx.costs("land")[tile] <= 0:
+    if ut.domain == "land" and at_sea(state, tile):
+        if (rules.terrain_at(int(state.grid.terrain[tile])).move_cost or 0) <= 0:
+            return "冰封的海面，下不了海"
+    elif move_domain(ut) == "land" and ctx.costs("land")[tile] <= 0:
         if not any(tile in edge for edge in state.roads):
             return "这里无法步行抵达，需要桥梁或隧道"
     if (
@@ -408,7 +491,7 @@ def resolve(ctx: StepContext) -> None:
         ut = rules.units[unit.type]
         costs, overrides = ctx.costs(move_domain(ut)), port_overrides(state, ut, unit.nation, rules)
         budget = min(u.moves_left * MOVE_STEPS + u.road_credit for u in members)
-        full = min(unit_moves(state.grid, rules.units[u.type]) * MOVE_STEPS for u in members)
+        full = min(full_moves(state, rules, u) * MOVE_STEPS for u in members)
         # 先按移动力走出本回合的一段（可以穿过本方已满的格子），再退回到最后一个能停下的格子
         walked, left, engaged = [unit.tile], [budget], False
         for tile in path[1:]:
@@ -437,7 +520,7 @@ def resolve(ctx: StepContext) -> None:
             engaged = False  # 退回到控制区外的格子停下
         if len(walked) > 1:
             for u in members:
-                riders = state.aboard(u)  # 船上的陆军、航母上的飞机随船走
+                riders = state.aboard(u)  # 航母上的飞机随舰走
                 state.move_unit(u, walked[-1])
                 u.moves_left, u.road_credit = divmod(left[-1], MOVE_STEPS)
                 for rider in riders:

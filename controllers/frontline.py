@@ -537,7 +537,7 @@ def _as_front(ctx, nation, seg) -> dict:
         "bombard_seas": seas,
         "want_melee": want_melee,
         "want_siege": want_siege,
-        "want_lift": 0,
+        "want_escort": 0,
         "need_total": len(tiles) * LINE_STACK,
         "battle": None,
         "sea": None,
@@ -552,7 +552,7 @@ def decide(ctx, unit, plan) -> bool:
     R = _r()
     s, rules, g = ctx.state, ctx.rules, ctx.state.grid
     ut = rules.units[unit.type]
-    if ut.domain != "land" or unit.layer != "surface":
+    if ut.domain != "land" or unit.layer != "surface" or R.naval.afloat(s, rules, unit):
         return False
     offensive = plan.get("stance") == "进攻"
     slot = R._ai(ctx).get("fslot", {}).get(unit.id)
@@ -651,7 +651,8 @@ def approach_attack(ctx, unit, *, offensive: bool) -> bool:
         left = R._hp(ctx, victim) - planned.get(R._target_key(victim), 0)
         if left <= 0 and not isinstance(victim, City):
             continue
-        foes.append((left, g.distance(unit.tile, t), t, victim))
+        tier = R._tier(ctx, unit, victim)  # 对自己有威胁的敌人先打（见 rule_ai._tier）
+        foes.append((tier, left, g.distance(unit.tile, t), t, victim))
     if not foes:
         return False
     ai["approach_used"] = ai.get("approach_used", 0) + 1
@@ -665,7 +666,7 @@ def approach_attack(ctx, unit, *, offensive: bool) -> bool:
     if not spots:
         return False
     choice = None
-    for left, _, tile, victim in sorted(foes, key=lambda f: f[:3])[:APPROACH_TARGETS]:
+    for tier, left, _, tile, victim in sorted(foes, key=lambda f: f[:4])[:APPROACH_TARGETS]:
         options = [sp for sp in spots if g.distance(sp, tile) <= reach]
         if not options:
             continue
@@ -682,6 +683,7 @@ def approach_attack(ctx, unit, *, offensive: bool) -> bool:
         score = info["damage"] - loss * weight + (60 if kill else 0)
         if info.get("capture") or (isinstance(victim, City) and R._hp(ctx, victim) == 0):
             score += 200
+            tier = -1
         if planned.get(R._target_key(victim)):
             score += 15
         score += R.learned_bias(
@@ -691,11 +693,11 @@ def approach_attack(ctx, unit, *, offensive: bool) -> bool:
             continue
         if score < 0 and loss > 0:
             continue
-        if choice is None or (score, -tile) > (choice[0], -choice[2]):
-            choice = (score, spot, tile, info, victim)
+        if choice is None or (-tier, score, -tile) > (-choice[0], choice[1], -choice[3]):
+            choice = (tier, score, spot, tile, info, victim)
     if choice is None:
         return False
-    _, spot, tile, info, victim = choice
+    _, _, spot, tile, info, victim = choice
     path = [spot]
     while path[-1] != unit.tile:
         path.append(parents[path[-1]])

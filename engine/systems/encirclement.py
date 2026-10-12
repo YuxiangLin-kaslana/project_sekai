@@ -2,7 +2,7 @@
 
 - 单位被包围：它四周所有能站人的相邻格（按它自己的通行方式：陆军看陆地，舰船看水面）
   都被敌方地表军事单位占着，或者是敌国城市。四周根本没有能站人的格子时不算被包围。
-  航空单位不会被包围。
+  航空单位、下了海的陆军不会被包围，下了海的陆军也不帮着包围别人。
 - 城市被包围：城市四周所有能站人的陆地相邻格都被敌方军事单位占着（至少有一格）。
 
 被包围的部队战斗力 −penalty%，驻守也不回血，每回合减员 attrition 点生命，减到 0 溃散；
@@ -29,14 +29,16 @@ class Encirclement:
 
 
 def occupants(state, rules) -> dict[int, set[int]]:
-    """每格站着的地表军事单位属于哪些国家：{格子: {国家, ...}}。"""
+    """每格站着的地表军事单位属于哪些国家：{格子: {国家, ...}}（下了海的陆军不算）。"""
+    from engine.systems.naval import afloat
+
     out: dict[int, set[int]] = {}
     for (tile, layer), ids in state._at.items():
         if layer != "surface":
             continue
         for i in ids:
             u = state.units[i]
-            if rules.units[u.type].category == "military":
+            if rules.units[u.type].category == "military" and not afloat(state, rules, u):
                 out.setdefault(tile, set()).add(u.nation)
     return out
 
@@ -72,6 +74,8 @@ def surrounded(state, rules, nation, tile, domain="land", occ=None, extra=()) ->
 
 
 def compute(state, rules) -> Encirclement:
+    from engine.systems.naval import afloat
+
     occ = occupants(state, rules)
     units = set()
     for (tile, layer), ids in state._at.items():
@@ -81,6 +85,8 @@ def compute(state, rules) -> Encirclement:
         for i in ids:
             u = state.units[i]
             domain = rules.units[u.type].domain
+            if domain == "land" and afloat(state, rules, u):
+                continue  # 下了海的陆军不算包围（它本来就在海上漂着）
             key = (u.nation, domain)
             if key not in by_domain:
                 by_domain[key] = surrounded(state, rules, u.nation, tile, domain, occ)

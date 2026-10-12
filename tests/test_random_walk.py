@@ -52,7 +52,8 @@ def test_walking_many_turns_keeps_rules(start):
         for u in s.units.values():
             domain = RULES.units[u.type].domain
             if domain == "land":
-                assert land[u.tile]
+                # 陆军可以自己下海（下海、上岸各花一回合）：在海上只能站在能通航的海面上
+                assert land[u.tile] or RULES.terrain_at(int(s.grid.terrain[u.tile])).move_cost
             elif domain == "sea":
                 assert not land[u.tile] or s.city_at(u.tile) is not None
         for (tile, _), _ids in s._at.items():

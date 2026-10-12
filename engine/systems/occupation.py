@@ -10,6 +10,7 @@ from __future__ import annotations
 
 from engine.ids import ref
 from engine.systems.diplomacy import at_war
+from engine.systems.naval import afloat
 
 
 def resolve(ctx) -> None:
@@ -49,6 +50,7 @@ def _occupy(ctx) -> None:
                 for u in units
                 if rules.units[u.type].category == "military"
                 and rules.units[u.type].domain == "land"
+                and not afloat(s, rules, u)
                 and at_war(s, u.nation, owner)
             ),
             None,

@@ -2,6 +2,7 @@
 
 from engine.ids import ref
 from engine.systems.context import StepContext
+from engine.systems.naval import afloat
 
 # 部队经验：靠战斗积累（进攻 +4、击杀再 +8、被攻击 +3、高射炮开火 +3），Lv.0（新兵）到 Lv.4（王牌），
 # 每级战斗力 +12.5%，Lv.4 = Lv.0 的 150%（见 unit_strength_bonus）。城市 / 设施 / 区域从 Lv.1 起。
@@ -88,6 +89,8 @@ def resolve(ctx: StepContext) -> None:
             continue  # 被包围 = 断补给：不回血
         if u.damaged_turn == s.turn or u.attacked_turn == s.turn:
             continue
+        if rules.units[u.type].domain == "land" and afloat(s, rules, u):
+            continue  # 在海上不回血
         city = s.city_at(u.tile)
         pct = heal.city if city is not None and city.nation == u.nation else 0
         fac = rules.facility_at(int(s.grid.facility[u.tile]))

@@ -5,8 +5,9 @@
 被攻击时看攻击从哪个方向来：正面（朝向和它左右相邻的两个方向）没有加成，侧面 +flank%，背后 +rear%
 （规则集 tactics.flank / tactics.rear）。
 
-控制区（ZOC）：战斗单位（军事单位，飞机除外）周围相邻的一圈格子是它的控制区——陆军管陆地格，舰船管水面格。
-交战国的单位走进我方控制区就必须停下（本回合不能再走）；坦克（armored 标签）、飞机不受控制区影响。
+控制区（ZOC）：战斗单位（军事单位，飞机、下了海的陆军除外）周围相邻的一圈格子是它的控制区——陆军管陆地格，
+舰船管水面格。交战国的单位走进我方控制区就必须停下（本回合不能再走）；坦克（armored 标签）、飞机不受控制区
+影响，但下了海的陆军（坦克也一样）走进敌舰的控制区照样要停。
 控制区也算包围：四周都是敌军、敌国城市，或者没有本方部队站着的敌方控制区，就是被包围（engine/systems/encirclement.py）。
 """
 
@@ -49,10 +50,16 @@ def facing_modifier(rules, defender_facing: int, toward: int) -> tuple[str, int]
     return None
 
 
-def exerts(rules, unit) -> bool:
-    """这个单位有没有控制区：地表的军事单位（飞机、船上的部队没有）。"""
+def exerts(rules, unit, state=None) -> bool:
+    """这个单位有没有控制区：地表的军事单位（飞机没有；给了 state 时下了海的陆军也没有）。"""
     ut = rules.units[unit.type]
-    return ut.category == "military" and unit.layer == "surface" and ut.domain != "air"
+    if ut.category != "military" or unit.layer != "surface" or ut.domain == "air":
+        return False
+    if state is not None and ut.domain == "land":
+        from engine.systems.naval import at_sea
+
+        return not at_sea(state, unit.tile)
+    return True
 
 
 def ignores(rules, unit) -> bool:
@@ -75,7 +82,11 @@ def mask(state, rules, nation: int, domain: str) -> np.ndarray:
             continue
         for i in ids:
             u = state.units[i]
-            if u.nation == nation or not exerts(rules, u) or not at_war(state, u.nation, nation):
+            if (
+                u.nation == nation
+                or not exerts(rules, u, state)
+                or not at_war(state, u.nation, nation)
+            ):
                 continue
             if (rules.units[u.type].domain == "sea") != water:
                 continue
@@ -88,11 +99,31 @@ def mask(state, rules, nation: int, domain: str) -> np.ndarray:
 
 
 def stops(state, rules, unit, tile) -> bool:
-    """unit 走进 tile 就得停下（tile 在交战国的控制区里，且 unit 不是坦克 / 飞机）。"""
+    """unit 走进 tile 就得停下（tile 在交战国的控制区里，且 unit 不是坦克 / 飞机；下了海的陆军
+    走进敌舰的控制区都要停）。"""
+    ut = rules.units[unit.type]
+    if ut.domain == "land":
+        from engine.systems.naval import at_sea
+
+        if at_sea(state, tile):
+            return bool(mask(state, rules, unit.nation, "sea")[tile])
     if ignores(rules, unit):
         return False
-    domain = "sea" if rules.units[unit.type].domain == "sea" else "land"
+    domain = "sea" if ut.domain == "sea" else "land"
     return bool(mask(state, rules, unit.nation, domain)[tile])
+
+
+def stop_mask(state, rules, unit):
+    """unit 走进去就得停下的格子（bool[N]），没有返回 None。陆军连海面一起算（下海后敌舰的控制区）。"""
+    ut = rules.units[unit.type]
+    if ut.domain == "air":
+        return None
+    if ut.domain == "sea":
+        return None if ignores(rules, unit) else mask(state, rules, unit.nation, "sea")
+    sea = mask(state, rules, unit.nation, "sea")
+    if ignores(rules, unit):
+        return sea
+    return sea | mask(state, rules, unit.nation, "land")
 
 
 def face_nearest_enemy(state, rules, unit, radius: int = 8) -> None:
@@ -103,7 +134,7 @@ def face_nearest_enemy(state, rules, unit, radius: int = 8) -> None:
         if t == unit.tile:
             continue
         for v in state.units_at(t, "surface"):
-            if exerts(rules, v) and at_war(state, v.nation, unit.nation):
+            if exerts(rules, v, state) and at_war(state, v.nation, unit.nation):
                 key = (g.distance(unit.tile, t), t)
                 if best is None or key < best:
                     best = key

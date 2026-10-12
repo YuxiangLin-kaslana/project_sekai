@@ -130,7 +130,7 @@ class Unit:
     type: str  # 规则集里的单位 ID
     nation: int
     tile: int
-    layer: str  # surface | air | cargo（在船上）；冗余存一份，建索引用
+    layer: str  # surface | air；冗余存一份，建索引用
     hp: int = FULL_HP
     moves_left: int = 0
     xp: int = 0
@@ -144,7 +144,7 @@ class Unit:
     managed: bool = True
     ai_goal: str = ""
     ai_target: int | None = None
-    carried_by: int | None = None  # 在哪艘船上（陆军，layer=cargo）/ 停在哪艘航母上（飞机）
+    carried_by: int | None = None  # 停在哪艘航母上（飞机）
     corps: int | None = None  # 所属军团（统帅将领的单位 ID）
     sortie: dict | None = None  # 飞机出击中：{stage: outbound|return, target, base, carrier, turn}
     name: str = ""  # 将领姓名
@@ -247,7 +247,7 @@ class GameState:
         return unit
 
     def set_layer(self, unit: Unit, layer: str) -> None:
-        """换层（登船 / 下船）：同时维护索引。"""
+        """换层：同时维护索引。"""
         self._moved()
         stack = self._at[(unit.tile, unit.layer)]
         stack.remove(unit.id)
@@ -258,17 +258,12 @@ class GameState:
         self._at[(unit.tile, layer)].sort()
 
     def aboard(self, ship: Unit) -> list[Unit]:
-        """船上的陆军和航母上的飞机（按 ID）。"""
-        return [
-            u
-            for layer in ("cargo", "air")
-            for u in self.units_at(ship.tile, layer)
-            if u.carried_by == ship.id
-        ]
+        """航母上的飞机（按 ID）。"""
+        return [u for u in self.units_at(ship.tile, "air") if u.carried_by == ship.id]
 
     def remove_unit(self, unit_id: int) -> None:
         self._moved()
-        for rider in self.aboard(self.units[unit_id]):  # 船沉了，船上的部队、舰载机一起损失
+        for rider in self.aboard(self.units[unit_id]):  # 航母沉了，舰载机一起损失
             self.remove_unit(rider.id)
         u = self.units.pop(unit_id)
         if u.rank:  # 将领阵亡 / 被俘：军团解散

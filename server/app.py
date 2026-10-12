@@ -433,12 +433,6 @@ def game_tactics(game_id: str, actor: str, col: int | None = None, row: int | No
             from engine.systems import roads as road_rules
 
             result["demolish_blocked"] = road_rules.demolish_problem(s, game.rules, entity)
-            from engine.systems.naval import embark_target
-
-            if game.rules.units[entity.type].domain == "land":
-                ship, problem = embark_target(s, game.rules, entity)
-                result["embark"] = game.rules.units[ship.type].name if ship else None
-                result["embark_blocked"] = problem
             from engine.systems import generals
 
             if generals.is_general(game.rules, entity):
@@ -498,9 +492,8 @@ def game_tactics(game_id: str, actor: str, col: int | None = None, row: int | No
             # 敌方控制区：走进去就得停（坦克、飞机不受影响）。只给移动范围附近的格子
             from engine.systems import zoc
 
-            if not zoc.ignores(game.rules, entity):
-                domain = "sea" if game.rules.units[entity.type].domain == "sea" else "land"
-                mask = zoc.mask(s, game.rules, entity.nation, domain)
+            mask = zoc.stop_mask(s, game.rules, entity)
+            if mask is not None:
                 near = {int(t) for t in result["move_tiles"]} | {entity.tile}
                 result["zoc"] = sorted(
                     {int(n) for t in near for n in s.grid.within(t, 1) if mask[n]}

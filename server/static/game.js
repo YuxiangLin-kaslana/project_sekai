@@ -211,7 +211,6 @@ export function setGame(snap, rules, W, H) {
   G.constructionAt = new Map(snap.cities.filter(c=>c.construction).map(c=>[c.construction.tile,{...c.construction,city:c.id}]));
   G.stacks = new Map();
   G.corpsGroups = null; // 军团（将领 + 成员），drawCorps 按需重算
-  G.cargo = new Map(); // 船 / 航母 ID → 船上的陆军（不画在地图上）
   G.territoryOverview = new Map();
   G.roadsAt = new Map();
   for (const road of snap.roads ?? []) {
@@ -221,11 +220,6 @@ export function setGame(snap, rules, W, H) {
     }
   }
   for (const u of snap.units) {
-    if (u.layer === "cargo") {
-      if (!G.cargo.has(u.carried_by)) G.cargo.set(u.carried_by, []);
-      G.cargo.get(u.carried_by).push(u);
-      continue;
-    }
     let st = G.stacks.get(u.tile);
     if (!st) G.stacks.set(u.tile, (st = { surface: [], air: [] }));
     st[u.layer === "air" ? "air" : "surface"].push(u);
@@ -1912,13 +1906,6 @@ function drawSymbol(ctx, icon, x, y, w, h, ink) {
       if (icon === "battleship") { ctx.moveTo(x - s * 0.55, y + h * 0.05); ctx.lineTo(x - s * 0.55, y - h * 0.1); ctx.lineTo(x + s * 0.4, y - h * 0.1); ctx.lineTo(x + s * 0.4, y + h * 0.05); }
       break;
     }
-    case "transport": {
-      // 运输船：平底船身 + 甲板上的货箱
-      const s = w * 0.42;
-      ctx.moveTo(x - s, y + h * 0.05); ctx.lineTo(x + s, y + h * 0.05); ctx.lineTo(x + s * 0.85, y + h * 0.3); ctx.lineTo(x - s * 0.85, y + h * 0.3); ctx.closePath();
-      ctx.rect(x - s * 0.6, y - h * 0.2, s * 0.5, h * 0.25); ctx.rect(x + s * 0.05, y - h * 0.2, s * 0.5, h * 0.25);
-      break;
-    }
     case "carrier": {
       // 平直的飞行甲板 + 右舷舰岛
       const s = w * 0.42;
@@ -2101,12 +2088,26 @@ function drawAirCard(ctx, x, y, s, u, count, c) {
   }
 }
 
+// 下了海的陆军：牌底下垫一条小船（在海上没有攻击力、血量极低，要战舰护航）
+function drawBoat(ctx, x, y, w) {
+  const hw = w * 0.56, hh = Math.max(3, w * 0.17);
+  ctx.save();
+  ctx.beginPath();
+  ctx.moveTo(x - hw, y - hh * 0.4); ctx.lineTo(x + hw, y - hh * 0.4);
+  ctx.lineTo(x + hw * 0.72, y + hh * 0.6); ctx.lineTo(x - hw * 0.72, y + hh * 0.6);
+  ctx.closePath();
+  ctx.fillStyle = "#3a2f22"; ctx.fill();
+  ctx.lineWidth = 1.2; ctx.strokeStyle = "rgba(255,248,230,0.85)"; ctx.stroke();
+  ctx.restore();
+}
+
 function drawStack(ctx, x, y, z, st) {
   const w = Math.max(24, Math.min(88, SQRT3 * z * 0.7));
   const h = w * 0.76;
   const full = w >= LOD.fullCard;
   if (st.surface.length) {
     const top = st.surface[0];
+    if (st.surface.some((u) => u.afloat)) drawBoat(ctx, x, y + h * 0.52, w);
     const c = G.nations.get(top.nation).rgb;
     const behind = Math.min(2, st.surface.length - 1);
     const off = Math.max(2, w * 0.07);
@@ -2194,6 +2195,7 @@ function drawToken(ctx, x, y, z, units) {
   const fs = Math.max(8, Math.min(12, 7 + z * 0.8));
   const h = Math.round(fs + 6);
   const w = Math.round(h * 1.4);
+  if (units.some((u) => u.afloat)) drawBoat(ctx, x, y + h * 0.55, w);
   // 投影用错开一点的深色底（不用 shadowBlur：满屏几百块牌时模糊阴影很费）
   ctx.beginPath();
   roundRect(ctx, x - w / 2 + 1, y - h / 2 + 1.5, w, h, 2.5);
@@ -2561,7 +2563,7 @@ const PLAN_STYLE = {
   flank_move: { w: 0.15, min: 2, head: 3.4 },
   encircle: { w: 0.15, min: 2, head: 3.4 },
 };
-const PLAN_ALPHA = { 备战: 0.38, 整编: 0.45, 装船: 0.5, 推进: 0.6, 航渡: 0.6, 围城: 0.72 };
+const PLAN_ALPHA = { 备战: 0.38, 整编: 0.45, 推进: 0.6, 航渡: 0.6, 围城: 0.72 };
 
 // ---------------------------------------------------------------- 外交地图
 // 视角国家：选中格子所属的国家，没选就用外交面板的视角国家

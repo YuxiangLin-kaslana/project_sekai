@@ -144,7 +144,6 @@ class UnitType(_Strict):
     fuel: bool = False  # 靠石油燃料（坦克、飞机）：本国没有石油供应时战斗力 −30%
     flak: int = Field(0, ge=0)  # 舰艇自带防空火力：敌机飞进 / 飞出 flak_range 圈时各开火一次
     flak_range: int = Field(2, ge=1)
-    carry: int = Field(0, ge=0)  # 舰船能载运几支陆军（登船 / 下船）
     air_capacity: int = Field(0, ge=0)  # 航空母舰能搭载几支航空单位（移动机场）
     # 一次攻击覆盖几格：1 = 只打目标格；4 = 目标格和它沿进攻方向往前的菱形（轰炸机地毯式轰炸），
     # 目标格外的三格按 AREA_OUTER% 伤害（engine/systems/combat.py）
@@ -172,8 +171,8 @@ class UnitType(_Strict):
             raise ValueError(f"单位 {self.id!r}：远程单位的射程至少 1")
         if self.torpedo and (self.domain != "sea" or self.ranged_strength or self.range < 1):
             raise ValueError(f"单位 {self.id!r}：鱼雷只装在舰船上，不和远程火炮并存，射程至少 1")
-        if (self.carry or self.air_capacity) and self.domain != "sea":
-            raise ValueError(f"单位 {self.id!r}：只有舰船能载运陆军或搭载飞机")
+        if self.air_capacity and self.domain != "sea":
+            raise ValueError(f"单位 {self.id!r}：只有舰船能搭载飞机")
         if self.anti_air and (self.domain == "air" or self.ranged_strength or self.range < 1):
             raise ValueError(
                 f"单位 {self.id!r}：防空单位是地面 / 舰船单位，不带远程战斗力，射程至少 1"
@@ -362,6 +361,15 @@ class TacticsConfig(_Strict):
     attack_cost: int = Field(1, ge=0, le=5)
 
 
+class EmbarkConfig(_Strict):
+    """陆军下海（没有运输船，陆军自己渡海，engine/systems/naval.py）：下海、上岸各花一整回合；在海上没有
+    攻击力、血量极低，要靠本方战舰护航（同格的战舰先挨打）。"""
+
+    moves: int = Field(7, ge=1)  # 在海上每回合的移动力（随地图放大，和舰船一样）
+    defense: int = Field(25, ge=1, le=100)  # 在海上的防御力：只剩这么多 %（不吃地形、驻守加成）
+    damage_taken: int = Field(300, ge=100, le=1000)  # 在海上受到的伤害（%）：血量相当于只剩 1/3
+
+
 class StabilityConfig(_Strict):
     """城市稳定度（engine/systems/stability.py）：缺粮 / 缺钱 / 缺生产力时下降，都不缺时回升；
     降到 0 独立，周围稳定度低于 unrest 的本国城市一起独立。"""
@@ -488,6 +496,7 @@ class Ruleset(_Strict):
     stacking: StackingConfig = StackingConfig()
     encirclement: EncirclementConfig = EncirclementConfig()
     tactics: TacticsConfig = TacticsConfig()
+    embark: EmbarkConfig = EmbarkConfig()
     army: ArmyConfig = ArmyConfig()
     # 军种克制：攻方军种 → 目标军种的伤害倍率（%），比如 sea: {land: 150} 舰炮打岸上部队 ×1.5
     domain_damage: dict[Domain, dict[Domain, int]] = {}

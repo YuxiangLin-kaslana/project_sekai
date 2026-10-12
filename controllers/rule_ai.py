@@ -27,11 +27,11 @@
    - 攻击按预览伤害打分，侧击加成、跨河减成、出击地形都已算进去，自然挑划算的打。
    作战计划（_battle_plan）：每条战线一场“某城战役”：战线（一排格子）、主攻（战线中点 → 目标城），
    跨海战线另有航渡箭头。随国家战略下发（strategy["battles"]），前端按苏式战役图画在地图上。
-   跨海登陆（目标城在另一块陆地上）：备战（陆军够，运兵船运力够一次运完第一波；舰船停港外锚地）
-   → 装船（运兵船开到等船的部队旁边接人，装满的退到港外）→ 航渡（装满的船开往目标城外的登陆场，
-   部队下船抢占滩头；空船回港接运后续部队，多出来的战舰护航）→ 滩头的部队凑齐后从滩头推进。
-   登陆场挑海路近、离城 3 步左右、没有敌军的海岸；运力只算和出发港同一片海域的船。
-   装船、航渡中不换目标；拖太久、登陆部队被打光就放弃。
+   跨海登陆（目标城在另一块陆地上；没有运输船，陆军自己下海，engine/systems/naval.py）：备战（兵力
+   不够；战舰在出发港外集结）→ 航渡（陆军沿水陆两用的路线自己找海边下海，渡海开到登陆点旁边的海面，
+   下一回合上岸；战舰开到下了海的部队这回合停的格子同格护航，其余掩护登陆场）→ 滩头的部队凑齐后
+   从滩头推进。登陆场挑海路近、离城 3 步左右、没有敌军的海岸。航渡中不换目标；拖太久、登陆部队
+   被打光就放弃。
 3. 攻击统一放到所有单位决策完之后（resolve_attacks）：移动阶段先于战斗结算，目标若本回合
    要走开（它已有移动计划）就换一个留在原地的；远程先提交、近战占领后提交（战斗按提交顺序
    结算），这样同一回合轰掉城防就能占城。
@@ -50,8 +50,6 @@ from engine.actions import (
     CityAttack,
     CityOrder,
     DemolishRoad,
-    Disembark,
-    Embark,
     Fortify,
     FoundCity,
     Move,
@@ -100,10 +98,10 @@ CAPTURE_HP = 40  # 城防低于它时近战部队上前贴城，准备占领
 SIEGE_PATIENCE = 12  # 围城这么多回合城防还没掉 40 点，就放弃这座城
 GATHER_PATIENCE = 20  # 战线这么多回合都站不稳（没往前推），就暂时放弃这个目标
 APPROACH_PATIENCE = 30  # 进入围城后这么多回合还没接敌（远程进射程 / 城防开始掉），就放弃
-# 战争中的模式：陆上战线（controllers/frontline.py）只有进攻 / 防守；跨海作战仍按备战 → 装船 → 航渡 → 推进 → 围城
-WAR_MODES = ("进攻", "防守", "备战", "推进", "围城", "整编", "装船", "航渡")
-MODE_RANK = {"围城": 6, "航渡": 5, "进攻": 5, "推进": 4, "装船": 3, "防守": 2, "整编": 2, "备战": 1}
-LOCKED = ("推进", "整编", "围城", "装船", "航渡")  # 打起来以后不换目标（推进、轰击、运兵不白费）
+# 战争中的模式：陆上战线（controllers/frontline.py）只有进攻 / 防守；跨海作战按备战 → 航渡 → 推进 → 围城
+WAR_MODES = ("进攻", "防守", "备战", "推进", "围城", "整编", "航渡")
+MODE_RANK = {"围城": 6, "航渡": 5, "进攻": 5, "推进": 4, "防守": 2, "整编": 2, "备战": 1}
+LOCKED = ("推进", "整编", "围城", "航渡")  # 打起来以后不换目标（推进、轰击、渡海不白费）
 ENCIRCLE_MAX_GAPS = 4  # 敌军四周最多还差几格没占就值得去围（多了一回合填不满）
 ENCIRCLE_TARGETS = 10  # 每国每回合最多同时组织几处野战包围
 ROAD_RESERVE = 60  # 国库低于这么多金就不让工兵修前线道路
@@ -138,13 +136,13 @@ CARRIER_STANDOFF = 5  # 航母停在目标城外这么远（舰载机够得着�
 # 跨海登陆
 OVERSEAS_CANDIDATES = 4  # 只细算最近的这么多座海外敌城
 OVERSEAS_STEPS = (
-    15  # 跨海目标额外算的路程（装船、航渡、下船的周转和风险），按陆路步数计、随地图放大
+    15  # 跨海目标额外算的路程（下海、上岸各一回合的周转和风险），按陆路步数计、随地图放大
 )
 SEA_REACH = 80  # 海路最远算这么多步（随地图放大）
 BEACH_RANGE = 8  # 登陆场离目标城最多这么多步陆路（随地图放大）
-LIFT_CAP = 6  # 第一波登陆最多要这么多支部队（运兵船运力要够一次运完这一波）
-EMBARK_PATIENCE = 12  # 装船这么多回合还没装够一波，先运走已经上船的（至少半波）
-SEA_PATIENCE = 40  # 装船、航渡这么多回合还没在对岸凑齐，就放弃这个目标
+WAVE = 6  # 第一波登陆最多要这么多支部队在滩头站稳
+ESCORT_LOAD = 2  # 一艘护航战舰同格带几支下了海的部队（一格最多 3 个地表单位，给战舰留一个）
+SEA_PATIENCE = 40  # 渡海这么多回合还没在对岸凑齐，就放弃这个目标
 UNREACHED = 1 << 20
 
 
@@ -313,9 +311,84 @@ def stays(ctx, tile, actor):
     return any(predicted_tile(ctx, u) == tile for u in enemies)
 
 
+def _threat(ctx, actor, target) -> bool:
+    """target 下回合打得到 actor：在它的射程 + 一回合移动范围里，而且打得着 actor 这个军种（陆军近战打不着
+    海上的，鱼雷只打舰船，高射炮只打飞机，下了海的陆军谁也打不了）。"""
+    s, rules, g = ctx.state, ctx.rules, ctx.state.grid
+    if isinstance(target, City):
+        return target.hp > 0 and g.distance(target.tile, actor.tile) <= combat.attack_range(
+            rules, target, g
+        )
+    tt = rules.units[target.type]
+    if tt.category != "military" or target.layer != "surface":
+        return False
+    if tt.domain == "land" and naval.afloat(s, rules, target):
+        return False
+    if isinstance(actor, City):
+        mine = "land"
+    elif actor.layer != "surface":
+        return False
+    else:
+        mine = combat.domain_of(s, rules, actor)
+    kind = combat.attack_kind(rules, target)
+    if kind == "anti_air" or ("carrier" in tt.tags and not tt.ranged_strength):
+        return False
+    if kind == "torpedo" and mine != "sea" and not tt.deck_gun:
+        return False
+    if kind == "melee" and tt.domain != mine:
+        return False
+    reach = combat.attack_range(rules, target, g) + movement.unit_moves(g, tt)
+    return g.distance(target.tile, actor.tile) <= reach
+
+
+def _bomber(rules, actor) -> bool:
+    if not isinstance(actor, Unit):
+        return False
+    ut = rules.units[actor.type]
+    return ut.domain == "air" and "air_superiority" not in ut.tags and bool(ut.ranged_strength)
+
+
+def _tier(ctx, actor, target, facility=None) -> int:
+    """攻击目标的优先级（小的先打）：
+    - 轰炸机：军团（敌方将领的部队）→ 机场 → 城市 → 重要资源（石油、铝等）→ 部队 → 港口；别的设施不炸；
+    - 其余（陆军、舰船、城市防御射击）：对自己有威胁的敌人 → 海上的敌方陆军 → 其余。
+    facility：轰炸设施时设施的种类（"airfield" / "resource" / "port"）。"""
+    s, rules = ctx.state, ctx.rules
+    if _bomber(rules, actor):
+        if facility is not None:
+            return {"airfield": 1, "resource": 3, "port": 5}[facility]
+        if isinstance(target, City):
+            return 2
+        if target.corps is not None or target.rank:
+            return 0
+        return 4
+    if isinstance(actor, Unit) and rules.units[actor.type].domain == "air":
+        return 0  # 战斗机按得分（先打来袭的轰炸机）
+    if target is None:
+        return 3
+    if _threat(ctx, actor, target):
+        return 0
+    if isinstance(target, Unit) and naval.afloat(s, rules, target):
+        return 1
+    return 2
+
+
+def _facility_kind(ctx, tile, airfield) -> str | None:
+    """轰炸机眼里这个设施算什么：机场、重要资源、港口；别的（住宅区、农场、矿场……）不值得炸。"""
+    if airfield:
+        return "airfield"
+    if _key_resource(ctx, tile):
+        return "resource"
+    b = ctx.rules.facility_at(int(ctx.state.grid.facility[tile]))
+    if b is not None and "ships" in b.enables:
+        return "port"
+    return None
+
+
 def attack_choice(ctx, actor, *, only_static=False):
-    """在射程内挑最划算的攻击目标（返回格子）。集火：已有其他单位打算打的目标累计伤害，
-    能凑够击杀的加分，已经会被打死的不再浪费火力；占领城市大幅加分。"""
+    """在射程内挑攻击目标（返回格子）：先按优先级（_tier：对自己有威胁的敌人 → 海上的敌方陆军 → 其余；
+    轰炸机 军团 → 机场 → 城市 → 重要资源 → 部队 → 港口），同一级里挑最划算的。集火：已有其他单位打算打的
+    目标累计伤害，能凑够击杀的加分，已经会被打死的不再浪费火力；占领城市最优先。"""
     s, rules = ctx.state, ctx.rules
     if combat.lock_reason(s, rules, actor):
         return None
@@ -339,36 +412,38 @@ def attack_choice(ctx, actor, *, only_static=False):
         left = _hp(ctx, target) - planned.get(_target_key(target), 0)
         if left <= 0 and not isinstance(target, City):
             continue
-        candidates.append((left, s.grid.distance(actor.tile, tile), tile, target))
-    if isinstance(actor, Unit) and actor.sortie is None:
-        # 轰炸机：敌方设施也是目标，机场最优先（炸坏了对方飞机就起降不了）
+        tier = _tier(ctx, actor, target)
+        candidates.append((tier, left, s.grid.distance(actor.tile, tile), tile, target, None))
+    if _bomber(rules, actor) and actor.sortie is None:
+        # 轰炸机：敌方的机场（炸坏了对方飞机就起降不了）、重要资源设施、港口也是目标
         for tile, airfield in _enemy_facilities(ctx, actor.nation):
+            kind = _facility_kind(ctx, tile, airfield)
             if (
-                s.grid.distance(origin, tile) <= radius
+                kind is not None
+                and s.grid.distance(origin, tile) <= radius
                 and combat.bombable(s, rules, actor, tile)
                 and not planned.get(("facility", tile))
             ):
-                # 机场最优先，其次是开采石油、铝等战略资源的设施（断掉对方的坦克、飞机）
-                rank = -1 if airfield else 0 if _key_resource(ctx, tile) else 999
-                candidates.append((rank, s.grid.distance(actor.tile, tile), tile, None))
+                tier = _tier(ctx, actor, None, kind)
+                candidates.append((tier, 0, s.grid.distance(actor.tile, tile), tile, None, kind))
     best = []
-    # 只细算最脆弱的八个目标；同样的状态选出同样的目标。
-    for left, _, tile, target in sorted(candidates, key=lambda c: c[:3])[:8]:
+    # 只细算优先级最高、最脆弱的八个目标；同样的状态选出同样的目标。
+    for tier, left, _, tile, target, kind in sorted(candidates, key=lambda c: c[:4])[:8]:
         info, problem = combat.preview(s, rules, actor, tile)
         if problem:
             continue
         if info.get("facility_strike"):
             if info["flak"] >= actor.hp:
                 continue
-            airfield = rules.buildings[info["facility"]].air_base
-            score = (150 if airfield else 20) - info["flak"]  # 机场最优先，其次城防（+50）
+            score = 100 - info["flak"]
             if score > 0:
-                best.append((-score, tile, info, None))
+                best.append((tier, -score, tile, info, None))
             continue
         if target is None:
             target = combat.target_at(s, rules, actor, tile)  # 设施格上也有敌军：按打部队算
             if target is None:
                 continue
+            tier = _tier(ctx, actor, target)
         kill = info["damage"] >= max(1, left)
         # 己方损失 = 对方反击 + 敌方高射火力（空袭进了防空范围）
         loss = info["retaliation"] + info.get("flak", 0)
@@ -383,14 +458,8 @@ def attack_choice(ctx, actor, *, only_static=False):
             score += 15  # 集火：别人已经在打的目标优先
         if info.get("capture") or (isinstance(target, City) and _hp(ctx, target) == 0):
             score += 200
+            tier = -1  # 占城最优先
         kind = rules.units[actor.type] if isinstance(actor, Unit) else None
-        if (
-            kind is not None
-            and kind.domain == "air"
-            and "air_superiority" not in kind.tags
-            and isinstance(target, City)
-        ):
-            score += 50  # 轰炸机：机场炸完了就炸城防（机场 150 分最优先），给地面部队开路
         if info.get("area"):
             # 炮击整格 / 地毯式轰炸：一起挨炸的敌军也算收益（打密集的部队更值）
             score += 0.8 * sum(a["damage"] for a in info["area"])
@@ -415,10 +484,10 @@ def attack_choice(ctx, actor, *, only_static=False):
                 s, rules, actor.nation, actor.type, isinstance(target, City), info.get("modifiers")
             )
         if score >= 0 or loss == 0:
-            best.append((-score, tile, info, target))
+            best.append((tier, -score, tile, info, target))
     if not best:
         return None
-    _, tile, info, target = min(best, key=lambda b: b[:2])
+    _, _, tile, info, target = min(best, key=lambda b: b[:3])
     return tile, info, target
 
 
@@ -486,10 +555,11 @@ def intend_attack(ctx, actor, tile, info, target, reason, *, priority=1):
 # ---------------------------------------------------------------- 寻路
 
 
-def flow(ctx, unit, goal):
-    """以 goal 为终点的反向最短路距离场（同国同通行方式共享，按回合缓存）。"""
+def flow(ctx, unit, goal, domain=None):
+    """以 goal 为终点的反向最短路距离场（同国同通行方式共享，按回合缓存）。domain 不给时按单位现在的
+    通行方式（下了海的陆军水陆两用）。"""
     s, rules = ctx.state, ctx.rules
-    domain = movement.move_domain(rules.units[unit.type])
+    domain = domain or movement.route_domain(s, rules, unit)
     key = (unit.nation, domain, goal)
     # 缓存冷热只改变耗时；每回合可新建的距离场数量与缓存命中率无关。
     allowed = getattr(ctx, "flow_keys", set())
@@ -632,9 +702,21 @@ class Field:
         return self.any
 
 
-def march(ctx, unit, goal, reason, *, disperse=False, stop_within=0, avoid=None):
+def march(
+    ctx,
+    unit,
+    goal,
+    reason,
+    *,
+    disperse=False,
+    stop_within=0,
+    avoid=None,
+    domain=None,
+    ashore=False,
+):
     """沿距离场朝 goal 走，花完本回合移动力。stop_within：离 goal 这么近就停（远程部队停在射程里）；
-    avoid：(城市格, 射程)，不主动走进这座敌城的射程（排战线时用）。"""
+    avoid：(城市格, 射程)，不主动走进这座敌城的射程（排战线时用）。domain：用哪种通行方式的距离场
+    （陆军跨海作战用 amphibious：沿水陆两用的路线走到海边）；ashore：这回合不下海（走到海边就停）。"""
     s, rules, g = ctx.state, ctx.rules, ctx.state.grid
     ut = rules.units[unit.type]
     if (unit.tile == goal or g.distance(unit.tile, goal) <= stop_within) and not disperse:
@@ -662,11 +744,12 @@ def march(ctx, unit, goal, reason, *, disperse=False, stop_within=0, avoid=None)
             return False
         path = [unit.tile, min(options, key=lambda t: (g.distance(t, goal), t))]
     else:
-        distance = flow(ctx, unit, goal)
+        distance = flow(ctx, unit, goal, domain)
         path, seen = [unit.tile], {unit.tile}
         left = unit.moves_left * MOVE_STEPS + unit.road_credit
-        full = movement.unit_moves(g, ut) * MOVE_STEPS
+        full = movement.full_moves(s, rules, unit) * MOVE_STEPS
         cost_table = ctx.costs(movement.move_domain(ut))
+        sea_ok = not ashore or naval.afloat(s, rules, unit)
         ports = movement.port_overrides(s, ut, unit.nation, rules)
         if not distance and not disperse:
             # 本回合的共享距离场名额用完了：改用单位自己的 A* 路线（绕水绕山），只走本回合走得到的一段
@@ -678,12 +761,14 @@ def march(ctx, unit, goal, reason, *, disperse=False, stop_within=0, avoid=None)
             for end in ends[:4]:
                 if end == unit.tile:
                     break
-                route = movement.route_for(s, rules, unit, end) or []
+                route = movement.route_for(s, rules, unit, end, embark=domain == "amphibious") or []
                 if route:
                     break
             for b in route[1:]:
                 a = path[-1]
                 if movement.local_step_problem(ctx, unit, a, b, final=False):
+                    break
+                if not sea_ok and naval.at_sea(s, b):
                     break
                 if avoid and g.distance(b, avoid[0]) <= avoid[1] < g.distance(a, avoid[0]):
                     break
@@ -703,6 +788,8 @@ def march(ctx, unit, goal, reason, *, disperse=False, stop_within=0, avoid=None)
                 if b in seen or movement.local_step_problem(ctx, unit, a, b, final=False):
                     continue
                 if avoid and g.distance(b, avoid[0]) <= avoid[1] < g.distance(a, avoid[0]):
+                    continue
+                if not sea_ok and naval.at_sea(s, b):
                     continue
                 cost = movement.edge_cost(s, rules, unit, cost_table, ports, a, b)
                 if left < cost and left < full:
@@ -736,7 +823,12 @@ def march(ctx, unit, goal, reason, *, disperse=False, stop_within=0, avoid=None)
                 break  # 走进了敌方控制区：必须停下
         while len(path) > 1 and not movement.has_room(s, rules, unit, path[-1]):
             path.pop()
-        if len(path) < 2 and not disperse and ut.domain == "land":
+        if (
+            len(path) < 2
+            and not disperse
+            and ut.domain == "land"
+            and not naval.afloat(s, rules, unit)
+        ):
             # 沿共享距离场走不动（它不看部队，敌军堵在必经路口时“更近一格”全被挡）：
             # 改沿避开外国部队的绕行距离场走，先往旁边绕也行
             field = detour(ctx, unit.nation, goal)
@@ -1138,21 +1230,14 @@ def _shipyard(ctx, city) -> bool:
 
 
 def _can_ferry(ctx, nation, cities):
-    """本国有能造舰船的沿海城市（有港口，或还能建港口），并且已有运兵舰船、或战略资源够造。"""
-    s, rules = ctx.state, ctx.rules
-    if not any(_shipyard(ctx, c) for c in cities):
-        return False
-    if any(u.nation == nation.id and rules.units[u.type].carry for u in s.units.values()):
-        return True
-    have = nation_resources(s, rules, nation.id)
-    return any(
-        u.carry and all(r in have for r in u.requires_resources) for u in rules.units.values()
-    )
+    """能组织跨海作战：本国有能造舰船的沿海城市（有港口，或还能建港口）。陆军自己下海渡海，
+    但要有战舰护航（下了海的陆军没有攻击力、血量极低）。"""
+    return any(_shipyard(ctx, c) for c in cities)
 
 
 def _overseas_targets(ctx, nation, cities, overseas, current):
-    """海外敌城的路程估算：海路步数 / 2（舰船比陆军快）+ 滩头到城的陆路步数 + 装船下船的周转
-    （OVERSEAS_STEPS）。只细算直线最近的几座；本国没有港口、造不出运兵船时不考虑跨海。"""
+    """海外敌城的路程估算：海路步数 / 2（海上比陆上走得快）+ 滩头到城的陆路步数 + 下海上岸的周转
+    （OVERSEAS_STEPS）。只细算直线最近的几座；本国没有能造护航战舰的港口时不考虑跨海。"""
     if not overseas or not _can_ferry(ctx, nation, cities):
         return []
     g = ctx.state.grid
@@ -1199,7 +1284,7 @@ def _sea_comps(ctx, tile):
     return {int(wc[n]) for n in ctx.state.grid.neighbors_of(tile) if wc[n] >= 0}
 
 
-def _afloat(ctx, ship, op):
+def _on_seas(ctx, ship, op):
     """舰船和出发港在同一片海域（开得过去）。别处海里的船不算运力，也不派去运兵。"""
     return bool(_sea_comps(ctx, ship.tile) & set(op["seas"]))
 
@@ -1217,47 +1302,82 @@ def _troop(ctx, u):
     )
 
 
-def _berth(ctx, ship, op):
-    """出发港附近等船、旁边还没有空船的部队：运兵船开到它旁边去接（登船要和船相邻；港口一挤，
-    光靠部队走到船边太慢）。每支部队每回合只派一艘船。"""
-    s, rules, g = ctx.state, ctx.rules, ctx.state.grid
-    claims = _ai(ctx).setdefault("berth", set())
-    best = None
-    for t in g.within(op["port"], 2):
-        for u in s.units_at(t, "surface"):
-            if u.nation != ship.nation or u.id in claims or not _troop(ctx, u):
-                continue
-            if any(
-                v.nation == u.nation and rules.units[v.type].carry > len(_riders(ctx, v))
-                for n in [t, *g.neighbors_of(t)]
-                for v in s.units_at(n, "surface")
-            ):
-                continue  # 旁边已经有空位的船
-            key = (g.distance(ship.tile, t), u.id)
-            if best is None or key < best[:2]:
-                best = (*key, u)
-    if best is None:
-        return None
-    claims.add(best[1])
-    return best[2]
+def _warship(rules, u):
+    """能护航的战舰：海军的军事单位（航母除外，它靠舰载机打击，不贴身护航）。"""
+    ut = rules.units[u.type]
+    return ut.domain == "sea" and ut.category == "military" and "carrier" not in ut.tags
 
 
-def _to_port(ctx, unit, op, why):
-    """运兵船在出发港待命：开到还没船的等船部队旁边去接，没有就停在港口旁边。"""
-    g = ctx.state.grid
-    troop = _berth(ctx, unit, op)
-    for goal in ([troop.tile] if troop is not None else []) + [op["port"]]:
-        if g.distance(unit.tile, goal) <= 1:
-            break
-        if march(ctx, unit, goal, why, stop_within=1):
-            return True
-    _hold(ctx, unit, why)
+def _full(ctx, u) -> bool:
+    """满移动力（本回合还没走过）：下海、上岸都要满移动力，走这一步就用完一整回合。"""
+    return (
+        u.moves_left * MOVE_STEPS + u.road_credit
+        >= movement.full_moves(ctx.state, ctx.rules, u) * MOVE_STEPS
+        and u.engaged_turn != ctx.state.turn
+    )
+
+
+def _step(ctx, unit, tile, why):
+    """走一步到相邻的 tile（下海 / 上岸：花一整回合）。"""
+    ctx.planned_routes[unit.id] = [unit.tile, tile]
+    order = Move(
+        issuer=ref("nation", unit.nation),
+        unit=ref("unit", unit.id),
+        to=ctx.state.grid.col_row(tile),
+    )
+    if not emit(ctx, unit, order, why):
+        ctx.planned_routes.pop(unit.id, None)
+        return False
+    unit.ai_target = tile
     return True
 
 
+def _convoy(ctx, unit, tile):
+    """记下下了海的部队这回合停在哪一格（护航的战舰据此开过去同格），并占一个位置。"""
+    _ai(ctx).setdefault("convoy", {})[unit.id] = tile
+    _ai(ctx).setdefault("sea_claims", Counter())[tile] += 1
+
+
+def _sea_room(ctx, unit, tile):
+    """下了海的部队这回合还能不能停到 tile：没有外国单位、还有空位；每格最多 ESCORT_LOAD 支
+    下了海的部队（算上本回合已经认领的），给护航的战舰留一个位置。"""
+    s, rules = ctx.state, ctx.rules
+    here = s.units_at(tile, "surface")
+    if any(v.nation != unit.nation for v in here) or not movement.has_room(s, rules, unit, tile):
+        return False
+    claims = _ai(ctx).setdefault("sea_claims", Counter())
+    troops = sum(1 for v in here if naval.afloat(s, rules, v))
+    return troops + claims[tile] < ESCORT_LOAD
+
+
+def _embark_spot(ctx, unit, op):
+    """站在海边、满移动力的 unit 下到哪一格海面：旁边、这次作战海域里、还有位置的海面；有本方战舰
+    同格的优先，其次旁边有战舰的，再其次离登陆场近的。"""
+    s, rules, g = ctx.state, ctx.rules, ctx.state.grid
+    if not _full(ctx, unit) or naval.afloat(s, rules, unit):
+        return None
+    wc = geography(s, rules)["water_components"]
+    seas, sea = set(op["seas"]), ctx.costs("sea")
+    best = None
+    for n in g.neighbors_of(unit.tile):
+        if not naval.at_sea(s, n) or int(wc[n]) not in seas or sea[n] <= 0:
+            continue
+        if movement.local_step_problem(ctx, unit, unit.tile, n) or not _sea_room(ctx, unit, n):
+            continue
+        ships = [
+            t
+            for t in [n, *g.neighbors_of(n)]
+            if any(v.nation == unit.nation and _warship(rules, v) for v in s.units_at(t, "surface"))
+        ]
+        key = (n not in ships, not ships, g.distance(n, op["beach"]), n)
+        if best is None or key < best:
+            best = key
+    return None if best is None else best[-1]
+
+
 def _roadstead(ctx, ship, op, why):
-    """港外锚地：离出发港 2–3 格、同一片海域、有空位的海面。备战时待命的船、装满了等出发的船停在这里，
-    把港口边的泊位让给还要接人的船，也给港口留出造新船的出生格（港口旁边常常只有一两格海面）。"""
+    """港外锚地：离出发港 2–3 格、同一片海域、有空位的海面。备战时待命的战舰停在这里，
+    给港口留出造新船的出生格（港口旁边常常只有一两格海面）。"""
     s, rules, g = ctx.state, ctx.rules, ctx.state.grid
     port = op["port"]
     if 2 <= g.distance(ship.tile, port) <= 3 and g.is_water[ship.tile]:
@@ -1281,10 +1401,6 @@ def _roadstead(ctx, ship, op, why):
     return True
 
 
-def _riders(ctx, ship):
-    return [u for u in ctx.state.aboard(ship) if u.layer == "cargo"]
-
-
 def _hold(ctx, unit, reason):
     """原地待命：没驻守就驻守，已经驻守就只更新说明。"""
     if not unit.fortified:
@@ -1296,111 +1412,144 @@ def _hold(ctx, unit, reason):
 
 
 def _ship_out(ctx, unit, plan, target, components):
-    """跨海作战中还在本土的野战部队：备战时到出发港集结；之后登上旁边有空位的本方舰船，没船就在港口等。"""
+    """跨海作战中还在本土的野战部队：备战时往出发港靠拢；开打后自己找海边下海（满移动力时下到旁边的海面，
+    下海花一整回合），没到海边就沿水陆两用的距离场往登陆场走，走到海边停下。"""
     op = plan.get("sea")
     if op is None or components[unit.tile] == components[target.tile]:
         return False
+    g = ctx.state.grid
+    if plan.get("mode") == "备战":
+        why = f"等兵力齐了跨海进攻 {target.name}，先往海边靠拢"
+        if g.distance(unit.tile, op["port"]) > 2 and march(
+            ctx, unit, op["port"], why, stop_within=2
+        ):
+            return True
+        _hold(ctx, unit, why)
+        return True
+    spot = _embark_spot(ctx, unit, op)
+    if spot is not None and _step(
+        ctx, unit, spot, f"下海，跨海进攻 {target.name}（下海花一整回合）"
+    ):
+        _convoy(ctx, unit, spot)
+        return True
+    s, rules = ctx.state, ctx.rules
+    wc = geography(s, rules)["water_components"]
+    seas = set(op["seas"])
+    if not any(naval.at_sea(s, n) and int(wc[n]) in seas for n in g.neighbors_of(unit.tile)):
+        why = f"去海边下海，跨海进攻 {target.name}"
+        if march(ctx, unit, op["beach"], why, domain="amphibious", ashore=True):
+            return True
+    _hold(ctx, unit, f"在海边等下一回合下海，跨海进攻 {target.name}")
+    return True
+
+
+def _sail(ctx, unit, plan, target):
+    """下了海的部队（跨海作战）：开往目标城外的登陆点（护航战舰跟过来同格，_escort）；开到登陆点旁边的
+    海面，下一回合（满移动力）上岸——上岸花一整回合。在海上没有攻击力、血量极低。"""
+    s, rules, g = ctx.state, ctx.rules, ctx.state.grid
+    op = plan.get("sea")
+    if op is None or target is None or target.nation == unit.nation:
+        return _go_ashore(ctx, unit, "跨海作战取消，回本国海岸上岸")
+    comps = geography(s, rules)["land_components"]
+    reach = round(BEACH_RANGE * map_scale(g)) + 1
+    claims = _ai(ctx).setdefault("drop_claims", {})
+    lands = [
+        n
+        for n in g.neighbors_of(unit.tile)
+        if comps[n] == comps[target.tile] and g.distance(n, target.tile) <= reach
+    ]
+    if lands and _full(ctx, unit):
+        for n in sorted(lands, key=lambda t: (g.distance(t, op["beach"]), t)):
+            if claims.get(n, 0) >= DROP_PER_TILE:
+                continue
+            if movement.local_step_problem(ctx, unit, unit.tile, n) is None and _step(
+                ctx, unit, n, f"在 {target.name} 城外登陆，抢占滩头（上岸花一整回合）"
+            ):
+                claims[n] = claims.get(n, 0) + 1
+                return True
+    if lands:
+        _convoy(ctx, unit, unit.tile)
+        _hold(ctx, unit, f"到了 {target.name} 城外海面，下一回合上岸")
+        return True
+    why = f"和护航舰队一起渡海，到 {target.name} 城外登陆"
+    for _, land, seas in _drop_points(ctx, unit.nation, op, target)[:12]:
+        if claims.get(land, 0) >= DROP_PER_TILE:
+            continue
+        spots = [w for w in seas if _sea_room(ctx, unit, w)]
+        for spot in sorted(spots, key=lambda w: (g.distance(unit.tile, w), w))[:2]:
+            if march(ctx, unit, spot, why):
+                claims[land] = claims.get(land, 0) + 1
+                _convoy(ctx, unit, ctx.planned_routes[unit.id][-1])
+                return True
+    if march(ctx, unit, op["beach"], why, stop_within=1):
+        _convoy(ctx, unit, ctx.planned_routes[unit.id][-1])
+        return True
+    _convoy(ctx, unit, unit.tile)
+    _hold(ctx, unit, "航路被挡住，在海上原地等待")
+    return True
+
+
+def _go_ashore(ctx, unit, why):
+    """下了海、没有跨海作战可打的部队：回最近的本国海岸上岸（满移动力时直接上岸，花一整回合）。"""
     s, g = ctx.state, ctx.state.grid
-    port = s.cities.get(op["port_city"])
-    name = port.name if port else "出发港"
-    if plan.get("mode") != "备战":
-        # 出发港附近、和出发港同一片海域、还有空位的本方舰船
-        rules = ctx.rules
-        ships = sorted(
-            (
-                v
-                for t in g.within(op["port"], 3)
-                for v in s.units_at(t, "surface")
-                if v.nation == unit.nation
-                and rules.units[v.type].carry > len(_riders(ctx, v))
-                and _afloat(ctx, v, op)
-            ),
-            key=lambda v: (g.distance(unit.tile, v.tile), v.id),
+    if _full(ctx, unit):
+        lands = sorted(
+            n
+            for n in g.neighbors_of(unit.tile)
+            if int(g.owner[n]) == unit.nation and not g.is_water[n]
         )
-        for ship in ships:
-            if g.distance(unit.tile, ship.tile) > 1:
-                break
-            if naval.embark_target(s, rules, unit, ship)[0] is not None and emit(
-                ctx,
-                unit,
-                Embark(
-                    issuer=ref("nation", unit.nation),
-                    unit=ref("unit", unit.id),
-                    ship=ref("unit", ship.id),
-                ),
-                f"登船，跨海进攻 {target.name}",
+        for n in lands:
+            if movement.local_step_problem(ctx, unit, unit.tile, n) is None and _step(
+                ctx, unit, n, why
             ):
                 return True
-        why = f"在{name}等船，跨海进攻 {target.name}"
-        # 走到最近的空船旁边的岸上（登船要和船相邻）
-        for ship in [v for v in ships if g.distance(unit.tile, v.tile) > 1][:2]:
-            if march(ctx, unit, ship.tile, why, stop_within=1):
-                return True
-    else:
-        why = f"到{name}集结，等运兵船造好后跨海进攻 {target.name}"
-    if g.distance(unit.tile, op["port"]) > 1 and march(ctx, unit, op["port"], why, stop_within=1):
-        return True
+    ports = [c for c in s.nation_cities(unit.nation) if coastal(g, c.tile)]
+    if ports:
+        home = min(ports, key=lambda c: (g.distance(unit.tile, c.tile), c.id))
+        if march(ctx, unit, home.tile, why, stop_within=1):
+            _convoy(ctx, unit, ctx.planned_routes[unit.id][-1])
+            return True
+    _convoy(ctx, unit, unit.tile)
     _hold(ctx, unit, why)
     return True
 
 
-def _convoy(ctx, unit, plan, target):
-    """载着部队的舰船：装满（或港口没人再来）就开往登陆场，到了让部队下船（_landings）；沿途不恋战
-    （攻击要停船，还可能连人带船一起沉）。没有跨海作战了就返航，靠本国的岸放人。"""
-    riders = _riders(ctx, unit)
-    if not riders:
+def _escort(ctx, unit):
+    """护航：本国下了海的部队这回合要停的格子，还没有战舰去的，派最近的战舰开过去同格（敌人要先打掉
+    战舰才打得到它）。一格派一艘。"""
+    s, rules, g = ctx.state, ctx.rules, ctx.state.grid
+    convoy = _ai(ctx).get("convoy")
+    if not convoy or not _warship(rules, unit) or health(rules, unit) < WOUNDED:
         return False
-    s, g = ctx.state, ctx.state.grid
-    op = plan.get("sea")
-    if op is None or target is None or not _afloat(ctx, unit, op):
-        ports = [c for c in s.nation_cities(unit.nation) if coastal(g, c.tile)]
-        if not ports:
-            _hold(ctx, unit, "没有港口可以靠岸，载着部队待命")
-            return True
-        home = min(ports, key=lambda c: (g.distance(unit.tile, c.tile), c.id))
-        if g.distance(unit.tile, home.tile) > 1 and march(
-            ctx, unit, home.tile, "跨海作战取消，载着部队返航", stop_within=1
-        ):
-            return True
-        _hold(ctx, unit, "靠岸，部队下船")
-        return True
-    carry = ctx.rules.units[unit.type].carry
-    sail = plan.get("mode") in ("航渡", "推进", "围城", "整编") and (
-        len(riders) >= carry or op["queue"] == 0
-    )
-    if not sail:
-        port = s.cities.get(op["port_city"])
-        name = port.name if port else "出发港"
-        if len(riders) >= carry:
-            return _roadstead(ctx, unit, op, f"已装满，在{name}港外等船队出发")
-        return _to_port(ctx, unit, op, f"在{name}等部队登船（{len(riders)} / {carry}）")
-    # 登陆点分散：每艘船各认领一个空着的登陆格（每格最多 DROP_PER_TILE 支），不全挤到同一个滩头
-    claims = _ai(ctx).setdefault("drop_claims", {})
-    points = _drop_points(ctx, unit.nation, op, target)
-    lands = {land for _, land, _ in points}
-    here = [n for n in g.neighbors_of(unit.tile) if n in lands and claims.get(n, 0) < DROP_PER_TILE]
-    if here or g.distance(unit.tile, op["beach"]) <= 1:
-        for n in here:
-            claims[n] = claims.get(n, 0) + DROP_PER_TILE
-        return False  # 到了登陆点：部队下船（_landings），舰船照常作战
-    why = f"运送 {len(riders)} 支部队渡海，到 {target.name} 城外登陆"
-    for _, land, seas in points[:12]:
-        if claims.get(land, 0) >= DROP_PER_TILE:
+    taken = _ai(ctx).setdefault("escorted", set())
+    seas = _sea_comps(ctx, unit.tile)
+    wc = geography(s, rules)["water_components"]
+    reach = 2 * movement.unit_moves(g, rules.units[unit.type])
+    best = None
+    for tile in sorted(set(convoy.values())):
+        if tile in taken or wc[tile] < 0 or int(wc[tile]) not in seas:
             continue
-        spots = [
-            w
-            for w in seas
-            if movement.has_room(s, ctx.rules, unit, w)
-            and not any(v.nation != unit.nation for v in s.units_at(w))
-        ]
-        for spot in sorted(spots, key=lambda w: (g.distance(unit.tile, w), w))[:2]:
-            if march(ctx, unit, spot, why):
-                claims[land] = claims.get(land, 0) + len(riders)
-                return True
-    if march(ctx, unit, op["beach"], why, stop_within=1):
+        d = g.distance(unit.tile, tile)
+        if d <= reach and (best is None or (d, tile) < best):
+            best = (d, tile)
+    if best is None:
+        return False
+    tile = best[1]
+    taken.add(tile)
+    why = "护航：和下了海的部队同格，掩护渡海"
+    if unit.tile == tile:
+        _hold(ctx, unit, why)
         return True
-    _hold(ctx, unit, "航路被挡住，载着部队原地等待")
-    return True
+    return march(ctx, unit, tile, why)
+
+
+def _at_sea(ctx, unit, plan):
+    """下了海的陆军（不能攻击）：跨海作战的部队开往登陆场、上岸；其余回本国海岸上岸。"""
+    s = ctx.state
+    target = s.cities.get(plan.get("target_city"))
+    if plan.get("sea") and target is not None and is_military(ctx.rules, unit):
+        return _sail(ctx, unit, plan, target)
+    return _go_ashore(ctx, unit, "在海上：回本国海岸上岸")
 
 
 def _drop_points(ctx, nation, op, target):
@@ -1434,78 +1583,24 @@ def _drop_points(ctx, nation, op, target):
 
 
 def _fleet(ctx, unit, plan, target):
-    """跨海作战中的其他舰船：本土还有部队等着过海，就按需要的运力派空船回港接运；其余护航——
-    开到登陆场外海掩护，围城时打得到城的去炮击城防。备战、装船时都在出发港集结。"""
+    """跨海作战里没有护航任务的战舰（护航见 _escort）：备战时在出发港外集结；开打后开到登陆场外海掩护，
+    围城时打得到城的去炮击城防。"""
     op = plan.get("sea")
-    if op is None or target is None or not _afloat(ctx, unit, op):
+    if op is None or target is None or not _on_seas(ctx, unit, op):
         return False
     rules, g = ctx.rules, ctx.state.grid
-    ut = rules.units[unit.type]
+    if not _warship(rules, unit):
+        return False
     mode = plan.get("mode")
-    if _riders(ctx, unit):
-        _hold(ctx, unit, f"抵达 {target.name} 城外登陆场，部队下船")
-        return True
-    if mode == "装船" and ut.carry:
-        return _to_port(ctx, unit, op, "在出发港接部队登船，准备运兵渡海")
-    if mode in ("备战", "装船"):
-        why = "在出发港外集结，准备运兵渡海" if ut.carry else "在出发港外集结，准备护航"
-        return _roadstead(ctx, unit, op, why)
-    ferry = _ai(ctx).setdefault("ferry", Counter())
-    if ut.carry and ferry[unit.nation] < op["waiting"]:
-        ferry[unit.nation] += ut.carry
-        return _to_port(
-            ctx, unit, op, f"回出发港接运后续部队（本土还有 {op['waiting']} 支等着过海）"
-        )
-    if "unarmed" in ut.tags:
-        return _roadstead(ctx, unit, op, "运输船回港外锚地待命")
+    if mode == "备战":
+        return _roadstead(ctx, unit, op, "在出发港外集结，准备给渡海的部队护航")
     if mode == "围城" and is_siege(rules, unit) and _siege(ctx, unit, plan, target):
         return True
-    why = f"护航：掩护 {target.name} 城外的登陆场"
+    why = f"支援渡海：掩护 {target.name} 城外的登陆场"
     if g.distance(unit.tile, op["beach"]) > 2 and march(ctx, unit, op["beach"], why, stop_within=2):
         return True
     _hold(ctx, unit, why)
     return True
-
-
-def _landings(ctx, riders, view_of, components):
-    """船上的 AI 部队下船：跨海作战的船到了目标城附近的海岸，就下到离登陆场最近的空地上；
-    没有跨海作战了，船靠了本国这边的岸就下船。"""
-    s, rules, g = ctx.state, ctx.rules, ctx.state.grid
-    for u in riders:
-        ship = s.units.get(u.carried_by)
-        if ship is None or u.id not in s.units or u.moves_left * MOVE_STEPS + u.road_credit <= 0:
-            continue
-        plan = view_of(u)
-        op, target = plan.get("sea"), s.cities.get(plan.get("target_city"))
-        tiles = [t for t in [ship.tile, *g.neighbors_of(ship.tile)] if components[t] >= 0]
-        if op is not None and target is not None and _afloat(ctx, ship, op):
-            if plan.get("mode") not in ("航渡", "推进", "围城", "整编"):
-                continue
-            tiles = sorted(
-                (
-                    t
-                    for t in tiles
-                    if components[t] == components[target.tile]
-                    and g.distance(t, target.tile) <= round(BEACH_RANGE * map_scale(g)) + 1
-                ),
-                key=lambda t: (g.distance(t, op["beach"]), t),
-            )
-            why = f"在 {target.name} 城外登陆，抢占滩头"
-        else:
-            home = {components[c.tile] for c in s.nation_cities(u.nation)}
-            tiles = sorted(t for t in tiles if components[t] in home)
-            why = "运兵船靠岸，部队下船"
-        for t in tiles:
-            if naval.landing_tile(s, rules, u, t)[0] is not None:
-                emit(
-                    ctx,
-                    u,
-                    Disembark(
-                        issuer=ref("nation", u.nation), unit=ref("unit", u.id), to=g.col_row(t)
-                    ),
-                    why,
-                )
-                break
 
 
 def _ground(ctx, tile, enemy_tile):
@@ -1687,9 +1782,9 @@ def plan_nation(ctx, nation, units):
     p.update(
         want_siege=sum(f.get("want_siege", 0) for f in fronts),
         want_melee=sum(f.get("want_melee", 0) for f in fronts),
-        want_lift=sum(f.get("want_lift", 0) for f in fronts),
+        want_escort=sum(f.get("want_escort", 0) for f in fronts),
         sea=next((f["sea"] for f in fronts if f.get("sea")), None),
-        lift_seas=sorted({w for f in fronts if f.get("sea") for w in f["sea"].get("seas", ())}),
+        escort_seas=sorted({w for f in fronts if f.get("sea") for w in f["sea"].get("seas", ())}),
         battles=[f["battle"] for f in fronts if f.get("battle")],
         battle=None,
         border_posts=_ai(ctx).get("posts", {}).get(nation.id, 0),
@@ -1839,7 +1934,7 @@ def plan_fronts(ctx, nation, p, units, cities, components, replan, overseas_only
         for c in s.cities.values()
         if at_war(s, c.nation, nation.id) and skip.get(str(c.id), -1) <= s.turn
     }
-    gens = [g for g in gens if g.layer != "cargo" and int(components[g.tile]) in enemy_land]
+    gens = [g for g in gens if int(components[g.tile]) in enemy_land]
     if overseas_only:
         gens = []  # 军团跟着陆上战线
     commanded = {gen.id for gen in gens}
@@ -1925,7 +2020,7 @@ def _corps_fronts(ctx, nation, p, units, gens, old, cities, components, replan, 
     skip = p["skip"]
     out = []
     for gen in sorted(gens, key=lambda u: u.id):
-        if gen.layer == "cargo":
+        if naval.afloat(s, ctx.rules, gen):
             if gen.id in old:
                 out.append(old[gen.id])
             continue
@@ -1961,8 +2056,10 @@ def _corps_fronts(ctx, nation, p, units, gens, old, cities, components, replan, 
         f["corps_front"] = gen.id
         f["corps"] = [gen.id]
         f["units"] = sorted(
-            u.id for u in units if u.corps == gen.id and _front_pool(ctx, u) and u.layer != "cargo"
-        ) + [u.id for u in units if u.corps == gen.id and u.layer == "cargo"]
+            u.id
+            for u in units
+            if u.corps == gen.id and (_front_pool(ctx, u) or naval.afloat(s, ctx.rules, u))
+        )
         out.append(f)
     return out
 
@@ -2008,7 +2105,7 @@ def _land_bases(ctx, nation, cities, components) -> set:
         int(components[u.tile])
         for u in s.units.values()
         if u.nation == nation.id
-        and u.layer != "cargo"
+        and not naval.afloat(s, rules, u)
         and rules.units[u.type].domain == "land"
         and _troop(ctx, u)
     )
@@ -2024,12 +2121,12 @@ def _land_bases(ctx, nation, cities, components) -> set:
 
 def _fits(ctx, u, f, components, home):
     """部队 u 能不能编进战线 f：陆军要和目标城在同一块陆地（跨海战线收本土的部队）；
-    舰船要开得到（跨海战线的运兵船、能炮击目标的战舰、航母）；飞机都行。"""
+    舰船要开得到（跨海战线的护航战舰、能炮击目标的战舰、航母）；飞机都行。"""
     s, rules = ctx.state, ctx.rules
     ut = rules.units[u.type]
     target = s.cities[f["target_city"]]
-    if u.layer == "cargo":
-        return u.id in (f.get("units") or [])
+    if naval.afloat(s, rules, u):
+        return u.id in (f.get("units") or [])  # 下了海的部队留在原来的战线
     if ut.domain == "air":
         return True
     overseas = bool((f.get("target_info") or {}).get("overseas"))
@@ -2039,10 +2136,8 @@ def _fits(ctx, u, f, components, home):
     seas = _sea_comps(ctx, u.tile)
     if overseas and f.get("sea"):
         return bool(seas & set(f["sea"]["seas"]))
-    if overseas and ut.carry:
-        return True
-    if "unarmed" in ut.tags:
-        return False  # 运输船只跟跨海战线
+    if overseas and _warship(rules, u):
+        return True  # 跨海战线的护航
     return bool(seas & set(f.get("bombard_seas") or ()))
 
 
@@ -2126,7 +2221,7 @@ def _assign_fronts(ctx, nation, fronts, pool, gens, components, cities):
                     for uid in fronts[k]["units"]
                     if role(units[uid]) == kind
                     and units[uid].corps is None
-                    and units[uid].layer != "cargo"
+                    and not naval.afloat(s, rules, units[uid])
                 ),
                 key=lambda u: (-g.distance(u.tile, targets[k]), u.id),
             )[:spare]
@@ -2198,7 +2293,7 @@ def _line_slots(ctx, f, military):
     front, back = line.get("tiles") or [], line.get("back") or line.get("tiles") or []
     used = Counter()
     for u in sorted(military, key=lambda u: u.id):
-        if u.layer == "cargo" or rules.units[u.type].domain != "land":
+        if rules.units[u.type].domain != "land" or naval.afloat(ctx.state, rules, u):
             continue
         options = back if is_siege(rules, u) or is_air_defense(rules, u) else front
         if not options:
@@ -2210,7 +2305,8 @@ def _line_slots(ctx, f, military):
 
 def plan_front(ctx, nation, p, f, cities, components):
     """一条战线：兵力需求 → 战线位置 → 阶段。阶段：备战（兵力不够）→ 推进（排成战线、站稳一排往前推一步）
-    → 围城 →（伤亡过半）整编（战线后撤两步，补兵再推）。跨海战线先装船、航渡，在登陆场站稳再推进。"""
+    → 围城 →（伤亡过半）整编（战线后撤两步，补兵再推）。跨海战线先航渡（陆军自己下海、战舰护航），
+    在登陆场站稳再推进。"""
     s, rules, g = ctx.state, ctx.rules, ctx.state.grid
     skip = p["skip"]
     target = s.cities[f["target_city"]]
@@ -2220,16 +2316,14 @@ def plan_front(ctx, nation, p, f, cities, components):
     # 跨海：目标城所在的陆地上没有本国城市；或者有（比如岛上占了一座小城），但这条战线的陆军
     # 大部分还在别的陆地上、走不过去——同样要靠船源源不断地运过去
     field = [u for u in military if rules.units[u.type].domain == "land" and _troop(ctx, u)]
-    here = sum(
-        1 for u in field if u.layer != "cargo" and components[u.tile] == components[target.tile]
-    )
+    here = sum(1 for u in field if components[u.tile] == components[target.tile])
     stranded = len(field) - here
     if components[target.tile] not in home or (stranded >= FERRY_LOCAL and stranded > 2 * here):
         # 出发港选在部队主力所在的陆地上（部队走得到港口）
         spread = Counter(
             int(components[u.tile])
             for u in field
-            if u.layer != "cargo" and components[u.tile] != components[target.tile]
+            if components[u.tile] >= 0 and components[u.tile] != components[target.tile]
         )
         comp = max(spread, key=lambda k: (spread[k], -k)) if spread else None
         op = _sea_op(ctx, nation, f, target, comp)
@@ -2267,9 +2361,10 @@ def plan_front(ctx, nation, p, f, cities, components):
     f["bombard_seas"] = sorted(
         {int(wc[t]) for t in g.within(target.tile, 3) if wc[t] >= 0 and dist[t] < UNREACHED}
     )
-    want_lift = 0
+    want_escort = 0
     if op is not None:
-        # 运力：第一波要运过去的部队（近战 + 舰炮打不到时的陆军远程），最多 LIFT_CAP 支
+        # 第一波要渡海的部队（近战 + 舰炮打不到时的陆军远程），最多 WAVE 支；陆军自己下海，
+        # 每 ESCORT_LOAD 支要一艘战舰同格护航（下了海的陆军没有攻击力、血量极低）
         comp = components[target.tile]
         field_land = [u for u in military if _troop(ctx, u)]
         op["seas"] = sorted(_sea_comps(ctx, op["port"]))
@@ -2279,22 +2374,22 @@ def plan_front(ctx, nation, p, f, cities, components):
             if shore
             else 0
         )
-        waiting = [u for u in field_land if u.layer != "cargo" and components[u.tile] != comp]
-        need = min(LIFT_CAP, need_melee + max(0, need_siege - guns))
+        sailing = [u for u in field_land if naval.afloat(s, rules, u)]
+        waiting = [u for u in field_land if components[u.tile] >= 0 and components[u.tile] != comp]
+        need = min(WAVE, need_melee + max(0, need_siege - guns))
         op.update(
-            lift=sum(
-                rules.units[u.type].carry
+            escorts=sum(
+                1
                 for u in military
-                if rules.units[u.type].carry and _afloat(ctx, u, op) and u.corps is None
-            ),  # 编进舰队的战舰归舰队调度，不算运力
+                if _warship(rules, u) and _on_seas(ctx, u, op) and u.corps is None
+            ),  # 编进舰队的战舰归舰队调度，不算护航
+            escort_need=-(-need // ESCORT_LOAD),
             need=need,
-            lift_need=need,
-            aboard=sum(1 for u in field_land if u.layer == "cargo"),
-            landed=sum(1 for u in field_land if u.layer != "cargo" and components[u.tile] == comp),
+            aboard=len(sailing),
+            landed=sum(1 for u in field_land if components[u.tile] == comp),
             waiting=len(waiting),
-            queue=sum(1 for u in waiting if g.distance(u.tile, op["port"]) <= 2),
         )
-        want_lift = max(0, op["lift_need"] - op["lift"])
+        want_escort = max(0, op["escort_need"] - op["escorts"])
         f["sea_landed"] = max(f.get("sea_landed") or 0, op["landed"])
     f["sea"] = op
     f.update(
@@ -2303,7 +2398,7 @@ def plan_front(ctx, nation, p, f, cities, components):
         need_total=need_siege + ring_melee + 2,
         want_siege=max(0, need_siege - len(siege_units)),
         want_melee=max(0, ring_melee - len(melee_units)),
-        want_lift=want_lift,
+        want_escort=want_escort,
     )
 
     # 战线位置：陆上从离目标城最近的本国城市这一侧推过去；跨海从登陆场推过去
@@ -2312,16 +2407,12 @@ def plan_front(ctx, nation, p, f, cities, components):
         if op is not None
         else min(cities, key=lambda c: (g.distance(c.tile, target.tile), c.id)).tile
     )
-    present = [
-        u
-        for u in melee_units
-        if u.layer != "cargo" and components[u.tile] == components[target.tile]
-    ]
+    present = [u for u in melee_units if components[u.tile] == components[target.tile]]
     line = _front_line(ctx, nation, f, target, origin, len(melee_units), len(siege_units))
     f["line"] = line
     f["stage"] = (
         op["beach"]
-        if op is not None and f.get("mode") in (None, "备战", "装船", "航渡")
+        if op is not None and f.get("mode") in (None, "备战", "航渡")
         else line["tiles"][len(line["tiles"]) // 2]
         if line["tiles"]
         else origin
@@ -2334,7 +2425,7 @@ def plan_front(ctx, nation, p, f, cities, components):
     guns_ready = sum(
         1
         for u in siege_units
-        if u.layer != "cargo"
+        if not naval.afloat(s, rules, u)
         and (
             any(g.distance(u.tile, t) <= 2 for t in line["back"] or line["tiles"])
             or g.distance(u.tile, target.tile) <= combat.attack_range(rules, u, g)
@@ -2360,14 +2451,11 @@ def plan_front(ctx, nation, p, f, cities, components):
     ours = sum(
         combat.strength(s, rules, u)
         for u in military
-        if rules.units[u.type].domain in ("land", "air") and u.layer != "cargo"
+        if rules.units[u.type].domain in ("land", "air") and not naval.afloat(s, rules, u)
     )
     theirs = defense + garrison
     if len(melee_units) >= FRONT_MIN and ours >= OVERWHELM * max(1, theirs):
         ready = True
-    if op is not None:
-        # 运力够第一波的一半就出发：空船会回港接后面的部队（_fleet）
-        ready = ready and op["lift"] >= max(2, math.ceil(op["lift_need"] / 2))
 
     mode = f.get("mode")
     # 围城耐心从“接敌”算起：远程部队进了射程，或城防已经开始掉。大军还在路上不算久攻不下
@@ -2423,19 +2511,18 @@ def plan_front(ctx, nation, p, f, cities, components):
             f"近战 {need_melee} 支（现有 {len(melee_units)}）；城市优先补齐"
         )
         if op is not None:
-            reason += f"，运兵船运力 {op['lift_need']}（现有 {op['lift']}）"
-    elif op is not None and mode in (None, "备战", "装船", "航渡"):
-        # 跨海：装船 → 航渡 → 一波部队在登陆场站稳后转入推进
+            reason += f"，护航战舰 {op['escort_need']} 艘（现有 {op['escorts']}）"
+    elif op is not None and mode in (None, "备战", "航渡"):
+        # 跨海：渡海（陆军自己找海边下海，战舰护航）→ 一波部队在登陆场站稳后转入推进
         if f.get("sea_turn") is None:
-            f["sea_turn"] = s.turn  # 从第一次装船算起，中途退回备战也不重新计时
+            f["sea_turn"] = s.turn  # 从开始渡海算起，中途退回备战也不重新计时
         waited = s.turn - f["sea_turn"]
         radius = min(8, 3 + waited // 4)
         ashore = [
             u
-            for u in present + [v for v in siege_units if v.layer != "cargo"]
+            for u in present + [v for v in siege_units if not naval.afloat(s, rules, v)]
             if g.distance(u.tile, op["beach"]) <= radius or g.distance(u.tile, target.tile) <= 3
         ]
-        port = s.cities[op["port_city"]]
         if len(ashore) >= op["need"] and any(not is_siege(rules, u) for u in ashore):
             mode, reason = "推进", f"已在 {target.name} 城外登陆站稳，从滩头排开战线向城市推进"
             f["sea_turn"] = None
@@ -2443,23 +2530,12 @@ def plan_front(ctx, nation, p, f, cities, components):
         elif waited >= SEA_PATIENCE:
             mode, reason = give_up(f"跨海进攻 {target.name} 迟迟没能在对岸站稳，暂时放弃，另选目标")
             f["sea_turn"] = None
-        elif (
-            mode == "航渡"
-            or op["aboard"] + op["landed"] >= op["need"]
-            or op["aboard"] >= op["lift"]
-            or (op["aboard"] and not op["waiting"])  # 本土没人可上船了
-            or (waited >= EMBARK_PATIENCE and op["aboard"] >= max(2, op["need"] // 2))
-        ):
+        else:
             mode = "航渡"
             reason = (
-                f"舰队运兵渡海，在 {target.name} 城外登陆（船上 {op['aboard']} 支、"
-                f"已登陆 {op['landed']} 支，要 {op['need']} 支）"
-            )
-        else:
-            mode = "装船"
-            reason = (
-                f"跨海进攻 {target.name}：部队在 {port.name} 登船"
-                f"（已上船 {op['aboard']} / {op['need']}）"
+                f"跨海进攻 {target.name}：陆军自己找海边下海渡海、战舰护航，在城外登陆"
+                f"（海上 {op['aboard']} 支、已登陆 {op['landed']} 支，要 {op['need']} 支；"
+                f"护航战舰 {op['escorts']} 艘）"
             )
     elif (
         held
@@ -2526,7 +2602,7 @@ def _battle_plan(ctx, nation, f, target, origin):
 
 def _navy_plan(ctx, nation, p, units, cities):
     """海军需求（给城市托管造船用）：
-    - 能从海上打到的战线目标：每条 3 艘（炮击城防、配合航母）；跨海战线另要 4 艘护航；
+    - 能从海上打到的战线目标：每条 3 艘（炮击城防、配合航母）；跨海战线的护航另算（want_escort）；
     - 打仗时常备：每两座港口一艘；
     - 本国沿海（12 格内）的外国舰船，每艘 1 艘（最多按港口数算）；
     - 跨海打进来的敌军（本国这块陆地上没有他们的城市）：每 2 支 1 艘，去断他们的海上补给。"""
@@ -2534,7 +2610,7 @@ def _navy_plan(ctx, nation, p, units, cities):
     fronts = p.get("fronts") or []
     ships = [u for u in units if rules.units[u.type].domain == "sea" and is_military(rules, u)]
     carriers = [u for u in ships if "carrier" in rules.units[u.type].tags]
-    warships = [u for u in ships if not ({"carrier", "unarmed"} & set(rules.units[u.type].tags))]
+    warships = [u for u in ships if "carrier" not in rules.units[u.type].tags]
     shore = [f for f in fronts if f.get("bombard_seas")]
     across = [f for f in fronts if (f.get("target_info") or {}).get("overseas")]
     ports = [c for c in cities if coastal(g, c.tile)]
@@ -2542,6 +2618,13 @@ def _navy_plan(ctx, nation, p, units, cities):
         1
         for t, n in _enemy_ships(ctx)
         if n != nation.id and any(g.distance(t, c.tile) <= 12 * map_scale(g) for c in ports)
+    )
+    # 本国沿海的交战国战舰：多了城市托管直接造驱逐舰（鱼雷专打舰船）
+    p["enemy_fleet"] = sum(
+        1
+        for t, n in _enemy_ships(ctx)
+        if at_war(s, n, nation.id)
+        and any(g.distance(t, c.tile) <= 12 * map_scale(g) for c in ports)
     )
     components = geography(s, rules)["land_components"]
     home = {int(components[c.tile]) for c in cities}
@@ -2559,8 +2642,8 @@ def _navy_plan(ctx, nation, p, units, cities):
         and int(components[u.tile]) not in settled.get(u.nation, ())
     )
     # 沿海敌舰最多按港口数算：不跟着邻国的船越造越多（军备竞赛）
-    # 每条跨海战线 2 艘护航（运兵交给运输船），每个靠海的战线目标 3 艘炮击
-    want = 3 * len(shore) + 2 * len(across) + min(raiders, len(ports)) + (invaders + 1) // 2
+    # 每个靠海的战线目标 3 艘炮击、每条跨海战线 1 艘（护航缺口另算 want_escort）
+    want = 3 * len(shore) + len(across) + min(raiders, len(ports)) + (invaders + 1) // 2
     if p.get("posture") == "战争":
         want += len(ports) // 2  # 打仗的国家常备一支海军：每两座港口一艘
     p["naval_want"] = max(0, want - len(warships)) if ports else 0
@@ -2728,7 +2811,7 @@ def _fleet_member(ctx, unit):
     radius = rules.generals.radius
     if g.distance(unit.tile, adm.tile) > radius:
         return march(ctx, unit, adm.tile, f"{adm.title} 向旗舰靠拢", stop_within=radius - 1)
-    if "unarmed" in ut.tags or "carrier" in ut.tags:
+    if "carrier" in ut.tags:
         stop = 1
     else:
         stop = combat.attack_range(rules, unit, g)
@@ -2758,6 +2841,20 @@ def _enemy_ships(ctx):
     return ai["ships"]
 
 
+def _enemy_convoys(ctx):
+    """本回合所有下了海的陆军（格子、国家），每回合统计一次：没有攻击力、血量极低，战舰顺手就打。"""
+    ai = _ai(ctx)
+    if ai.get("convoys_turn") != ctx.state.turn:
+        s, rules = ctx.state, ctx.rules
+        ai["convoys_turn"] = ctx.state.turn
+        ai["convoys"] = [
+            (u.tile, u.nation)
+            for u in s.units.values()
+            if rules.units[u.type].domain == "land" and naval.afloat(s, rules, u)
+        ]
+    return ai["convoys"]
+
+
 def _navy(ctx, unit, plan, target):
     """战舰：附近有敌舰就去打（驱逐舰鱼雷、巡洋舰战列舰炮击）；战线目标靠海时开到城外海面，
     推进时在射程外待命、围城时进射程炮击城防；航母开到目标城外海，让飞机从航母出击。"""
@@ -2765,22 +2862,21 @@ def _navy(ctx, unit, plan, target):
     ut = rules.units[unit.type]
     if "carrier" in ut.tags:
         return _carrier(ctx, unit, plan, target)
-    if "unarmed" in ut.tags:
-        return False  # 运输船不参战
     reach = combat.attack_range(rules, unit, g)
     seas = _sea_comps(ctx, unit.tile)
     wc = geography(s, rules)["water_components"]
     hunt = min(round(HUNT_RADIUS * map_scale(g)), ut.moves + reach + 2)  # 一两回合追得上的才追
+    # 先追对自己有威胁的敌舰，其次是海上的敌方陆军（没有攻击力、血量极低，一打就沉）
     foes = [
-        t
-        for t, n in _enemy_ships(ctx)
+        (convoy, g.distance(t, unit.tile), t)
+        for convoy, ships in ((False, _enemy_ships(ctx)), (True, _enemy_convoys(ctx)))
+        for t, n in ships
         if at_war(s, n, unit.nation) and g.distance(t, unit.tile) <= hunt and int(wc[t]) in seas
     ]
     if foes and unit.hp * 100 // ut.hp >= 50:
-        foe = min(foes, key=lambda t: (g.distance(t, unit.tile), t))
-        if g.distance(unit.tile, foe) > reach and march(
-            ctx, unit, foe, "追击敌方舰船", stop_within=reach
-        ):
+        convoy, _, foe = min(foes)
+        why = "截击海上的敌方陆军" if convoy else "追击敌方舰船"
+        if g.distance(unit.tile, foe) > reach and march(ctx, unit, foe, why, stop_within=reach):
             return True
     if is_siege(rules, unit) and unit.hp * 100 // ut.hp >= 50:
         # 打岸上的敌军：一回合开得到射程里、旁边有本舰开得到的海面的敌方陆军，开过去炮击
@@ -2948,10 +3044,10 @@ def _assign_generals(ctx, nation, p):
     leaders += sorted(int(k) for k in (p.get("fleets") or {}))
     for gid in leaders:
         gen = s.units.get(gid)
-        if gen is None or gen.layer == "cargo":
+        if gen is None or naval.afloat(s, rules, gen):
             continue
-        naval = rules.units[gen.type].domain == "sea"
-        mine = {uid for uid in free if (rules.units[s.units[uid].type].domain == "sea") == naval}
+        fleet = rules.units[gen.type].domain == "sea"
+        mine = {uid for uid in free if (rules.units[s.units[uid].type].domain == "sea") == fleet}
         room = generals.capacity(rules, gen.rank) - len(generals.members(s, gen))
         if room <= 0:
             continue
@@ -2961,7 +3057,7 @@ def _assign_generals(ctx, nation, p):
                 for uid in mine
                 if uid in s.units
                 and s.units[uid].corps is None
-                and s.units[uid].layer != "cargo"
+                and not naval.afloat(s, rules, s.units[uid])
                 and g.distance(s.units[uid].tile, gen.tile) <= rules.generals.radius
             ),
             key=lambda u: (g.distance(u.tile, gen.tile), u.id),
@@ -3529,6 +3625,9 @@ def decide_unit(ctx, unit, plan, guards, claimed):
             return
         unit.ai_goal = "出击任务中" if unit.sortie["stage"] == "outbound" else "返航中"
         return
+    if ut.domain == "land" and naval.afloat(s, rules, unit) and "general" not in ut.tags:
+        _at_sea(ctx, unit, plan)  # 下了海的陆军：不能攻击，开往登陆点或回本国海岸上岸
+        return
     if "general" in ut.tags:
         if ut.domain == "sea":
             _admiral(ctx, unit)
@@ -3565,8 +3664,8 @@ def decide_unit(ctx, unit, plan, guards, claimed):
     if health(rules, unit) < (SIEGE_WOUNDED if in_city_range else WOUNDED):
         _retreat(ctx, unit, "伤兵撤向本国城市休整")
         return
-    if ut.domain == "sea" and _convoy(ctx, unit, plan, target):
-        return
+    if ut.domain == "sea" and _escort(ctx, unit):
+        return  # 护航：和下了海的本方部队同格
     post = _ai(ctx).get("bodyguard", {}).get(unit.id)
     if post is not None:
         # 护卫将领：和将领同格，敌军要打将领得先打穿护卫
@@ -3700,7 +3799,7 @@ def decide_unit(ctx, unit, plan, guards, claimed):
             else:
                 unit.ai_goal = waiting
             return
-        if mode in ("推进", "整编", "装船", "航渡") and plan.get("stage") is not None:
+        if mode in ("推进", "整编", "航渡") and plan.get("stage") is not None:
             stage = plan["stage"]
             if g.distance(unit.tile, stage) > 2 and march(
                 ctx,
@@ -4015,16 +4114,15 @@ def resolve(ctx):
     # 驻守不动、附近没有外国军队的部队这回合不重新决策（每 IDLE_PERIOD 回合轮到一次），省下的预算
     # 留给真正要动的部队；敌军一靠近当回合就恢复决策。
     armies = _armies(ctx)
-    actors = [u for u in units if u.layer != "cargo"]
-    awake = [u for u in actors if not _idle(ctx, u, armies)]
+    awake = [u for u in units if not _idle(ctx, u, armies)]
     # 决策名额按国家分：每国每回合最多 budget 支（开局设置），部队多的国家国内轮流。
     # 军团（舰队）有自己的 AI：将领和军团成员每回合都决策，不占国家的名额（每个军团最多 25 支）
     budget = actor_budget(s)
     by_nation = {}
     active = set()
     for u in awake:
-        if u.rank or (u.corps is not None and u.corps in s.units):
-            active.add(u.id)
+        if u.rank or (u.corps is not None and u.corps in s.units) or naval.afloat(s, ctx.rules, u):
+            active.add(u.id)  # 将领、军团成员、下了海的部队（不能在海上漂着不动）每回合都决策
         else:
             by_nation.setdefault(u.nation, []).append(u)
     for mine in by_nation.values():
@@ -4095,15 +4193,16 @@ def _armies(ctx):
 
 def nation_turn(ctx, job):
     """一个国家这回合的全部 AI 决策（ctx.state 是这个国家专用的一份局面）：国家战略、守军、包围、
-    轮到的部队逐个决策、没轮到的原地开火、船上部队下船、城市防御射击，最后统一提交攻击。"""
+    轮到的部队逐个决策（下了海的部队先、舰船最后）、没轮到的原地开火、城市防御射击，最后统一提交攻击。"""
     s = ctx.state
     nid = job["nation"]
     ctx.only_nation = nid
     ctx.flow_budget = job["flow_budget"]
     _ai(ctx)
     units = [s.units[i] for i in job["units"] if i in s.units]
-    ashore = [u for u in units if u.layer != "cargo"]
-    riders = [u for u in units if u.layer == "cargo"]
+    ashore = [
+        u for u in units if not naval.afloat(s, ctx.rules, u)
+    ]  # 下了海的部队不当守军、不去包围
     guards = _guards(ctx, nid, ashore) if units else {}
     _ai(ctx)["guards"] = guards  # 跨海接运时不去接守军（_troop）
     plan = plan_nation(ctx, s.nations[nid], units) if units else {}
@@ -4129,13 +4228,22 @@ def nation_turn(ctx, job):
         return views.get(u.id) or base
 
     claimed = set()
-    for uid in job["active"]:
+    rules = ctx.rules
+
+    def order(uid):
+        # 下了海的部队先决策（定下这回合停在哪），护航的战舰最后决策（开到它们那一格同格护航）
+        u = s.units.get(uid)
+        if u is None:
+            return 1
+        if naval.afloat(s, rules, u):
+            return 0
+        return 2 if rules.units[u.type].domain == "sea" else 1
+
+    for uid in sorted(job["active"], key=order):
         u = s.units.get(uid)
         if u is not None and u.moves_left > 0:
             decide_unit(ctx, u, view_of(u), guards, claimed)
     _opportunity_fire(ctx, [s.units[i] for i in job["waiting"] if i in s.units], _armies(ctx))
-    if riders:
-        _landings(ctx, riders, view_of, geography(s, ctx.rules)["land_components"])
     defend_cities(ctx, [s.cities[c] for c in job["defend"] if c in s.cities])
     resolve_attacks(ctx)
 
@@ -4177,7 +4285,7 @@ def _opportunity_fire(ctx, waiting, armies):
     for u in waiting:
         if u.id not in s.units or u.moves_left <= 0 or not is_military(rules, u):
             continue
-        if u.layer == "cargo" or u.sortie is not None or "carrier" in rules.units[u.type].tags:
+        if u.sortie is not None or "carrier" in rules.units[u.type].tags:
             continue
         reach = combat.attack_range(rules, u, g)
         if rules.units[u.type].domain == "air":

@@ -40,22 +40,6 @@ class Pillage(_Order):
     unit: str
 
 
-class Embark(_Order):
-    """陆军登上相邻（或同格）的本方舰船；ship 不填就挑最近的、还有空位的那艘。用掉本回合行动。"""
-
-    type: Literal["embark"] = "embark"
-    unit: str
-    ship: str | None = None
-
-
-class Disembark(_Order):
-    """船上的陆军下到船旁边的陆地；to 不填就挑第一块能登陆的空地。用掉本回合行动。"""
-
-    type: Literal["disembark"] = "disembark"
-    unit: str
-    to: tuple[int, int] | None = None
-
-
 class DemolishRoad(_Order):
     """拆掉连到所在格的本国道路（防御时拖慢来犯之敌）。用掉本回合行动。"""
 
@@ -198,8 +182,6 @@ Order = Annotated[
     Move
     | Fortify
     | Pillage
-    | Embark
-    | Disembark
     | AssignCorps
     | LeaveCorps
     | DemolishRoad
@@ -248,8 +230,6 @@ ORDER_PRIORITY = {
     "found_city": 4,
     "pillage": 4,
     "demolish_road": 4,
-    "disembark": 5,
-    "embark": 5,
     "build_facility": 5,
     "move": 6,
     "attack": 7,

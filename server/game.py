@@ -54,7 +54,8 @@ from engine.systems.combat import (
 )
 from engine.systems.diplomacy import DEFAULT as DIPLOMACY_DEFAULT
 from engine.systems.economy import unit_upkeep, upkeep
-from engine.systems.movement import GameState, air_radius, unit_moves
+from engine.systems.movement import GameState, air_radius, full_moves
+from engine.systems.naval import afloat
 from engine.systems.networks import city_network
 from engine.systems.progression import LEVEL_BASE, THRESHOLDS, progress
 from engine.systems.settlement import (
@@ -193,7 +194,6 @@ def rules_json(rules: Ruleset) -> dict:
                 "deck_gun": u.deck_gun,
                 "flak": u.flak,
                 "flak_range": u.flak_range,
-                "carry": u.carry,
                 "air_capacity": u.air_capacity,
                 "hp": u.hp,
                 "range": u.range,
@@ -489,7 +489,8 @@ def _snapshot(game: Game, rules: Ruleset) -> dict:
                     if rules.units[u.type].domain == "air"
                     else {}
                 ),
-                "max_moves": unit_moves(s.grid, rules.units[u.type]),
+                "max_moves": full_moves(s, rules, u),  # 下了海的陆军按海上的移动力
+                "afloat": rules.units[u.type].domain == "land" and afloat(s, rules, u),
                 "attack_range": attack_range(rules, u, s.grid),
                 **({"name": u.name, "rank": u.rank, "title": u.title} if u.rank else {}),
                 "destination": _cr(s, u.destination) if u.destination is not None else None,

@@ -82,8 +82,10 @@ def assign_problem(state, rules, general, units) -> str | None:
     """能不能把 units 编入 general 的军团。"""
     if not is_general(rules, general):
         return "只有将领能统御军团"
-    if general.layer == "cargo":
-        return "将领在船上，先下船"
+    from engine.systems.naval import afloat
+
+    if afloat(state, rules, general):
+        return "将领在海上，先上岸"
     current = len(members(state, general))
     new = [u for u in units if u.corps != general.id]
     if current + len(new) > capacity(rules, general.rank):

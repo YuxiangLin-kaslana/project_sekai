@@ -6,7 +6,8 @@
 #   short 单位牌上的简称；icon 单位牌上的兵种符号（前端内置，北约军标风格）
 #   damage_vs_units / damage_vs_city 打部队 / 打城市的伤害倍率（百分比，默认 100）：炮兵削城防强、打部队弱
 #   torpedo 鱼雷（驱逐舰）：只打舰船，射程 range，近距离伤害很高
-#   carry 舰船能载运几支陆军（相邻的陆军登船，随船航行，到岸边下船；船沉了部队一起损失）
+#   陆军（军事单位、平民）都能自己下海渡海，没有运输船：下海、上岸各花一整回合，在海上没有攻击力、血量极低，
+#   要战舰同格护航（规则集 embark，engine/systems/naval.py）
 #   air_capacity 航空母舰能搭载几支飞机（移动机场：飞机转场到航母上，随舰航行、从航母出击）
 #   flak / flak_range 舰艇自带防空：敌机飞进、飞出防空圈时各开火一次（不能主动攻击）
 #   anti_air 防空火力：只能打飞机（主动射击 range 内的敌方航空单位）；range 内的格子挨敌方空袭时，
@@ -41,7 +42,7 @@ settler:
   cost: 120
   population: 1
   gold: 30
-  tags: [found_city, amphibious]   # amphibious：可以下海移动
+  tags: [found_city, amphibious]   # amphibious：寻路时把海路也算上（AI 开拓团跨海建城）；下海、上岸照常各花一回合
   icon: settler
 
 engineer:
@@ -157,7 +158,7 @@ armor:
   fuel: true
   icon: armor
 
-# 海军将领统御舰队：身边的舰船（战舰、航母、运输船）编入“第 N 舰队”，规则同陆军军团（星级、加成、上限）。
+# 海军将领统御舰队：身边的舰船（战舰、航母）编入“第 N 舰队”，规则同陆军军团（星级、加成、上限）。
 # 本身没有战斗力，跟着舰队走；被敌舰贴上来会被俘。
 admiral:
   name: 海军将领
@@ -175,7 +176,7 @@ admiral:
 
 # ---- 海军 ----
 # 三级战舰：驱逐（快、鱼雷近战）→ 巡洋（中速、舰炮 2 格）→ 战列（慢、重炮 3 格、炮击整格）；
-# 越大的船载兵越多。运输船载 4 支陆军、没有攻击手段；航空母舰本身也没有攻击手段，靠舰载机作战。
+# 没有运输船：陆军自己下海渡海，战舰和它同格护航（敌人要先打掉战舰）。航空母舰靠舰载机群作战。
 # 舰船航速是陆军的好几倍（原定数值的 1.8 倍）。
 destroyer:
   name: 驱逐舰队
@@ -192,7 +193,6 @@ destroyer:
   population: 1
   gold: 40
   upkeep: 2
-  carry: 1
   flak: 12   # 舰载防空：敌机进 / 出 2 格防空圈各挨一次
   icon: destroyer
 
@@ -210,7 +210,6 @@ cruiser:
   population: 1
   gold: 70
   upkeep: 3
-  carry: 2
   requires_resources: [iron]
   flak: 10   # 舰载防空：敌机进 / 出 2 格防空圈各挨一次
   icon: cruiser
@@ -228,26 +227,10 @@ battleship:
   population: 1
   gold: 100
   upkeep: 4
-  carry: 3
   requires_resources: [iron, oil]
   tags: [area_damage, suppress]
   flak: 14   # 舰载防空：敌机进 / 出 2 格防空圈各挨一次
   icon: battleship
-
-transport:
-  name: 运输船
-  short: 运
-  domain: sea
-  strength: 4
-  moves: 9
-  sight: 2
-  cost: 110
-  population: 1
-  gold: 30
-  upkeep: 1
-  carry: 4
-  tags: [unarmed]
-  icon: transport
 
 carrier:
   name: 航空母舰编队

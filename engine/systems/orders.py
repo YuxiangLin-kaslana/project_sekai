@@ -20,8 +20,6 @@ from engine.actions import (
     DemolishRoad,
     DevelopCity,
     Diplomacy,
-    Disembark,
-    Embark,
     FormGroup,
     Fortify,
     FoundCity,
@@ -201,7 +199,6 @@ def _apply(ctx: StepContext, order: Order) -> None:
         if any(
             u.tile != anchor.tile
             or u.layer != anchor.layer
-            or u.layer == "cargo"
             or rules.units[u.type].domain != rules.units[anchor.type].domain
             for u in members
         ):
@@ -283,8 +280,11 @@ def _apply(ctx: StepContext, order: Order) -> None:
         return
     if unit.sortie is not None and not isinstance(order, (UnitManagement, Attack)):
         raise Rejected("on_sortie", "飞机出击任务中（飞往目标 / 返航），完成前不能下别的命令")
-    if unit.layer == "cargo" and not isinstance(order, (Disembark, UnitManagement, LeaveCorps)):
-        raise Rejected("on_board", "在船上，先下船")
+    if isinstance(order, (Pillage, DemolishRoad, BuildFacility, FoundCity)):
+        from engine.systems.naval import afloat
+
+        if afloat(state, rules, unit):
+            raise Rejected("at_sea", "在海上，先上岸")
     if isinstance(order, UnitManagement):
         unit.managed = order.enabled
         unit.ai_goal, unit.ai_target = "", None
@@ -321,33 +321,6 @@ def _apply(ctx: StepContext, order: Order) -> None:
         ctx.attacks.append(order)
         if ctx.automatic:
             ctx.automatic_attacks.add((order.type, order.unit, order.to))
-        return
-    if isinstance(order, Embark):
-        from engine.systems.naval import embark, embark_target
-
-        ship = None
-        if order.ship is not None:
-            ship = state.units.get(parse_ref(order.ship, "unit"))
-            if ship is None:
-                raise Rejected("not_found", "这艘船不存在")
-        ship, problem = embark_target(state, rules, unit, ship)
-        if problem:
-            raise Rejected("cannot_embark", problem)
-        embark(ctx, unit, ship)
-        return
-    if isinstance(order, Disembark):
-        from engine.systems.naval import disembark, landing_tile
-
-        to = None
-        if order.to is not None:
-            try:
-                to = state.grid.idx(*order.to)
-            except IndexError as e:
-                raise Rejected("bad_target", str(e)) from e
-        tile, problem = landing_tile(state, rules, unit, to)
-        if problem:
-            raise Rejected("cannot_disembark", problem)
-        disembark(ctx, unit, tile)
         return
     if isinstance(order, DemolishRoad):
         from engine.systems.roads import demolish, demolish_problem

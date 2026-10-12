@@ -1015,8 +1015,6 @@ const EVENT_TEXT = {
   borders_grew: (e) => `${cityName(e.city)} 辖区扩大 ${e.tiles.length} 格`,
   ai_changed: e => `${game.nationOf(e.nation)?.name??e.nation} ${e.enabled?"开启":"暂停"}国家规则 AI`,
   production_blocked: (e) => `${cityName(e.city)} 生产受阻：${e.reason}`,
-  embarked: (e) => `${unitName(e.unit_type)} 登上${unitName(e.ship_type)}`,
-  disembarked: (e) => `${unitName(e.unit_type)} 下船登陆`,
   unit_captured: (e) => `${game.nationOf(e.nation)?.name ?? ''} 俘虏了${game.nationOf(e.previous)?.name ?? ''}的${unitName(e.unit_type)}`,
   nation_eliminated: (e) => `${e.name} 灭亡`,
   air_sortie: (e) => e.fighter ? `${unitName(e.unit_type)} 起飞出击，飞到就打，之后留空巡逻` : `${unitName(e.unit_type)} 起飞出击，飞往目标上空（下回合轰炸，再下回合返航）`,
@@ -1959,13 +1957,6 @@ function tacticalCard(actor) {
   stats.innerHTML=unit?`<span>移动 <b>${move}</b></span><span>战力 <b>${combat}${ranged?'/'+ranged:''}</b></span><span>射程 <b>${game.G.tactics?.attack_range??(def.ranged_strength||def.anti_air||def.domain==='air'?def.range:1)}</b></span>`:`<span>攻击范围 <b>2 格</b></span><span>城防 <b>${actor.defense}</b></span>`;
   box.appendChild(stats);
   const buttons=document.createElement('div');buttons.className='command-grid';
-  if(unit&&actor.layer==='cargo'){
-    // 船上的部队只能下船（从舰船卡片或部队列表选中）
-    const ship=game.G.units.get(actor.carried_by);
-    buttons.appendChild(commandButton('下船','move',()=>executeCommand(actorOrder('disembark')),commandBusy||move<=0,move>0?`从${ship?unitName(ship.type):'船'}下到旁边的陆地`:'刚登船，下一回合再下船'));
-    box.appendChild(buttons);
-    return box;
-  }
   if(unit)buttons.appendChild(commandButton('移动','move',()=>setCommandMode('move'),commandBusy||move<=0));
   const air=unit&&def.domain==='air';
   const fighterPlane=air&&def.tags?.includes('air_superiority');
@@ -1976,7 +1967,6 @@ function tacticalCard(actor) {
     buttons.appendChild(commandButton(actor.managed?'接管单位':'交回单位 AI','group',()=>executeCommand(actorOrder('unit_management',{enabled:!actor.managed})),commandBusy));
     if(air&&actor.sortie==='patrol')buttons.appendChild(commandButton('返航','fortify',()=>executeCommand(actorOrder('fortify')),commandBusy,'本回合飞回机场降落（降落占一个回合）'));
     else if(!actor.sortie)buttons.appendChild(commandButton('驻守','fortify',()=>executeCommand(actorOrder('fortify')),commandBusy));
-    if(def.domain==='land'){const ship=game.G.tactics?.embark;buttons.appendChild(commandButton('登船','move',()=>executeCommand(actorOrder('embark')),commandBusy||!ship,ship?`登上旁边的${ship}（用掉本回合行动，当回合船就能起航）`:(game.G.tactics?.embark_blocked??'')));}
     if(def.domain==='land'&&game.G.tactics&&!game.G.tactics.demolish_blocked)buttons.appendChild(commandButton('拆路','pillage',()=>executeCommand(actorOrder('demolish_road')),commandBusy,'拆掉连到脚下这一格的本国道路，拖慢来犯之敌（用掉本回合行动）'));
     if(def.category==='military'&&def.domain==='land'){const p=game.G.tactics?.pillage;buttons.appendChild(commandButton('破坏','pillage',()=>executeCommand(actorOrder('pillage')),commandBusy||!p,p?`破坏${p.name}，掠走 ${p.loot} 金，所属城市稳定度下降`:(game.G.tactics?.pillage_blocked??'')));}
     if(actor.formation!=null)buttons.appendChild(commandButton('解散编队','group',()=>executeCommand(actorOrder('ungroup')),commandBusy));
@@ -2004,24 +1994,19 @@ function tacticalCard(actor) {
     }
     box.appendChild(info);
   }
-  // 舰船：船上的陆军（各自下船）、航母上的舰载机
-  if(unit&&(def.carry||def.air_capacity)){
+  // 航母：舰载机
+  if(unit&&def.air_capacity){
     const hold=document.createElement('div');hold.className='cargo-list';
-    const riders=game.G.cargo?.get(actor.id)??[];
-    const planes=def.air_capacity?(game.G.stacks.get(actor.tile)?.air??[]).filter(p=>p.carried_by===actor.id):[];
-    let html=def.carry?`<b>载运 ${riders.length} / ${def.carry}</b>`:'';
-    if(def.air_capacity)html+=`<b>舰载机 ${planes.length} / ${def.air_capacity}</b>`;
-    hold.innerHTML=html+(riders.length||planes.length?'':'<span class="hint">空船：相邻的陆军可以登船；飞机可以转场到航母上</span>');
-    for(const r of riders){
-      const row=document.createElement('div');row.className='cargo-row';
-      row.innerHTML=`<span>${esc(unitName(r.type))} <small>生命 ${r.hp}</small></span>`;
-      const off=document.createElement('button');off.type='button';off.textContent='下船';off.disabled=commandBusy;
-      off.title='下到船旁边的陆地（用掉这支部队本回合的行动；刚登船的要下一回合）';
-      off.onclick=()=>executeCommand({type:'disembark',issuer:r.nation,unit:r.id});
-      row.appendChild(off);hold.appendChild(row);
-    }
+    const planes=(game.G.stacks.get(actor.tile)?.air??[]).filter(p=>p.carried_by===actor.id);
+    hold.innerHTML=`<b>舰载机 ${planes.length} / ${def.air_capacity}</b>`+(planes.length?'':'<span class="hint">飞机可以转场到航母上</span>');
     for(const p of planes)hold.insertAdjacentHTML('beforeend',`<div class="cargo-row"><span>${esc(unitName(p.type))} <small>生命 ${p.hp}</small></span></div>`);
     box.appendChild(hold);
+  }
+  // 陆军下海：海上没有攻击力、血量极低；下海、上岸各花一整回合（要满移动力）
+  if(unit&&def.domain==='land'){
+    const sea=document.createElement('p');sea.className=actor.afloat?'command-warning':'hint';
+    sea.textContent=actor.afloat?'在海上：没有攻击力，防御力只剩 25%、受到的伤害 ×3，要战舰同格护航（敌人先打战舰）。满移动力时点旁边的陆地上岸（花一整回合）。':'满移动力时可以点旁边的海面下海（花一整回合），自己渡海，不用运输船。';
+    box.appendChild(sea);
   }
   if(unit){const hint=document.createElement('p');hint.className='hint';hint.textContent=actor.managed?`规则 AI：${actor.ai_goal||'等待国家开启 AI'}。`:'本单位由你指挥。';box.appendChild(hint);}
   if(actor.attack_blocked){ const h=document.createElement('p');h.className='command-warning';h.textContent=actor.attack_blocked;box.appendChild(h); }

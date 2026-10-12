@@ -47,7 +47,7 @@ class StepResult:
 
 def _refresh(ctx: StepContext) -> None:
     for _, u in sorted(ctx.state.units.items()):
-        u.moves_left = movement.unit_moves(ctx.state.grid, ctx.rules.units[u.type])
+        u.moves_left = movement.full_moves(ctx.state, ctx.rules, u)  # 下了海的陆军按海上的移动力
         u.road_credit = 0
     ctx.state.turn += 1
 

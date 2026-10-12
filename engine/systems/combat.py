@@ -8,6 +8,9 @@
 - 带 area_damage 标签的远程单位（炮兵、战列舰）炮击整格：目标格里的每个敌方军事单位
   （和敌国城市）都按各自的防御力受到伤害。
 - 被包围的单位、城市战斗力打折（见 engine/systems/encirclement.py）。
+- 下了海的陆军（engine/systems/naval.py）不能攻击；挨打时按舰船算（鱼雷打得着，陆军近战打不着），
+  防御力只剩 embark.defense%、受到的伤害 ×embark.damage_taken%，不反击。同格有本方战舰时敌人先打战舰
+  （护航，_screened）；炮击、地毯式轰炸波及整格，照样打得到它。
 - 战术修正（attack_modifiers，数值在规则集 tactics 和地形 attack 里）：从丘陵出击居高临下加成、
   从沼泽雨林雪地出击减成；近战侧击——目标格四周每多一面有本方陆军 +10%（最多三面），城市也算；
   隔着河近战进攻 −25%（走桥 −10%）。防守方仍按地形 defense、驻守、步兵防守等加成。
@@ -33,6 +36,7 @@ from engine.state import MOVE_STEPS, City, Unit
 from engine.systems import encirclement
 from engine.systems.cities import city_stat, nation_supply
 from engine.systems.context import StepContext
+from engine.systems.naval import afloat
 from engine.systems.progression import gain, level, unit_strength
 
 FUEL_SHORTAGE = 30  # 没有石油：坦克、飞机（fuel 单位）战斗力 −30%
@@ -129,8 +133,8 @@ def lock_reason(state, rules, actor) -> str | None:
     ut = rules.units[actor.type]
     if ut.category != "military":
         return "只有军事单位可以攻击"
-    if actor.layer == "cargo":
-        return "在船上，先下船"
+    if ut.domain == "land" and afloat(state, rules, actor):
+        return "在海上没有攻击力，先上岸"
     if "carrier" in ut.tags and not ut.ranged_strength:
         return "航空母舰没有攻击手段，靠舰载机作战"
     if "unarmed" in ut.tags:
@@ -359,7 +363,11 @@ def strength(
     health = (actor.hp if hp is None else hp) * 100 // ut.hp
     _note(notes, "带伤", (50 + health // 2) - 100)
     value = value * (50 + health // 2) // 100
-    if defending:
+    if defending and ut.domain == "land" and afloat(state, rules, actor):
+        # 下了海的陆军：没有地形、驻守加成，防御力只剩 embark.defense%
+        _note(notes, "在海上", rules.embark.defense - 100)
+        value = value * rules.embark.defense // 100
+    elif defending:
         _note(notes, f"地形：{terrain.name}", terrain.defense)
         _note(notes, "驻守", 25 if actor.fortified else 0)
         site = 0
@@ -410,13 +418,28 @@ def attack_modifiers(state, rules, actor, tile, kind, target=None) -> list[tuple
     return out
 
 
-def _damage_scale(rules, actor, target) -> int:
+def domain_of(state, rules, unit) -> str:
+    """打起来按什么军种算：下了海的陆军按舰船算（鱼雷打得着，陆军近战打不着）。"""
+    ut = rules.units[unit.type]
+    if ut.domain == "land" and afloat(state, rules, unit):
+        return "sea"
+    return ut.domain
+
+
+def _screened(state, rules, units):
+    """海上护航：同格有本方战舰时，敌人打不着下了海的陆军（先打战舰）。"""
+    guards = [u for u in units if not afloat(state, rules, u)]
+    return guards or units
+
+
+def _damage_scale(rules, actor, target, state=None) -> int:
     """伤害倍率（%）：兵种对部队 / 对城市的倍率 × 军种克制（规则集 domain_damage：舰炮打岸上部队强、
-    陆军打舰船弱、飞机打舰船强……）。城市的防御射击按陆军算。"""
+    陆军打舰船弱、飞机打舰船强……）。城市的防御射击按陆军算；下了海的陆军按舰船算（给了 state 时）。"""
     if isinstance(target, City):
         return rules.units[actor.type].damage_vs_city if isinstance(actor, Unit) else 100
     attacker = rules.units[actor.type].domain if isinstance(actor, Unit) else "land"
-    vs = rules.domain_damage.get(attacker, {}).get(rules.units[target.type].domain, 100)
+    victim = rules.units[target.type].domain if state is None else domain_of(state, rules, target)
+    vs = rules.domain_damage.get(attacker, {}).get(victim, 100)
     base = rules.units[actor.type].damage_vs_units if isinstance(actor, Unit) else 100
     return base * vs // 100
 
@@ -474,8 +497,12 @@ def target_at(state, rules, actor, tile):
         if _war(state, u.nation, actor.nation) and rules.units[u.type].category == "military"
     ]
     if isinstance(actor, Unit) and rules.units[actor.type].torpedo:
-        # 鱼雷只打舰船
-        ships = [u for u in enemies if u.layer == "surface" and rules.units[u.type].domain == "sea"]
+        # 鱼雷只打舰船（下了海的陆军也算，有护航先打护航的战舰）
+        ships = _screened(
+            state,
+            rules,
+            [u for u in enemies if u.layer == "surface" and domain_of(state, rules, u) == "sea"],
+        )
         if ships or not rules.units[actor.type].deck_gun:
             return max(
                 ships,
@@ -494,7 +521,8 @@ def target_at(state, rules, actor, tile):
         if ut.domain != "air":
             enemies = [u for u in enemies if u.layer == "surface"]
             if attack_kind(rules, actor) == "melee":
-                enemies = [u for u in enemies if rules.units[u.type].domain == ut.domain]
+                enemies = [u for u in enemies if domain_of(state, rules, u) == ut.domain]
+    enemies = _screened(state, rules, enemies)
     if enemies:
         return max(enemies, key=lambda u: (strength(state, rules, u, defending=True), -u.id))
     city = state.city_at(tile)
@@ -508,7 +536,7 @@ def target_at(state, rules, actor, tile):
             u
             for u in state.units_at(tile, "surface")
             if _war(state, u.nation, actor.nation)
-            and (attack_kind(rules, actor) != "melee" or rules.units[u.type].domain == ut.domain)
+            and (attack_kind(rules, actor) != "melee" or domain_of(state, rules, u) == ut.domain)
         ]
         if civilians:
             return min(civilians, key=lambda u: u.id)
@@ -626,7 +654,7 @@ def preview(state, rules, actor, tile) -> tuple[dict | None, str | None]:
             "area": [],
         }, None
     gun = kind == "torpedo" and not (
-        isinstance(target, Unit) and rules.units[target.type].domain == "sea"
+        isinstance(target, Unit) and domain_of(state, rules, target) == "sea"
     )
     if gun:
         kind = "ranged"  # 驱逐舰没有敌舰可打：甲板炮打岸上目标
@@ -657,7 +685,7 @@ def preview(state, rules, actor, tile) -> tuple[dict | None, str | None]:
     a = _apply(a, tactical)
     damage = max(8, min(65, 30 * a // d)) if actor.hp > flak else 0
     # 兵种对部队 / 城市的伤害倍率（炮兵：打部队弱、削城防强），只改伤害，不改战斗力和反击
-    scale = _damage_scale(rules, actor, target)
+    scale = _damage_scale(rules, actor, target, state)
     if scale != 100:
         damage = damage * scale // 100
         tactical = [
@@ -688,6 +716,13 @@ def preview(state, rules, actor, tile) -> tuple[dict | None, str | None]:
         mult = rules.encirclement.damage_taken
         damage = damage * mult // 100
         tactical = [*tactical, ("目标被包围", mult - 100)]
+    at_sea = isinstance(target, Unit) and rules.units[target.type].domain == "land"
+    at_sea = at_sea and afloat(state, rules, target)
+    if at_sea:
+        # 下了海的陆军血量极低：受到的伤害 ×embark.damage_taken%
+        mult = rules.embark.damage_taken
+        damage = damage * mult // 100
+        tactical = [*tactical, ("目标在海上（血量极低）", mult - 100)]
     # 炮击整格：其余敌军（和城市）各按自己的防御力受伤；地毯式轰炸（area_tiles = 4）再覆盖目标格往前的
     # 菱形三格，那三格里的敌军、敌城按 AREA_OUTER% 伤害
     area = []
@@ -720,7 +755,9 @@ def preview(state, rules, actor, tile) -> tuple[dict | None, str | None]:
                         30 * a // strength(state, rules, o, defending=True, against=actor.nation),
                     ),
                 )
-                hit = hit * _damage_scale(rules, actor, o) // 100
+                hit = hit * _damage_scale(rules, actor, o, state) // 100
+                if isinstance(o, Unit) and afloat(state, rules, o):
+                    hit = hit * rules.embark.damage_taken // 100
                 if t != tile:
                     hit = hit * AREA_OUTER // 100
                 area.append(
@@ -732,7 +769,7 @@ def preview(state, rules, actor, tile) -> tuple[dict | None, str | None]:
                         ),
                     }
                 )
-    retaliation = max(6, min(60, 25 * d // a)) if kind == "melee" else 0
+    retaliation = max(6, min(60, 25 * d // a)) if kind == "melee" and not at_sea else 0
     if (city_defense(state, rules, target) if isinstance(target, City) else target.hp) <= 0:
         retaliation = 0
     if kind == "air" and isinstance(target, Unit):

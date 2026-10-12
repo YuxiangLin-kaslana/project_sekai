@@ -64,6 +64,7 @@ DEV_WAIT_REASON = "暂无合适的开发项目，过几回合再看"
 RICH_RESERVE_MULTIPLE = 4  # 国库超过储备金这么多倍算"富裕"：放宽维护费限制、扩大军备
 GENERAL_MIN = 6  # 没人统率的野战部队比将领空位多出这么多才造将领
 ADMIRAL_MIN = 3  # 没编进舰队的战舰比海军将领空位多出这么多艘，就造海军将领
+DESTROYER_RUSH = 3  # 本国沿海的敌舰有这么多艘：直接造驱逐舰（鱼雷专打舰船）
 WAR_MODES = (
     "进攻",
     "防守",
@@ -71,7 +72,6 @@ WAR_MODES = (
     "推进",
     "围城",
     "整编",
-    "装船",
     "航渡",
 )  # 与 controllers/rule_ai.py 的战争阶段一致
 
@@ -98,8 +98,8 @@ class Budget:
     assist: frozenset = frozenset()  # 这回合该开“金币补足建设”的城市
     air_threat: int = 0  # 本国城市 10 格内的外国空军数量（要用战斗机制空）
     air_sites: float = 0  # 要防空掩护的地方：外国空军附近的本国城市（按飞机数折算）+ 打仗时的野战军
-    want_lift: int = 0  # 跨海作战还缺的运兵船运力（能载几支陆军）
-    lift_seas: frozenset = frozenset()  # 出发港所在的海域：只有通这片海的城市造运兵船才有用
+    want_escort: int = 0  # 跨海作战还缺几艘护航战舰（陆军自己下海，每两支要一艘战舰同格护航）
+    escort_seas: frozenset = frozenset()  # 出发港所在的海域：只有通这片海的城市造护航战舰才有用
     naval_want: int = 0  # 还缺几艘战舰（炮击靠海的战线目标、对付本国沿海的敌舰）
     carrier_want: int = 0  # 还要造几艘航母（打仗、有靠海的战线目标；减去现有的和在造的）
     want_general: int = 0  # 没人统率的野战陆军比将领的统御空位多出多少（多于 GENERAL_MIN 就造将领）
@@ -114,6 +114,7 @@ class Budget:
     posture: str = ""
     settler_want: int = 0  # 还缺几支开拓者（城址数 − 在路上和在造的开拓者）
     expanding: bool = False  # 扩张期、还有空地可以建城：先造开拓者、扩领土，放缓内部建设和造兵
+    enemy_fleet: int = 0  # 本国沿海（和交战国）的敌方战舰数：多了直接造驱逐舰
     airfield: dict | None = None  # 国家要修的前线机场（rule_ai._airfield_plan）：格子、哪座城修
     want_admiral: int = (
         0  # 没人统率的战舰比海军将领的统御空位多出多少（多于 ADMIRAL_MIN 就造海军将领）
@@ -181,7 +182,7 @@ def budget_for(state, rules, nation, cities):
     )
     settler_want = max(0, len(sites) - settlers_now)
     expanding = bool(sites) and strategy.get("posture", "扩张") == "扩张"
-    want_siege = want_melee = want_lift = 0
+    want_siege = want_melee = want_escort = 0
     if strategy.get("mode") in WAR_MODES:
         queued = [
             rules.units[item.split(":")[1]]
@@ -197,8 +198,12 @@ def budget_for(state, rules, nation, cities):
             strategy.get("want_melee", 0)
             - sum(1 for u in queued if not u.ranged_strength and u.domain == "land"),
         )
-        want_lift = max(0, strategy.get("want_lift", 0) - sum(u.carry for u in queued))
-        # 运兵船缺口不抬高军备总数（造不起船时不拿便宜兵种凑数），只给沿海城市造船加分
+        want_escort = max(
+            0,
+            strategy.get("want_escort", 0)
+            - sum(1 for u in queued if u.domain == "sea" and "carrier" not in u.tags),
+        )
+        # 护航缺口不抬高军备总数（造不起船时不拿便宜兵种凑数），只给沿海城市造船加分
         target = max(target, len(units) + want_siege + want_melee)
     # 姿态：扩张期少养兵（守城 + 边境哨就够），把生产力留给开拓团和城市建设；战争期加上边境哨要的兵
     posts = strategy.get("border_posts", 0)
@@ -241,11 +246,7 @@ def budget_for(state, rules, nation, cities):
             if u.nation == nation.id and u.rank and rules.units[u.type].domain == "sea"
         )
         loose_ships = sum(
-            1
-            for u in units
-            if u.corps is None
-            and rules.units[u.type].domain == "sea"
-            and "unarmed" not in rules.units[u.type].tags
+            1 for u in units if u.corps is None and rules.units[u.type].domain == "sea"
         )
         want_admiral = max(0, loose_ships - sea_room - 8 * queued_admirals)
         loose = sum(
@@ -311,7 +312,7 @@ def budget_for(state, rules, nation, cities):
         if item.startswith("unit:")
         and rules.units[item[5:]].domain == "sea"
         and rules.units[item[5:]].category == "military"
-        and not {"carrier", "unarmed"} & set(rules.units[item[5:]].tags)
+        and "carrier" not in rules.units[item[5:]].tags
     )
     queued_carriers = sum(
         1
@@ -374,8 +375,8 @@ def budget_for(state, rules, nation, cities):
         assist,
         air_threat,
         air_sites,
-        want_lift,
-        frozenset(strategy.get("lift_seas") or (strategy.get("sea") or {}).get("seas") or ()),
+        want_escort,
+        frozenset(strategy.get("escort_seas") or (strategy.get("sea") or {}).get("seas") or ()),
         # 海军缺口减去已经在造的战舰（不然同一回合每座沿海城市都去造，大大超量）
         max(0, strategy.get("naval_want", 0) - queued_warships),
         max(0, strategy.get("carrier_want", 0) - queued_carriers),  # 已经在造的航母不重复造
@@ -389,6 +390,7 @@ def budget_for(state, rules, nation, cities):
         airfield=strategy.get("airfield"),
         settler_want=settler_want,
         expanding=expanding,
+        enemy_fleet=strategy.get("enemy_fleet", 0),
     )
 
 
@@ -398,7 +400,7 @@ def _counters(ut):
     out = set()
     if "air_superiority" in ut.tags or ut.anti_air:
         out.add("air")
-    if (ut.domain == "sea" and not {"carrier", "unarmed"} & set(ut.tags)) or (
+    if (ut.domain == "sea" and "carrier" not in ut.tags) or (
         ut.domain == "air" and ut.ranged_strength
     ):
         out.add("sea")
@@ -600,16 +602,20 @@ def decide_city(state, rules, city, budget):
         fighter_gap = budget.air_threat - 2 * fighters
         intensity = min(1, budget.air_threat / 2)
         for u in rules.units.values():
-            lift = (
-                u.carry and budget.want_lift > 0 and _on_seas(state, rules, city, budget.lift_seas)
+            escort = (
+                u.domain == "sea"
+                and u.category == "military"
+                and "carrier" not in u.tags
+                and budget.want_escort > 0
+                and _on_seas(state, rules, city, budget.escort_seas)
             )
-            if u.category != "military" or not (budget.demand or lift):
+            if u.category != "military" or not (budget.demand or escort):
                 continue
             if "carrier" in u.tags and not budget.carrier_want:
                 continue  # 航空母舰：有飞机、有靠海的战线目标、还没有航母时才造
             if (
                 u.domain == "sea"
-                and not lift
+                and not escort
                 and "carrier" not in u.tags
                 and budget.naval_want <= 0
             ):
@@ -665,26 +671,26 @@ def decide_city(state, rules, city, budget):
                 # 攻城必须有远程火力（只有它能削城防）；近战掩护越少，这份加分越打折
                 score += (25 + 15 * min(3, budget.want_siege)) * min(1, (melee + 1) / (ranged + 1))
                 reason = f"攻城缺远程火力 {budget.want_siege} 支，优先补充"
-            if (
-                u.domain == "sea"
-                and not {"carrier", "unarmed"} & set(u.tags)
-                and budget.naval_want > 0
-            ):
+            if u.domain == "sea" and "carrier" not in u.tags and budget.naval_want > 0:
                 # 海军：炮击靠海的战线目标、对付本国沿海的敌舰；能炮击的（巡洋、战列）优先
                 score += 35 + 15 * min(3, budget.naval_want) + (15 if u.ranged_strength else 0)
                 reason = f"海上还缺 {budget.naval_want} 艘战舰：炮击沿海目标、护卫海岸"
+            if u.torpedo and budget.enemy_fleet >= DESTROYER_RUSH:
+                # 对手海军多：直接上驱逐舰（快、便宜，鱼雷专打舰船）
+                score += 40 + 15 * min(4, budget.enemy_fleet - DESTROYER_RUSH + 1)
+                reason = f"附近海上有 {budget.enemy_fleet} 艘敌舰：造驱逐舰，用鱼雷对付敌方海军"
             if "carrier" in u.tags:
                 # 航母贵（360 生产力），按“战斗力 ÷ 造价”永远比不过步兵；国家要航母时给足加分，
                 # 让一座有港口的沿海城市真的造出来（其余城市看到在造了就不重复造）
                 score += 140
                 reason = "打仗、有靠海的战线目标：造航空母舰，舰载机群从海上对地打击"
-            if lift:
-                # 跨海作战缺运力：载得越多越值（在沿海城市才造得出舰船）。每条船都占一个人口，
-                # 运输船（载 4）一个人口运 4 支，比驱逐舰（载 1）划算得多
-                # 战舰运兵只算一半（它还要护航、打仗，海军加分另算），专门运兵的运输船吃满
-                bonus = 40 + 50 * min(u.carry, budget.want_lift)
-                score += bonus if "unarmed" in u.tags else bonus / 2 - (20 if u.carry < 2 else 0)
-                reason = f"跨海作战还缺运兵船运力 {budget.want_lift}，优先造运兵舰船"
+            if escort:
+                # 跨海作战缺护航：陆军自己下海，在海上没有攻击力、血量极低，要战舰同格护航；
+                # 驱逐舰快、便宜，跟得上渡海的部队，最合适
+                score += 40 + 25 * min(3, budget.want_escort) + (20 if u.torpedo else 0)
+                reason = (
+                    f"跨海作战还缺 {budget.want_escort} 艘护航战舰（陆军自己下海，要战舰同格护航）"
+                )
             if is_line(u) and budget.want_melee > 0:
                 # 战线缺近战（守城、边境哨也占着近战）：不按全国近战 / 远程比例扣分
                 score += 40 + 20 * min(4, budget.want_melee)
@@ -810,12 +816,11 @@ def decide_city(state, rules, city, budget):
                 budget.settler_want -= 1
             if item.startswith("unit:"):
                 picked = rules.units[item[5:]]
-                if picked.domain == "sea" and not {"carrier", "unarmed"} & set(picked.tags):
+                if picked.domain == "sea" and "carrier" not in picked.tags:
                     budget.naval_want -= 1  # 一座城在造了，别的城少造一艘
+                    budget.want_escort -= 1
                 if "carrier" in picked.tags:
                     budget.carrier_want -= 1
-                if picked.carry:
-                    budget.want_lift -= picked.carry
             intents.append((CityOrder(issuer=issuer, city=cid, queue=[item]), "production", reason))
             report["reason"] = reason
         else:
@@ -1084,7 +1089,7 @@ def _urgent_development(state, rules, city, budget):
         tile = _site(state, rules, city, b, room)
         if tile is not None:
             return b.id, tile, "住房快满了，人口长不上去：建住宅区（往无主的土地扩张辖区）"
-    if budget.naval_want > 0 or budget.want_lift > 0 or budget.carrier_want:
+    if budget.naval_want > 0 or budget.want_escort > 0 or budget.carrier_want:
         ports = [b for b in rules.buildings.values() if "ships" in b.enables]
         if (
             ports

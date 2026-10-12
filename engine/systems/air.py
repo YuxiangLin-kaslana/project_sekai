@@ -63,6 +63,7 @@ def flight_flak(state, rules, plane, src, dst) -> list[tuple]:
     航线进入一个敌方防空圈开火一次，飞出再开火一次；累计最多 FLAK_CAP 点，打光为止。"""
     from engine.systems.combat import FLAK_CAP, FLAK_FACTOR, strength
     from engine.systems.diplomacy import at_war
+    from engine.systems.naval import afloat
 
     g = state.grid
     path = flight_path(g, src, dst)
@@ -74,6 +75,8 @@ def flight_flak(state, rules, plane, src, dst) -> list[tuple]:
         if u.layer != "surface" or not at_war(state, u.nation, plane.nation):
             continue
         ut = rules.units[u.type]
+        if ut.domain == "land" and afloat(state, rules, u):
+            continue  # 下了海的高射炮没有火力
         reach = aa_range(ut)
         if not reach or not aa_power(ut) or g.distance(u.tile, src) > span + reach:
             continue

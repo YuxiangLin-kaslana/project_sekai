@@ -269,9 +269,7 @@ def _civil_war(ctx, nid) -> bool:
     for group in groups:
         region = {c.id for c in group}
         units = [
-            u
-            for u in s.units.values()
-            if u.nation == nid and u.layer != "cargo" and int(g.city_of[u.tile]) in region
+            u for u in s.units.values() if u.nation == nid and int(g.city_of[u.tile]) in region
         ]
         seat = max(group, key=lambda c: (c.population, -c.id))
         new = secede(ctx, nid, group, seat, units, gold=40 * len(group), why="内战倒戈")

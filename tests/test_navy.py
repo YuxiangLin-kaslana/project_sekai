@@ -1,6 +1,5 @@
-"""三级战舰与航母：鱼雷只打舰船、航母不能攻击、陆军登船随船航行再下船、舰载机随航母走、船沉人亡。"""
-
-from collections import Counter
+"""三级战舰与航母：鱼雷只打舰船、航母舰载机群、陆军自己下海渡海（下海、上岸各花一回合，海上没有攻击力、
+血量极低，战舰同格护航）、舰载机随航母走、航母沉了舰载机一起损失。"""
 
 import pytest
 
@@ -48,10 +47,10 @@ def order(u, kind, **kw):
     return {"issuer": f"nation:{u.nation}", "unit": f"unit:{u.id}", "type": kind, **kw}
 
 
-def test_three_warship_tiers_differ_in_speed_cargo_and_reach():
+def test_three_warship_tiers_differ_in_speed_and_reach():
     d, c, b = (RULES.units[k] for k in ("destroyer", "cruiser", "battleship"))
     assert d.moves > c.moves > b.moves
-    assert d.carry < c.carry < b.carry
+    assert "transport" not in RULES.units  # 没有运输船：陆军自己下海
     assert d.torpedo and not d.ranged_strength and d.range < c.range  # 鱼雷射程最近
     assert c.range < b.range and c.ranged_strength < b.ranged_strength
     carrier = RULES.units["carrier"]
@@ -87,51 +86,81 @@ def test_carrier_air_wing_strikes_ships_and_shore(board):
     assert result.state.units[carrier.id].hp == RULES.units["carrier"].hp
 
 
-def test_troops_embark_sail_and_land(board):
+def test_troops_put_to_sea_and_land_each_taking_a_whole_turn(board):
+    from engine.systems.movement import full_moves, unit_moves
+    from engine.systems.naval import afloat
+
     g = board.grid
-    ship = add(board, "destroyer", 1, COAST, 3)  # 靠岸的驱逐舰（载 1 支）
     first = add(board, "infantry", 1, COAST - 1, 3)
-    second = add(board, "infantry", 1, COAST - 1, 4)
-    s = act(board, order(first, "embark")).state
-    rider = s.units[first.id]
-    assert rider.layer == "cargo" and rider.carried_by == ship.id and rider.tile == ship.tile
-    assert [u.id for u in s.units_at(ship.tile, "surface")] == [ship.id]  # 部队在船上，不占地面格
-    assert first.id not in [u.id for u in s.units_at(ship.tile)]
-    full = act(s, order(second, "embark"))
-    assert full.rejected  # 驱逐舰只能载 1 支
-    assert act(s, order(rider, "move", to=[COAST - 1, 2])).rejected  # 船上的部队只能下船
-    assert act(s, order(rider, "fortify")).rejected
-    # 船开走，部队跟着走
-    sailed = act(s, order(ship, "move", to=[COAST, 6])).state
-    assert sailed.units[first.id].tile == sailed.units[ship.id].tile == g.idx(COAST, 6)
-    # 当回合刚登船不能下船；下一回合下到岸边
-    assert act(sailed, order(first, "disembark")).rejected
-    nxt = step(sailed, [], RULES).state
-    landed = act(nxt, order(first, "disembark"))
-    assert not landed.rejected
-    u = landed.state.units[first.id]
-    assert u.layer == "surface" and u.carried_by is None and not g.is_water[u.tile]
-    assert g.distance(u.tile, landed.state.units[ship.id].tile) <= 1
-
-
-def test_cannot_land_on_enemy_and_cargo_sinks_with_the_ship(board):
-    g = board.grid
-    ship = add(board, "cruiser", 1, COAST, 3)
-    rider = add(board, "infantry", 1, COAST - 1, 3)
-    s = act(board, order(rider, "embark")).state
+    late = add(board, "infantry", 1, COAST - 3, 5)
+    # 满移动力：走进旁边的海面就是下海，用掉一整回合
+    s = act(board, order(first, "move", to=[COAST, 3])).state
+    u = s.units[first.id]
+    assert u.tile == g.idx(COAST, 3) and afloat(s, RULES, u)
+    assert u.moves_left == 0 and u.road_credit == 0
+    assert lock_reason(s, RULES, u) == "在海上没有攻击力，先上岸"
+    # 走了几步才到海边：这回合下不了海，停在岸上（下回合满移动力再下）
+    out = act(s, order(late, "move", to=[COAST, 5])).state
+    v = out.units[late.id]
+    assert not g.is_water[v.tile] and v.destination == g.idx(COAST, 5)
+    # 下一回合：在海上按海上的移动力走（比陆上快）
     s = step(s, [], RULES).state
-    for t in g.neighbors_of(s.units[ship.id].tile):  # 岸边全站满敌军
-        if not g.is_water[t]:
-            s.add_unit(Unit(s.new_id(), "infantry", 2, t, "surface"))
-    assert act(s, order(s.units[rider.id], "disembark")).rejected
-    s.units[ship.id].hp = 1
-    gun = s.add_unit(Unit(s.new_id(), "destroyer", 2, g.idx(COAST + 1, 3), "surface", moves_left=6))
-    sunk = act(s, order(gun, "attack", to=[COAST, 3]))
-    assert ship.id not in sunk.state.units and rider.id not in sunk.state.units
-    lost = [
-        e for e in sunk.events if e["type"] == "unit_destroyed" and e.get("reason") == "随船沉没"
-    ]
-    assert [e["unit"] for e in lost] == [f"unit:{rider.id}"]
+    u = s.units[first.id]
+    land = unit_moves(g, RULES.units["infantry"])
+    assert u.moves_left == full_moves(s, RULES, u) > land
+    # 开到岸边还剩移动力：这回合上不了岸（上岸要满移动力），停在海上
+    s = act(s, order(u, "move", to=[COAST - 1, 6])).state
+    u = s.units[first.id]
+    assert u.tile != g.idx(COAST, 3) and afloat(s, RULES, u) and u.moves_left > 0
+    assert u.destination == g.idx(COAST - 1, 6)
+    s = step(s, [], RULES).state  # 这回合剩下的移动力也上不了岸
+    assert s.units[first.id].tile == u.tile
+    s = step(s, [], RULES).state  # 下一回合满移动力：上岸，上岸用掉一整回合（不再往前走）
+    landed = s.units[first.id]
+    dest = g.idx(COAST - 1, 6)
+    assert not afloat(s, RULES, landed) and g.distance(landed.tile, u.tile) == 1
+    assert landed.tile == dest or landed.destination == dest
+    boat = add(s, "infantry", 1, COAST, 1)
+    boat.moves_left = full_moves(s, RULES, boat)
+    out = act(s, order(boat, "move", to=[COAST - 1, 1])).state
+    assert out.units[boat.id].tile == g.idx(COAST - 1, 1) and out.units[boat.id].moves_left == 0
+
+
+def test_troops_at_sea_are_fragile_and_escorts_take_the_hit(board):
+    from engine.systems.combat import preview, target_at
+
+    g = board.grid
+    raft = add(board, "infantry", 1, COAST + 1, 3)
+    foe = add(board, "destroyer", 2, COAST + 2, 3)
+    target = target_at(board, RULES, foe, raft.tile)
+    assert target.id == raft.id  # 鱼雷打得着海上的陆军
+    info, _ = preview(board, RULES, foe, raft.tile)
+    assert info["kind"] == "torpedo" and info["damage"] == raft.hp  # 血量极低：一发就沉
+    assert info["retaliation"] == 0
+    assert any(m["label"] == "目标在海上（血量极低）" for m in info["modifiers"])
+    assert any(m["label"] == "在海上" for m in info["modifiers"])
+    # 本方战舰同格护航：敌人先打战舰
+    guard = add(board, "cruiser", 1, COAST + 1, 3)
+    assert target_at(board, RULES, foe, raft.tile).id == guard.id
+    # 岸上的陆军近战打不着海上的部队；下了海的部队不能登上有敌军的格子
+    shore = add(board, "infantry", 2, COAST - 1, 2)
+    assert target_at(board, RULES, shore, g.idx(COAST, 2)) is None
+    beached = add(board, "infantry", 1, COAST, 2)
+    assert act(board, order(beached, "move", to=[COAST - 1, 2])).rejected
+
+
+def test_player_routes_cross_the_sea_but_ai_armies_stay_on_land():
+    from engine.systems.movement import route_for
+
+    s, _ = islands()
+    g = s.grid
+    foot = add(s, "infantry", 1, 8, 3)
+    s.nations[1].ai_enabled = False
+    path = route_for(s, RULES, foot, g.idx(24, 3))
+    assert path and any(g.is_water[t] for t in path)  # 玩家指挥：陆路走不到就下海绕过去
+    s.nations[1].ai_enabled = True
+    assert route_for(s, RULES, foot, g.idx(24, 3)) is None  # AI 指挥的陆军不会顺路下海
+    assert route_for(s, RULES, foot, g.idx(24, 3), embark=True)
 
 
 def test_aircraft_land_on_carriers_and_move_with_them(board):
@@ -182,37 +211,45 @@ def islands():
     return s, enemy
 
 
-def test_ai_ferries_an_army_across_the_sea_and_takes_the_island_city():
-    """A 国（西岛）用 AI 跨海进攻 B 国（东岛）：装船 → 航渡 → 登陆 → 围城 → 攻占。"""
+def test_ai_crosses_the_sea_with_escorts_and_takes_the_island_city():
+    """A 国（西岛）用 AI 跨海进攻 B 国（东岛）：陆军自己找海边下海、巡洋舰同格护航 → 登陆 → 围城 → 攻占。"""
+    from engine.systems.naval import afloat
+
     s, enemy = islands()
     g = s.grid
     first = step(s, [], RULES)
     plan = first.state.nations[1].strategy["fronts"][0]
-    assert plan["target_city"] == enemy.id and plan["mode"] == "装船"
+    assert plan["target_city"] == enemy.id and plan["mode"] == "航渡"
     beach = plan["sea"]["beach"]
     assert g.col_row(beach)[0] >= 22 and plan["stage"] == beach  # 登陆场在东岛
+    assert plan["sea"]["escorts"] == 3
     assert {"kind": "sail", "from": g.idx(9, 7), "to": beach} in plan["battle"]["arrows"]
     assert any(e["type"] == "battle_plan" and e["overseas"] for e in first.events)
 
-    s, seen, modes = first.state, Counter(), []
+    s, modes, sailed, escorted, landed = first.state, [], set(), 0, set()
     for _ in range(45):
-        result = step(s, [], RULES)
-        s = result.state
+        s = step(s, [], RULES).state
         modes.append(s.nations[1].strategy["mode"])
-        for e in result.events:
-            seen[e["type"]] += 1
-            if e["type"] == "disembarked":
-                assert g.col_row(e["tile"])[0] >= 22  # 都下在东岛上
+        for u in s.units.values():
+            if u.nation != 1 or RULES.units[u.type].domain != "land":
+                continue
+            if afloat(s, RULES, u):
+                sailed.add(u.id)
+                escorted += any(
+                    RULES.units[v.type].domain == "sea" for v in s.units_at(u.tile, "surface")
+                )
+            elif u.id in sailed and g.col_row(u.tile)[0] >= 22:
+                landed.add(u.id)  # 上岸都在东岛
         if s.cities[enemy.id].nation == 1:
             break
-    assert seen["embarked"] >= 6 and seen["disembarked"] >= 6
+    assert len(sailed) >= 6 and len(landed) >= 6 and escorted
     # 登陆以后，岛上的部队按陆上战线（钢铁雄心式）打：航渡之后转为进攻
     assert modes.index("航渡") < modes.index("进攻")
     assert s.cities[enemy.id].nation == 1
 
 
-def test_ships_in_another_water_body_do_not_count_as_lift():
-    """西岛中间的内湖里那艘巡洋舰开不到出发港：不算运力，也不派去运兵。"""
+def test_ships_in_another_water_body_do_not_count_as_escorts():
+    """西岛中间的内湖里那艘巡洋舰开不到出发港：不算护航，也不派去护航。"""
     s, _ = islands()
     g = s.grid
     lake = g.idx(3, 10)
@@ -220,35 +257,22 @@ def test_ships_in_another_water_body_do_not_count_as_lift():
     g.is_water[lake] = True
     stuck = add(s, "cruiser", 1, 3, 10)
     plan = step(s, [], RULES).state.nations[1].strategy
-    assert plan["sea"]["lift"] == 6  # 只有海上的 3 艘巡洋舰
+    assert plan["sea"]["escorts"] == 3  # 只有海上的 3 艘巡洋舰
     after = step(s, [], RULES).state
     assert after.units[stuck.id].tile == lake
-    assert "运兵" not in after.units[stuck.id].ai_goal
-
-
-def test_transport_carries_four_but_cannot_attack(board):
-    ship = add(board, "transport", 1, COAST, 3)
-    assert RULES.units["transport"].carry == 4
-    assert lock_reason(board, RULES, ship) == "运输船没有攻击手段"
-    shore = next(t for t in board.grid.neighbors_of(ship.tile) if not board.grid.is_water[t])
-    s, troops = board, []
-    for kinds in (
-        ("infantry", "artillery"),
-        ("infantry", "infantry"),
-    ):  # 岸边一格最多站 2 支，分两批上船
-        batch = [add(s, kind, 1, *s.grid.col_row(shore)) for kind in kinds]
-        for u in batch:
-            s = act(s, order(s.units[u.id], "embark")).state
-        troops += batch
-    assert all(s.units[u.id].carried_by == ship.id for u in troops)
-    extra = add(s, "infantry", 1, *s.grid.col_row(shore))
-    assert act(s, order(extra, "embark")).rejected  # 第 5 支上不去
+    assert "护航" not in after.units[stuck.id].ai_goal
 
 
 def test_ships_sail_much_faster_than_armies():
     land = RULES.units["infantry"].moves
-    for kind in ("destroyer", "cruiser", "battleship", "carrier", "transport"):
+    for kind in ("destroyer", "cruiser", "battleship", "carrier"):
         assert RULES.units[kind].moves >= 2 * land
+    # 下了海的陆军也比陆上快，但跟得上的只有战舰（护航）
+    assert (
+        land
+        < RULES.embark.moves
+        <= min(RULES.units[k].moves for k in ("destroyer", "cruiser", "battleship"))
+    )
 
 
 def test_lone_admiral_at_sea_can_be_sunk(board):
@@ -273,16 +297,17 @@ def test_warship_takes_an_undefended_port_with_its_walls_down(board):
     assert out.state.units[ship.id].tile == c.tile
 
 
-def test_settlers_can_sail_on_their_own(board):
+def test_settlers_and_armies_can_put_to_sea(board):
     from engine.systems.movement import movement_map
 
     settler = add(board, "settler", 1, COAST - 1, 3)
     best, _ = movement_map(board, RULES, settler)
-    assert board.grid.idx(COAST, 3) in best  # 开拓者可以下海
+    assert best.get(board.grid.idx(COAST, 3)) == 0  # 开拓者可以下海，下海用掉整回合
+    assert board.grid.idx(COAST + 1, 3) not in best
     out = act(board, order(settler, "move", to=[COAST + 1, 3]))
     assert not out.rejected
     foot = add(board, "infantry", 1, COAST - 1, 4)
-    assert act(board, order(foot, "move", to=[COAST, 4])).rejected  # 陆军还是要坐船
+    assert not act(board, order(foot, "move", to=[COAST, 4])).rejected  # 陆军也能自己下海
 
 
 def test_ports_spawn_shelter_and_heal_ships_and_change_hands(board):
