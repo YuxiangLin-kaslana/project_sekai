@@ -56,7 +56,7 @@ WAR_AT, ALLY_AT = 20, 75
 VALUE_MIN, VALUE_MAX = -50, 150
 VALUE_PULL, VALUE_STEP = 0.08, 3.0  # 每回合向目标值靠拢差距的 8%，最多 3 点
 PEACE_VALUE = 15  # 签和约后关系值落到这里（再按目标值慢慢恢复）
-ALLY_BREAK = 40  # 同盟的关系值跌破这里：同盟解除（转为和平，有休战期）
+ALLY_BREAK = 45  # 同盟的关系值跌破这里：同盟解除（转为和平，有休战期）
 ALLY_JOIN = 70  # 进攻方的盟友关系值不低于它就一起参战
 BORDER_RIVALRY = 15  # 领土接壤
 CROWDED = 15  # 一方没地方扩张了，对邻国（每个没地方扩张的一方）
@@ -64,7 +64,10 @@ PREY, PREY_RATIO = 10, 2.0  # 接壤且一方兵力是另一方 2 倍以上
 COMMON_ENEMY = 45  # 有共同的交战国
 COMMON_THREAT, THREAT_RATIO = 30, 1.4  # 有共同的威胁：第三国兵力是两国各自的 1.4 倍以上
 ALLIED = 10  # 已经结盟
-NO_CAUSE = 25  # 结了盟却既没有共同的敌人、也没有共同的威胁：同盟失去意义，慢慢瓦解
+NO_CAUSE = 25  # 结了盟却既没有共同的敌人、也没有共同的威胁：同盟失去意义，瓦解
+NO_CAUSE_STEP = (
+    5.0  # 失去意义的同盟关系值每回合最多掉这么多（反霸同盟打完仗十几回合内散伙，不会冻住全局）
+)
 AT_WAR = 30  # 正在交战
 RECENT_WAR, RECENT_DROP = 60, 20  # 刚打完仗：这么多回合内关系目标值 −20（随时间减弱）
 DOMINANT_POWER, DOMINANT_DROP = 1.6, 15  # 兵力超过其余各国平均的 1.6 倍：和它的关系 −15
@@ -352,8 +355,8 @@ def _pair_keys(borders) -> set[str]:
     return {key(a, b) for a, b in borders}
 
 
-def target_value(state, a, b, pw, borders, wars, crowded, dominant, few) -> float:
-    """a、b 两国关系值的目标值（每回合向它靠拢，见模块说明）。"""
+def target_value(state, a, b, pw, borders, wars, crowded, dominant, few) -> tuple[float, bool]:
+    """a、b 两国关系值的目标值（每回合向它靠拢，见模块说明），以及这是不是一个失去意义的同盟。"""
     t = float(START_VALUE)
     if (min(a, b), max(a, b)) in borders:
         t -= BORDER_RIVALRY + CROWDED * ((a in crowded) + (b in crowded))
@@ -380,7 +383,7 @@ def target_value(state, a, b, pw, borders, wars, crowded, dominant, few) -> floa
         t -= DOMINANT_DROP
     if few:
         t -= FEW_DROP
-    return t
+    return t, st == "alliance" and not cause
 
 
 def update_relations(ctx, pw, borders=None) -> None:
@@ -398,8 +401,9 @@ def update_relations(ctx, pw, borders=None) -> None:
     for i, a in enumerate(alive):
         for b in alive[i + 1 :]:
             v = value(s, a, b)
-            t = target_value(s, a, b, pw, borders, wars, crowded, dominant, few)
-            step = max(-VALUE_STEP, min(VALUE_STEP, (t - v) * VALUE_PULL))
+            t, hollow = target_value(s, a, b, pw, borders, wars, crowded, dominant, few)
+            cap = NO_CAUSE_STEP if hollow else VALUE_STEP
+            step = max(-cap, min(VALUE_STEP, (t - v) * VALUE_PULL))
             _set_value(s, a, b, v + step)
 
 
