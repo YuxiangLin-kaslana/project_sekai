@@ -44,6 +44,7 @@ ARROW_REACH = 12  # 进攻箭头只画离目标城这么近（× 地图尺度的
 DEFENSIVE_SCORE = 20  # 防守时只打这么划算以上的（或者能击杀）
 MAIN_WEIGHT = 2.5  # 主攻方向分兵的份额加倍（集中兵力在一处突破，其余地段薄守）
 MAIN_OFFENSE = 1.0  # 主攻方向兵力和对面相当就进攻（别的地段要 OFFENSE 倍）
+CAP_PER_ENEMY = 1.5  # 每段最多放 LINE_STACK × 格数 + 对面敌军数 × 这么多（主攻方向再 ×1.5）；多出来的留作机动兵力
 CONSOLIDATE = 0.2  # 动荡、刚打下来的城占到这么多：巩固占领区（只有主攻方向还能进攻，而且要占优）
 CONSOLIDATE_TURNS = 2  # “刚打下来”：被攻占后 conquest_turns 的这么多倍回合内
 
@@ -367,12 +368,57 @@ def _assign(ctx, nation, p, segs, pool, units):
             continue
         placed[uid] = sid
         have[sid] += 1
-    for _d, uid, sid in pairs:  # 份额都满了：剩下的去最近的段
-        if uid not in placed:
+    # 份额都满了：剩下的去最近、还没站满的段；各段都满了的留作机动兵力（跨海作战先用，
+    # 用不上再回到最近的陆上战线当预备队，见 reinforce）——不让一大片部队全堆在一段小战线上
+    cap = {seg["id"]: _capacity(seg) for seg in segs}
+    extra = []
+    for _d, uid, sid in pairs:
+        if uid in placed:
+            continue
+        if have[sid] < cap[sid]:
             placed[uid] = sid
             have[sid] += 1
+    for u in rest:
+        if u.id not in placed and any(seg["comp"] == int(comps[u.tile]) for seg in segs):
+            extra.append(u.id)
     for uid, sid in sorted(placed.items()):
         by_id[sid]["units"].append(uid)
+    _r()._ai(ctx).setdefault("front_extra", {})[nation.id] = extra
+
+
+def _capacity(seg) -> int:
+    """一段战线最多放几支：每格 LINE_STACK 支 + 对面敌军数 × CAP_PER_ENEMY（主攻方向再 ×1.5）。"""
+    n = LINE_STACK * len(seg["tiles"]) + math.ceil(CAP_PER_ENEMY * seg.get("enemy_units", 0))
+    return math.ceil(n * 1.5) if seg.get("main") else n
+
+
+def reinforce(ctx, nation, fronts, units) -> None:
+    """跨海作战用剩下的机动兵力：编进离得最近的陆上战线当预备队（站后排），不闲着。"""
+    s, g = ctx.state, ctx.state.grid
+    extra = _r()._ai(ctx).get("front_extra", {}).get(nation.id) or []
+    taken = {uid for f in fronts if f.get("kind") != "land" for uid in f.get("units") or ()}
+    land = [f for f in fronts if f.get("kind") == "land"]
+    if not land:
+        return
+    comps = _r().geography(s, ctx.rules)["land_components"]
+    slots = _r()._ai(ctx).setdefault("fslot", {})
+    for uid in extra:
+        u = s.units.get(uid)
+        if u is None or uid in taken:
+            continue
+        options = [f for f in land if int(comps[f["tiles"][0]]) == int(comps[u.tile])]
+        if not options:
+            continue
+        f = min(
+            options,
+            key=lambda f: (
+                min(g.distance(t, u.tile) for t in f["tiles"][:: max(1, len(f["tiles"]) // 12)]),
+                f["id"],
+            ),
+        )
+        f["units"].append(uid)
+        rows = f.get("back") or f["tiles"]
+        slots[uid] = min(rows, key=lambda t: (g.distance(t, u.tile), t))
 
 
 def _stance(ctx, nation, seg):

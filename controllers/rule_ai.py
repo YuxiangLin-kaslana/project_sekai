@@ -1664,11 +1664,14 @@ def plan_nation(ctx, nation, units):
     from controllers import frontline
 
     land = frontline.build(ctx, nation, p, units, cities, components, _ai(ctx).get("guards", {}))
-    on_land = {uid for f in land for uid in [*f["units"], *f["corps"]]}
+    on_land = {
+        uid for f in land for uid in [*f["units"], *f["corps"]]
+    }  # 机动兵力不在里面，先给跨海作战挑
     rest = [u for u in units if u.id not in on_land]
     fronts = land + plan_fronts(
         ctx, nation, p, rest, cities, components, replan, overseas_only=bool(land)
     )
+    frontline.reinforce(ctx, nation, fronts, units)  # 跨海作战用不上的机动兵力回到陆上战线当预备队
     p["fronts"] = fronts
     _navy_plan(ctx, nation, p, units, cities)
     _fleet_plans(ctx, nation, p, units, cities)
