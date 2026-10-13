@@ -549,6 +549,21 @@ def game_tactics(game_id: str, actor: str, col: int | None = None, row: int | No
         return result
 
 
+@app.get("/api/games/{game_id}/history")
+def unit_war_history(game_id: str, unit: str) -> dict:
+    """部队战史：出生、交战、击毁了谁、攻占城市、升级（新的在前）。"""
+    from engine.ids import parse_ref
+    from server.game import war_history
+
+    game = _game(game_id)
+    with game.lock:
+        try:
+            entity = game.state.units[parse_ref(unit, "unit")]
+        except (ValueError, KeyError) as e:
+            raise HTTPException(404, "单位不存在（可能已经阵亡）") from e
+        return war_history(game.state, game.rules, entity)
+
+
 @app.get("/healthz")
 def healthz() -> dict:
     return {"ok": True, "ruleset": RULES.id, "scenarios": list(SCENARIOS), "data": DATA_VERSION}

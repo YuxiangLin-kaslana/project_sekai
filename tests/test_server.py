@@ -276,3 +276,33 @@ def test_fighter_patrol_tiles_and_order():
     assert plane["sortie"] == "patrol" and plane["tile"] == far
     again = client.get(f"/api/games/{gid}/tactics", params={"actor": fighter["id"]}).json()
     assert again["patrol_blocked"] and "patrol_tiles" not in again  # 已经在空中
+
+
+def test_snapshot_shows_the_tide_up_to_the_current_turn():
+    snap = client.post("/api/games", json=SMALL).json()
+    tide = snap["tide"]
+    # 天下大势：当前值、阶段名、合力，曲线只画到当前回合（不剧透以后的走向），还有对各系统的倍率
+    assert -1 <= tide["value"] <= 1 and tide["phase"] in {name for _, name in tide["phases"]}
+    assert tide["curve"][-1][0] == snap["turn"] and tide["curve"][0][0] == 0
+    assert {e[0] for e in tide["effects"]} >= {"宣战", "内战、将领叛变"}
+
+
+def test_unit_war_history_names_the_units_it_killed():
+    from server.app import GAMES
+
+    snap = client.post("/api/games", json=SMALL).json()
+    gid = snap["id"]
+    unit = next(u for u in snap["units"] if u["type"] == "infantry")
+    state = GAMES.get(gid).state
+    u = state.units[int(unit["id"].split(":")[1])]
+    foe = next(n for n in state.nations if n != u.nation)
+    u.kills = 1
+    u.history = (*u.history, (state.turn, "kill", ("armor", foe, "", 999999), 0))
+    data = client.get(f"/api/games/{gid}/history", params={"unit": unit["id"]}).json()
+    assert data["kills"] == 1 and data["entries"][-1]["kind"] == "born"
+    kill = data["entries"][0]
+    # 被击毁的单位已经不在了，战史里照样写明是哪国的什么兵种
+    assert kill["kind"] == "kill" and kill["foe"]["type_name"] == "装甲师"
+    assert kill["foe"]["nation_name"] == state.nations[foe].name and not kill["foe"]["alive"]
+    missing = client.get(f"/api/games/{gid}/history", params={"unit": "unit:999999"})
+    assert missing.status_code == 404

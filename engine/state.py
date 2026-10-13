@@ -168,6 +168,7 @@ class Unit:
     home: int | None = None  # 供养它的城市（造出它的城）：活着的单位照样吃这座城的粮食、耗生产力
     engaged_turn: int = -1  # 走进敌方控制区的回合：这回合不能再移动，但剩下的移动力还能攻击
     kills: int = 0  # 战绩：击败了几个敌方单位（部队、平民、舰载机都算）
+    history: tuple = ()  # 战史：出生、交战、击毁、攻城、升级（engine/systems/war_record.py；整条替换，不原地改）
 
 
 _UNIT_FIELDS = operator.attrgetter(*Unit.__slots__)
@@ -272,6 +273,8 @@ class GameState:
 
     def add_unit(self, unit: Unit) -> Unit:
         self._moved(unit)
+        if not unit.history:
+            unit.history = ((self.turn, "born", unit.home),)  # 战史从出生记起
         self.units[unit.id] = unit
         self._at.setdefault((unit.tile, unit.layer), []).append(unit.id)
         self._at[(unit.tile, unit.layer)].sort()

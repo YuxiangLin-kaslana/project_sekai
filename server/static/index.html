@@ -210,6 +210,44 @@
   .check-row { display: flex; align-items: center; gap: 8px; margin: 8px 0; font-size: 13px; color: var(--text); }
   .turnbar .quick { padding: 5px 9px; font-size: 12px; color: var(--muted); }
   .turnbar .quick[aria-pressed=true] { color: var(--gold); border-color: rgba(216, 184, 120, 0.65); background: rgba(216, 184, 120, 0.1); }
+  /* 天下大势：回合栏上的小指示 + 总览里的分合曲线 */
+  .turnbar .t { white-space: nowrap; }
+  .turnbar .grow { min-width: 0; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+  .tide-pill:not([hidden]) { margin-right: auto; }
+  .tide-pill:not([hidden]) ~ .grow { display: none; } /* 有大势指示时省掉“战术指挥”这行小字（自动模拟看“暂停 / 自动”按钮） */
+  .tide-pill { flex: none; display: flex; flex-direction: column; gap: 4px; width: 66px; padding: 4px 7px 5px; white-space: nowrap; border: 1px solid var(--line); border-radius: 8px; background: none; color: var(--muted); font-size: 11px; line-height: 1.2; cursor: pointer; text-align: left; }
+  .tide-pill:hover { border-color: var(--line-strong); }
+  .tide-pill b { color: var(--tide-c, var(--gold)); font-weight: 600; font-size: 12px; }
+  .tide-gauge { position: relative; display: block; height: 4px; border-radius: 2px; background: linear-gradient(90deg, #c0705e, #7f8b93 50%, #d8b878); }
+  .tide-gauge i { position: absolute; top: -3px; width: 3px; height: 10px; margin-left: -1.5px; border-radius: 2px; background: #f4ecdc; box-shadow: 0 0 0 1px rgba(0,0,0,.45); }
+  .tide-card { margin-top: 10px; padding: 10px 12px 12px; border: 1px solid var(--line); border-radius: 10px; background: var(--side-2); }
+  .tide-card .head { display: flex; justify-content: space-between; align-items: baseline; gap: 8px; }
+  .tide-card .head b { font: 600 15px/1.3 "Songti SC", Georgia, serif; color: var(--tide-c, var(--gold)); }
+  .tide-card .head small { color: var(--muted); font-size: 11px; }
+  .tide-card svg { display: block; width: 100%; height: auto; margin: 8px 0 4px; }
+  .tide-card .note { color: var(--muted); font-size: 11px; line-height: 1.55; margin: 4px 0 8px; }
+  .tide-effects { display: grid; grid-template-columns: 1fr 1fr; gap: 3px 14px; font-size: 11px; color: var(--muted); }
+  .tide-effects span { display: flex; justify-content: space-between; gap: 6px; }
+  .tide-effects b { font-weight: 600; font-variant-numeric: tabular-nums; }
+  .tide-effects .up b { color: #e9cf96; } .tide-effects .down b { color: #8fb3c9; } .tide-effects .flat b { color: var(--muted); }
+  /* 部队战史 */
+  details.war-history { margin: -4px 0 10px; border: 1px solid var(--line); border-radius: 8px; background: rgba(0,0,0,.12); }
+  details.war-history > summary { list-style: none; cursor: pointer; display: flex; align-items: center; gap: 8px; padding: 6px 10px; font-size: 12px; color: #d9c9a3; }
+  details.war-history > summary::-webkit-details-marker { display: none; }
+  details.war-history > summary::before { content: ""; width: 6px; height: 6px; border-right: 1.5px solid currentColor; border-bottom: 1.5px solid currentColor; transform: rotate(-45deg); transition: transform .15s; }
+  details.war-history[open] > summary::before { transform: rotate(45deg); }
+  details.war-history > summary small { margin-left: auto; color: var(--muted); font-size: 11px; }
+  .war-body { padding: 0 10px 8px; max-height: 300px; overflow-y: auto; font-size: 11.5px; }
+  .war-body h4 { margin: 8px 0 4px; font-size: 11px; font-weight: 600; color: var(--muted); letter-spacing: .05em; }
+  .war-kills { display: flex; flex-wrap: wrap; gap: 4px; }
+  .war-kill { display: inline-flex; align-items: center; gap: 4px; padding: 2px 7px; border-radius: 999px; background: rgba(224,122,98,.12); border: 1px solid rgba(224,122,98,.28); color: #ecd9cf; }
+  .war-row { display: grid; grid-template-columns: 16px max-content 1fr; gap: 6px; align-items: baseline; padding: 3px 0; border-bottom: 1px solid var(--line); line-height: 1.45; }
+  .war-row .t { color: var(--muted); white-space: nowrap; font-variant-numeric: tabular-nums; }
+  .war-row.kill .txt { color: #f0b8a4; } .war-row.city .txt, .war-row.rank .txt { color: #e9cf96; }
+  .war-row .n { color: var(--muted); font-variant-numeric: tabular-nums; }
+  .foe-dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; margin-right: 3px; vertical-align: 0; box-shadow: 0 0 0 1px rgba(0,0,0,.4); }
+  .foe-link { cursor: pointer; text-decoration: underline dotted rgba(236,229,214,.4); text-underline-offset: 2px; }
+  .foe-link:hover { color: var(--gold); }
   details.fold { margin-top: 10px; border-top: 1px solid var(--line); }
   details.fold > summary {
     list-style: none; cursor: pointer; display: flex; align-items: center; gap: 8px;
@@ -447,6 +485,7 @@
     <!-- 回合栏：所有分类都看得到 -->
     <div class="turnbar" id="turnbar">
       <div class="t" id="turn">—<small>回合</small></div>
+      <button type="button" class="tide-pill" id="tide-pill" hidden></button>
       <div class="grow" id="turn-note">没有对局</div>
       <button type="button" class="quick" id="auto-sim-quick" aria-pressed="false" title="开启 / 暂停自动模拟" disabled>自动</button>
       <button type="button" class="primary" id="next-turn" disabled>下一回合</button>
@@ -550,6 +589,7 @@
         <!-- 选中的单位 / 城市放最上面：点地图后第一眼就能看到 -->
         <div id="selection"><p class="hint">点选军事单位查看移动与攻击范围；点击单位列表可切换部队。城市也可以发动防御射击。</p></div>
         <div class="game-brief" id="game-brief"></div>
+        <div class="tide-card" id="tide-card" hidden></div>
         <div class="list-head"><h3>世界大事记</h3><small id="chronicle-count"></small></div>
         <div class="chronicle" id="chronicle"><p class="hint">首都陷落、灭国、内战、将领叛变、反霸同盟等大事会记在这里。</p></div>
         <details class="fold" data-fold="sim">
@@ -687,6 +727,7 @@ function setCollapsed(on) {
 }
 for (const b of document.querySelectorAll("#tabs [data-tab]")) b.addEventListener("click", () => openTab(b.dataset.tab));
 for (const b of document.querySelectorAll("#rail [data-open]")) b.addEventListener("click", () => { setCollapsed(false); openTab(b.dataset.open); });
+$("tide-pill").addEventListener("click", () => { setCollapsed(false); openTab("game"); $("tide-card").scrollIntoView({ block: "nearest", behavior: "smooth" }); });
 $("collapse").onclick = () => setCollapsed(true);
 $("expand").onclick = () => setCollapsed(false);
 
@@ -1653,6 +1694,59 @@ function markdownHtml(md) {
   }
   return out.join("");
 }
+// 天下大势（engine/systems/tide.py）：回合栏上的小指示 + 总览里的分合曲线（只画到当前回合，不剧透）
+const TIDE_COLOR = { "天下思定": "#d8b878", "列强角逐": "#a9b6bf", "群雄并起": "#d0806e" };
+function tidePhase(t, v) { return (t.phases.find(([lo]) => v >= lo) ?? t.phases[t.phases.length - 1])[1]; }
+function renderTide() {
+  const t = game.G.snap?.tide, pill = $("tide-pill"), card = $("tide-card");
+  if (!pill || !card) return;
+  if (!t) { pill.hidden = card.hidden = true; return; }
+  pill.hidden = card.hidden = false;
+  const color = TIDE_COLOR[t.phase] ?? "#d8b878", pos = ((t.value + 1) / 2 * 100).toFixed(1);
+  const lean = t.value > 0.05 ? "偏“合”" : t.value < -0.05 ? "偏“分”" : "持平";
+  pill.style.setProperty("--tide-c", color);
+  pill.innerHTML = `<b>${esc(t.phase)}</b><span class="tide-gauge"><i style="left:${pos}%"></i></span>`;
+  pill.title = `天下大势 ${lean}（${t.value.toFixed(2)}；−1 分 … +1 合）。点击查看分合曲线`;
+  // 曲线：横轴回合，纵轴 −1（分）… +1（合）；三档区间着色
+  const W = 300, H = 160, L = 22, R = 8, T = 6, B = 18;
+  const last = t.curve[t.curve.length - 1][0], maxT = Math.max(1, last);
+  const x = (turn) => L + turn / maxT * (W - L - R), y = (v) => T + (1 - v) / 2 * (H - T - B);
+  const hi = t.phases[0][0], lo = t.phases[1][0];
+  const pts = t.curve.map(([turn, v]) => `${x(turn).toFixed(1)},${y(v).toFixed(1)}`).join(" ");
+  const [lt, lv] = t.curve[t.curve.length - 1];
+  const svg = `<svg viewBox="0 0 ${W} ${H}" role="img" aria-label="天下大势曲线">
+    <rect x="${L}" y="${y(1)}" width="${W - L - R}" height="${y(hi) - y(1)}" fill="rgba(216,184,120,.13)"/>
+    <rect x="${L}" y="${y(lo)}" width="${W - L - R}" height="${y(-1) - y(lo)}" fill="rgba(192,112,94,.13)"/>
+    <line x1="${L}" x2="${W - R}" y1="${y(0)}" y2="${y(0)}" stroke="rgba(236,229,214,.22)" stroke-dasharray="3 3"/>
+    <text x="${L + 4}" y="${y(1) + 11}" font-size="9" fill="#c9b07a">天下思定</text>
+    <text x="${L + 4}" y="${y(0) - 4}" font-size="9" fill="#93a0a8">列强角逐</text>
+    <text x="${L + 4}" y="${y(-1) - 4}" font-size="9" fill="#c47a69">群雄并起</text>
+    <text x="4" y="${y(1) + 9}" font-size="10" fill="#d8b878">合</text>
+    <text x="4" y="${y(-1)}" font-size="10" fill="#d0806e">分</text>
+    <polyline points="${pts}" fill="none" stroke="#e7d5af" stroke-width="1.7" stroke-linejoin="round"/>
+    <circle cx="${x(lt).toFixed(1)}" cy="${y(lv).toFixed(1)}" r="3.6" fill="${color}" stroke="#10161d" stroke-width="1.2"/>
+    <text x="${L}" y="${H - 4}" font-size="9" fill="#a59e8f">开局</text>
+    <text x="${W - R}" y="${H - 4}" font-size="9" fill="#a59e8f" text-anchor="end">第 ${lt} 回合</text>
+  </svg>`;
+  // 开局以来各阶段占了多少回合、换过几次
+  const span = {}; let changes = 0;
+  for (let i = 0; i < t.curve.length - 1; i++) {
+    const ph = tidePhase(t, t.curve[i][1]);
+    span[ph] = (span[ph] ?? 0) + t.curve[i + 1][0] - t.curve[i][0];
+    if (tidePhase(t, t.curve[i + 1][1]) !== ph) changes++;
+  }
+  const spans = t.phases.map(([, name]) => span[name] ? `${name} ${span[name]} 回合` : "").filter(Boolean).join(" · ");
+  const effects = t.effects.map(([name, v, side, unit]) => {
+    const text = unit === "%" ? `${Math.round(v * 100)}%` : `×${v.toFixed(2)}`;
+    const base = unit === "%" ? 0.5 : 1, cls = Math.abs(v - base) < 0.03 ? "flat" : v > base ? "up" : "down";
+    const tip = unit === "%" ? `大势全“${side}”时为 100%` : `大势越偏“${side}”越大（持平时 ×1）`;
+    return `<span class="${cls}" title="${esc(tip)}">${esc(name)}<b>${text}</b></span>`;
+  }).join("");
+  card.style.setProperty("--tide-c", color);
+  card.innerHTML = `<div class="head"><b>天下大势 · ${esc(t.phase)}</b><small>${lean} ${t.value >= 0 ? "+" : ""}${t.value.toFixed(2)} · 合力 ${Math.round(t.unity * 100)}%</small></div>${svg}
+    <p class="note">分久必合，合久必分：大势在“分”（−1）与“合”（+1）之间随回合慢慢起伏，每局基调不同。偏“合”时兼并快、小国易降；偏“分”时内战、叛变、反霸同盟、游击队多。${spans ? `<br>开局以来：${esc(spans)}${changes ? `，大势转换 ${changes} 次` : ""}。` : ""}</p>
+    <div class="tide-effects">${effects}</div>`;
+}
 const CHRONICLE_ICON = { capital: "🏛", eliminated: "☠", civil_war: "⚔", defection: "★", coalition: "🤝", independence: "⚑", great_war: "🔥", surrender: "🏳", decay: "🍂", recognition: "🕊", tide: "☯" };
 function renderChronicle() {
   const el = $("chronicle"), list = game.G.snap?.chronicle ?? [];
@@ -1890,6 +1984,7 @@ function renderGame() {
   $("badge-log").textContent = logLines.length > 1 ? logLines.length - 1 : "";
   renderSelection();
   renderBrief();
+  renderTide();
   renderChronicle();
   renderStressReport();
   // 看不见的分类不画（大局里城市 / 军队列表上千条）；切过去时再画
@@ -1995,6 +2090,56 @@ function militaryAtActor(u) {
   return (u.layer==='air'?game.tileInfo(u.tile).air:game.tileInfo(u.tile).surface)
     .filter(v=>v.nation===u.nation && game.unitDef(v).category==='military' && game.unitDef(v).domain===game.unitDef(u).domain);
 }
+// 部队战史：展开时才向服务器取（不进每回合的快照）；同一局面下重画面板不重复取
+let warOpen = false, warCache = null; // warCache = {unit, hash, data}
+function warHistoryBox(u) {
+  const box = document.createElement('details'); box.className = 'war-history'; box.open = warOpen;
+  box.innerHTML = `<summary>战史<small>击败 ${u.kills ?? 0}</small></summary><div class="war-body"><p class="hint">读取中…</p></div>`;
+  const body = box.querySelector('.war-body');
+  const fill = () => {
+    const c = warCache;
+    if (c && c.unit === u.id && c.hash === game.G.snap?.state_hash) renderWarHistory(body, c.data, box);
+    else loadWarHistory(u.id, body, box);
+  };
+  box.addEventListener('toggle', () => { warOpen = box.open; if (box.open) fill(); });
+  if (box.open) fill();
+  return box;
+}
+async function loadWarHistory(uid, body, box) {
+  const id = gameId, hash = game.G.snap?.state_hash;
+  try {
+    const data = await api(`/api/games/${encodeURIComponent(id)}/history?unit=${encodeURIComponent(uid)}`);
+    if (gameId !== id) return;
+    warCache = { unit: uid, hash, data };
+    if (body.isConnected) renderWarHistory(body, data, box);
+  } catch (e) { if (body.isConnected) body.innerHTML = `<p class="hint">${esc(e.message)}</p>`; }
+}
+function foeHtml(f) {
+  const label = `${f.nation_name ? esc(f.nation_name) + ' ' : ''}${esc(f.type_name)}${f.name ? `「${esc(f.name)}」` : ''}`;
+  const dot = `<i class="foe-dot" style="background:${esc(f.color)}"></i>`;
+  return f.alive && f.tile != null ? `<span class="foe-link" data-tile="${f.tile}" title="还在场上：点击跳到它的位置">${dot}${label}</span>` : `${dot}${label}`;
+}
+function renderWarHistory(body, d, box) {
+  box.querySelector('summary small').textContent = `击败 ${d.kills} · 交战 ${d.battles} 次`;
+  const kills = d.entries.filter((e) => e.kind === 'kill');
+  const rows = d.entries.map((e) => {
+    let icon = '•', txt = '';
+    if (e.kind === 'kill') { icon = '☠'; txt = `击毁 ${foeHtml(e.foe)}${e.riders ? `（连同 ${e.riders} 架舰载机）` : ''}`; }
+    else if (e.kind === 'atk') { icon = '⚔'; txt = `进攻 ${foeHtml(e.foe)} <span class="n">伤敌 ${e.dealt} · 自损 ${e.taken}</span>`; }
+    else if (e.kind === 'def') { icon = '🛡'; txt = `遭 ${foeHtml(e.foe)}${e.foe.kind === 'city' ? '防御射击' : e.dealt ? '攻击' : '炮击 / 轰炸'} <span class="n">${e.dealt ? `反击 ${e.dealt} · ` : ''}损失 ${e.taken}</span>`; }
+    else if (e.kind === 'city') { icon = '🏳'; txt = `攻占 ${esc(e.city)}`; }
+    else if (e.kind === 'rank') { icon = '★'; txt = `晋升 Lv.${e.level}`; }
+    else if (e.kind === 'born') { icon = '✚'; txt = e.city ? `在 ${esc(e.city)} 组建` : e.turn <= 1 ? '开局部队' : '组建'; }
+    return `<div class="war-row ${esc(e.kind)}"><span>${icon}</span><span class="t">第${e.turn}回合</span><span class="txt">${txt}</span></div>`;
+  }).join('');
+  const killHtml = kills.length ? `<h4>击毁的单位（${kills.length}）</h4><div class="war-kills">${kills.map((e) => `<span class="war-kill" title="第 ${e.turn} 回合击毁">${foeHtml(e.foe)}</span>`).join('')}</div>` : '';
+  const sum = d.battles ? `<p class="hint">记录里共造成 ${d.dealt} 点伤害、承受 ${d.taken} 点${d.truncated ? '；更早的交战记录已省略（击毁记录全部保留）' : ''}。</p>` : '';
+  body.innerHTML = `${killHtml}<h4>经历</h4>${rows || '<p class="hint">还没有经历过战斗。</p>'}${sum}`;
+  for (const a of body.querySelectorAll('.foe-link')) a.onclick = (ev) => {
+    ev.preventDefault(); const tile = +a.dataset.tile;
+    centerOn(tile % world.width, Math.floor(tile / world.width), 22); game.select(tile); renderSelection(); redraw();
+  };
+}
 function tacticalCard(actor) {
   const box=document.createElement('div');box.className='card tactical-card';
   const unit=!!actor.type, def=unit?game.unitDef(actor):null;
@@ -2006,6 +2151,7 @@ function tacticalCard(actor) {
   const ranged=game.G.tactics?.ranged_strength??def?.ranged_strength;
   stats.innerHTML=unit?`<span>移动 <b>${move}</b></span><span>战力 <b>${combat}${ranged?'/'+ranged:''}</b></span><span>射程 <b>${game.G.tactics?.attack_range??(def.ranged_strength||def.anti_air||def.domain==='air'?def.range:1)}</b></span><span title="战绩：击败了几个敌方单位">击败 <b>${actor.kills??0}</b></span>`:`<span>攻击范围 <b>2 格</b></span><span>城防 <b>${actor.defense}</b></span>`;
   box.appendChild(stats);
+  if(unit&&(def.category==='military'||actor.kills))box.appendChild(warHistoryBox(actor));
   const buttons=document.createElement('div');buttons.className='command-grid';
   if(unit)buttons.appendChild(commandButton('移动','move',()=>setCommandMode('move'),commandBusy||move<=0));
   const air=unit&&def.domain==='air';

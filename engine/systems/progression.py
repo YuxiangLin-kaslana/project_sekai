@@ -45,6 +45,10 @@ def gain(ctx: StepContext, entity, amount: int, kind: str) -> None:
         ctx.log.add(
             "level_up", entity=ref(kind, entity.id), kind=kind, tile=entity.tile, level=after
         )
+        if kind == "unit":
+            from engine.systems import war_record
+
+            war_record.note(entity, (ctx.state.turn, "rank", after))  # 战史：升级
 
 
 def resolve(ctx: StepContext) -> None:

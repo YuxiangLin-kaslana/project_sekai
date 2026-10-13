@@ -382,6 +382,124 @@ def pack_roads(state: GameState) -> dict:
     return out
 
 
+def tide_view(s) -> dict:
+    """天下大势（engine/systems/tide.py）：当前值、阶段、合力，和开局到本回合的曲线（只画到当前回合，不剧透）。"""
+    from engine.systems import tide
+    from engine.systems.diplomacy import TIDE_WAR
+    from engine.systems.stability import TIDE_OVEREXTENSION
+    from engine.systems.upheaval import (
+        TIDE_COALITION,
+        TIDE_PARTISAN,
+        TIDE_SURRENDER,
+        TIDE_UPHEAVAL,
+    )
+
+    value = tide.tide(s)
+    unity = tide.unity(s)
+    step = max(1, -(-s.turn // 120))  # 最多约 120 个点
+    turns = list(range(0, s.turn + 1, step))
+    if turns[-1] != s.turn:
+        turns.append(s.turn)
+    return {
+        "value": round(value, 3),
+        "phase": tide.phase(value),
+        "unity": round(unity, 3),
+        "phases": [[lo, name] for lo, name in tide.PHASES],  # （下限, 名字），从“合”到“分”
+        "curve": [[t, round(tide.at(s.seed, t), 3)] for t in turns],
+        # 现在的大势对各系统的倍率（和引擎里同一套乘子）：偏“合”兼并快，偏“分”动乱多
+        "effects": [
+            # 名字, 数值, 偏哪边时变大, 单位（"x" 倍率，"%" 占满额的比例）
+            ["宣战", round(tide.boost(s, TIDE_WAR), 2), "合", "x"],
+            ["小国投降", round(tide.boost(s, TIDE_SURRENDER), 2), "合", "x"],
+            ["终局推力", round(unity, 2), "合", "%"],
+            ["内战、将领叛变", round(tide.boost(s, -TIDE_UPHEAVAL), 2), "分", "x"],
+            ["反霸同盟", round(tide.boost(s, -TIDE_COALITION), 2), "分", "x"],
+            ["游击队", round(tide.boost(s, -TIDE_PARTISAN), 2), "分", "x"],
+            ["过度扩张", round(tide.boost(s, -TIDE_OVEREXTENSION), 2), "分", "x"],
+            ["新政权募兵", round(1 - unity, 2), "分", "%"],
+        ],
+    }
+
+
+def _foe_view(s, rules, foe) -> dict:
+    """战史里的对手：兵种名、国家、名字，现在还在不在（在的话在哪一格）。"""
+    kind, nation, name, oid = foe
+    n = s.nations.get(nation)
+    base = {
+        "nation": ref("nation", nation),
+        "nation_name": n.name if n is not None else "",
+        "color": n.color if n is not None else "#888888",
+        "name": name,
+    }
+    if kind == "city":
+        c = s.cities.get(oid)
+        return {
+            **base,
+            "kind": "city",
+            "type_name": "城市",
+            "id": ref("city", oid),
+            "alive": c is not None,
+            "tile": c.tile if c is not None else None,
+        }
+    ut = rules.units.get(kind)
+    v = s.units.get(oid)
+    alive = v is not None and v.type == kind
+    return {
+        **base,
+        "kind": "unit",
+        "type": kind,
+        "type_name": ut.name if ut is not None else kind,
+        "id": ref("unit", oid),
+        "alive": alive,
+        "tile": v.tile if alive else None,
+    }
+
+
+def war_history(s, rules, unit) -> dict:
+    """部队战史（engine/systems/war_record.py）：新的在前；对手解析成名字、国家，击毁记录一直保留。"""
+    from engine.systems.war_record import CAP
+
+    entries = []
+    dealt = taken = battles = 0
+    for e in unit.history:
+        turn, kind = e[0], e[1]
+        if kind == "born":
+            c = s.cities.get(e[2]) if e[2] is not None else None
+            entries.append({"turn": turn, "kind": kind, "city": c.name if c is not None else None})
+        elif kind in ("atk", "def"):
+            battles += 1
+            dealt += e[3]
+            taken += e[4]
+            entries.append(
+                {
+                    "turn": turn,
+                    "kind": kind,
+                    "foe": _foe_view(s, rules, e[2]),
+                    "dealt": e[3],
+                    "taken": e[4],
+                }
+            )
+        elif kind == "kill":
+            entries.append(
+                {"turn": turn, "kind": kind, "foe": _foe_view(s, rules, e[2]), "riders": e[3]}
+            )
+        elif kind == "city":
+            entries.append({"turn": turn, "kind": kind, "city": e[3], "id": ref("city", e[2])})
+        elif kind == "rank":
+            entries.append({"turn": turn, "kind": kind, "level": e[2]})
+    born = next((e[0] for e in unit.history if e[1] == "born"), None)
+    return {
+        "unit": ref("unit", unit.id),
+        "kills": unit.kills,
+        "born": born,
+        "battles": battles,
+        "dealt": dealt,
+        "taken": taken,
+        "truncated": len(unit.history) >= CAP,  # 太早的交战记录已经丢了（出生、击毁一直留着）
+        "entries": list(reversed(entries)),
+    }
+
+
 def snapshot(game: Game, rules: Ruleset) -> dict:
     s = game.state
     s._economy_cache_enabled = True
@@ -628,6 +746,7 @@ def _snapshot(game: Game, rules: Ruleset) -> dict:
         "agents_available": _agents_available(),
         # 世界大事记（最近 80 条，新的在前）：首都陷落、灭国、内战、将领叛变、反霸同盟……
         "chronicle": list(reversed(s.chronicle[-80:])),
+        "tide": tide_view(s),  # 天下大势（分久必合，合久必分）
         "state_hash": game.state_hash(),
         "nations": nations,
         "cities": cities,

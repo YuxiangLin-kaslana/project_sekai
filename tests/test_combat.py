@@ -1031,6 +1031,32 @@ def test_units_keep_a_record_of_how_many_enemies_they_defeated(board):
     assert foe.id not in s.units and s.units[tank.id].kills == 1
 
 
+def test_war_history_records_battles_and_who_was_killed(board):
+    from engine.systems import war_record
+
+    gun = add(board, "artillery", 1, 3, 3)
+    tank = add(board, "armor", 1, 4, 4)
+    target = add(board, "infantry", 2, 5, 4)
+    weak = add(board, "infantry", 2, 5, 3, hp=5)
+    s = action(board, order(gun, "attack", to=[5, 3])).state
+    kills = [e for e in s.units[gun.id].history if e[1] == "kill"]
+    # 击毁记录写明打死的是哪国的什么兵种、哪支部队
+    assert kills and kills[-1][2] == ("infantry", 2, "", weak.id)
+    assert s.units[gun.id].history[0][1] == "born"  # 战史从出生记起
+    s = action(s, order(s.units[tank.id], "attack", to=[5, 4])).state
+    atk = next(e for e in reversed(s.units[tank.id].history) if e[1] == "atk")
+    assert atk[2][0] == "infantry" and atk[2][3] == target.id and atk[3] > 0
+    if target.id in s.units:  # 防守方也记一条：谁打的它、它反击了多少、挨了多少
+        d = next(e for e in reversed(s.units[target.id].history) if e[1] == "def")
+        assert d[2][3] == tank.id and d[4] == atk[3]
+    # 条数有上限：超出时先丢交战记录，出生和击毁记录一直留着
+    u = s.units[gun.id]
+    for i in range(war_record.CAP + 10):
+        war_record.note(u, (100 + i, "atk", ("infantry", 2, "", 1), 1, 0))
+    assert len(u.history) == war_record.CAP
+    assert u.history[0][1] == "born" and any(e[1] == "kill" for e in u.history)
+
+
 def test_planes_park_only_on_airfields_not_in_cities(board):
     from engine.systems.economy import _spawn_tile
     from engine.systems.movement import is_air_base

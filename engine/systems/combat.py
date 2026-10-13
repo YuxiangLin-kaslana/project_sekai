@@ -33,7 +33,7 @@ import numpy as np
 from engine.actions import CityAttack
 from engine.ids import parse_ref, ref
 from engine.state import MOVE_STEPS, City, Unit
-from engine.systems import encirclement
+from engine.systems import encirclement, war_record
 from engine.systems.cities import city_stat, nation_supply
 from engine.systems.context import StepContext
 from engine.systems.naval import afloat
@@ -1021,6 +1021,7 @@ def _capture(ctx, city, unit):
     note_capture(s, previous, unit.nation)  # 求和时看僵持
     s._closed_cache.clear()
     was_capital = city.capital
+    war_record.note(unit, (s.turn, "city", city.id, city.name))  # 战史：攻占城市
     city.nation, city.hp, city.capital = unit.nation, city_max_hp(rules, city) // 2, False
     city.drafted = 0  # 原国家征召走的人口不再占新主人的住房
     city.captured_turn, city.captured_from = s.turn, previous
@@ -1087,9 +1088,11 @@ def _lost_aboard(ctx, ship) -> None:
 
 
 def credit(unit, victim, state) -> None:
-    """战绩：unit 击败了 victim（连同 victim 搭载的舰载机一起算）。城市、设施的攻击不记。"""
+    """战绩：unit 击败了 victim（连同 victim 搭载的舰载机一起算），记进战史。城市、设施的攻击不记。"""
     if isinstance(unit, Unit) and unit.id in state.units and victim is not unit:
-        unit.kills += 1 + len(state.aboard(victim))
+        riders = len(state.aboard(victim))
+        unit.kills += 1 + riders
+        war_record.note(unit, (state.turn, "kill", war_record.foe(victim), riders))
 
 
 def _destroy(ctx, unit, tile, reason=None, by=None):
@@ -1449,6 +1452,8 @@ def _execute(ctx: StepContext, order) -> None:
             damage_city(ctx, other, hit["damage"], by=actor)
         else:
             other.hp = max(0, other.hp - hit["damage"])
+            # 战史：被炮击 / 轰炸波及（没还手）
+            war_record.note(other, (s.turn, "def", war_record.foe(actor), 0, hit["damage"]))
         other.damaged_turn = s.turn
         splashed.append(other)
     # 炮击压制：打中的部队（炮击波及的整格都算）失去驻守加成
@@ -1478,6 +1483,13 @@ def _execute(ctx: StepContext, order) -> None:
         suppressed=suppressed,
         attacker_hp=actor.hp,
         defender_hp=target.hp,
+    )
+    # 战史：进攻方、防守方各记一条（对手、造成 / 承受的伤害）
+    war_record.note(
+        actor, (s.turn, "atk", war_record.foe(target), info["damage"], info["retaliation"])
+    )
+    war_record.note(
+        target, (s.turn, "def", war_record.foe(actor), info["retaliation"], info["damage"])
     )
     gain(ctx, actor, 4 + (8 if target.hp <= 0 else 0), key)
     if info.get("fort_damage"):
