@@ -201,3 +201,16 @@ def test_eliminated_nations_do_not_rejoin_wars(board):
     assert w["sides"][0].count(3) == 1 and w["left"]["3"][1] == "灭亡"
     wars.close_nation(board, 2)
     assert w["end"] == board.turn and w["how"] == "卢米纳王国灭亡"
+
+
+def test_a_dead_ally_is_not_called_into_a_new_war(board):
+    from engine.systems.stability import eliminate
+
+    ally(board, 1, 3)
+    board.nations[3].had_city = True  # 建过城、现在一座都没有：灭亡
+    eliminate(ctx_of(board))
+    assert board.nations[3].eliminated and not diplomacy.allied(board, 1, 3)
+    diplomacy.declare_war(ctx_of(board), 2, 1)  # 凤翔被宣战：死去的盟友不会跟着参战
+    w = wars.open_war(board, 1, 2)
+    assert 3 not in w["sides"][0] and not diplomacy.at_war(board, 2, 3)
+    assert diplomacy.declare_war(ctx_of(board), 2, 3) == "这个国家已经灭亡"

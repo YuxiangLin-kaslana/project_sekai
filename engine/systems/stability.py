@@ -178,9 +178,14 @@ def eliminate(ctx: StepContext) -> None:
         s.invalidate_paths()
         s._network_cache = None
         ctx.log.add("nation_eliminated", nation=ref("nation", nid), name=n.name)
-        from engine.systems import wars
+        from engine.systems import diplomacy, wars
 
         wars.close_nation(s, nid)  # 它卷进的战争都结束
+        # 同盟关系解除（直接改关系表，不走 diplomacy._set：灭亡不算议和、结盟），免得盟友宣战时把它拉进去
+        for other in sorted(s.nations):
+            if diplomacy.allied(s, nid, other):
+                rel = diplomacy.relation(s, nid, other)
+                s.relations[diplomacy.key(nid, other)] = {**rel, "status": "peace", "since": s.turn}
 
 
 def resolve(ctx: StepContext) -> None:

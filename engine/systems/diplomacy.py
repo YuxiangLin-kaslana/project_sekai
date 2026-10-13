@@ -130,7 +130,12 @@ def enemies(state, nation: int) -> list[int]:
 
 
 def allies(state, nation: int) -> list[int]:
-    return [n for n in sorted(state.nations) if allied(state, nation, n)]
+    """nation 的盟友（已经灭亡的不算：灭亡时同盟关系已解除，这里再挡一道）。"""
+    return [
+        n
+        for n in sorted(state.nations)
+        if allied(state, nation, n) and not state.nations[n].eliminated
+    ]
 
 
 def closed(state, nation: int) -> np.ndarray:
@@ -166,6 +171,8 @@ def declare_war(ctx, a: int, b: int, *, why: str = "", call_allies: bool = True)
     s = ctx.state
     if a == b or b not in s.nations:
         return "没有这个国家"
+    if s.nations[a].eliminated or s.nations[b].eliminated:
+        return "这个国家已经灭亡"
     st = status(s, a, b)
     if st == "war":
         return "已经在交战"
