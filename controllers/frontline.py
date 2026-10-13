@@ -39,7 +39,10 @@ OFFENSE = 1.25  # 本段兵力是对面的这么多倍以上：进攻
 GAP = 2  # 战线格之间隔不到这么远算同一段
 THREAT_WEIGHT = 1.5  # 分兵时对面每支敌军抵多少格战线长度
 CONVERGE = 5  # 进攻时离目标敌城这么近（× 地图尺度的平方根）的部队直接围城
-APPROACH_BUDGET = 64  # 每国每回合最多算多少次“先走再打”（每次要算一张移动范围、几次战斗预览）
+APPROACH_BUDGET = 64  # 每国每回合至少能算这么多次“先走再打”（每次要算一张移动范围、几次战斗预览）
+APPROACH_SHARE = (
+    0.4  # 部队多时按本国陆军数放大：每支陆军再加这么多次（大会战时上千支部队接敌，64 次不够）
+)
 APPROACH_TARGETS = 4  # 每次最多细算几个目标
 ARROW_REACH = 12  # 进攻箭头只画离目标城这么近（× 地图尺度的平方根）的战线段
 DEFENSIVE_SCORE = 20  # 防守时只打这么划算以上的（或者能击杀）
@@ -770,6 +773,23 @@ def _expose_weight(rules, unit) -> int:
     return EXPOSE if _r().is_siege(rules, unit) else 0
 
 
+def approach_budget(ctx, nid) -> int:
+    """本国这回合“先走再打”的名额：APPROACH_BUDGET，加上每支陆军 APPROACH_SHARE 次（按回合缓存）。"""
+    R = _r()
+    ai = R._ai(ctx)
+    if "approach_budget" not in ai:
+        s, rules = ctx.state, ctx.rules
+        land = sum(
+            1
+            for u in s.units.values()
+            if u.nation == nid
+            and rules.units[u.type].category == "military"
+            and rules.units[u.type].domain == "land"
+        )
+        ai["approach_budget"] = APPROACH_BUDGET + int(APPROACH_SHARE * land)
+    return ai["approach_budget"]
+
+
 def approach_attack(ctx, unit, *, offensive: bool, reposition: bool = False) -> bool:
     """文明 6 式先走再打：在本回合走得到、还剩攻击要的移动力的格子里，挑一个能打到划算目标的位置，
     走过去再攻击（攻击用掉剩下的移动力）。进攻时只要不亏就打，防守时只打能击杀的或很划算的。
@@ -777,7 +797,7 @@ def approach_attack(ctx, unit, *, offensive: bool, reposition: bool = False) -> 
     R = _r()
     s, rules, g = ctx.state, ctx.rules, ctx.state.grid
     ai = R._ai(ctx)
-    if ai.get("approach_used", 0) >= APPROACH_BUDGET:
+    if ai.get("approach_used", 0) >= approach_budget(ctx, unit.nation):
         return False
     if unit.engaged_turn == s.turn or combat.lock_reason(s, rules, unit):
         return False
