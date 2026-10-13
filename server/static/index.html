@@ -972,7 +972,7 @@ const EVENT_KIND = {
   city_unrest: 'alert', city_independence: 'alert', famine: 'alert', production_blocked: 'alert',
   city_founded: 'build', building_completed: 'build', facility_built: 'build', unit_created: 'build',
   level_up: 'build', gold_assist: 'build', facility_repaired: 'build',
-  facility_bombed: 'war', unit_captured: 'war', nation_eliminated: 'alert', base_fire: 'war', district_captured: 'war',
+  facility_bombed: 'war', fort_damaged: 'war', fort_destroyed: 'war', unit_captured: 'war', nation_eliminated: 'alert', base_fire: 'war', district_captured: 'war',
   partisans: 'war', civil_war: 'alert', surrendered: 'alert', city_revolt: 'alert', directive_set: 'alert', general_defected: 'alert', coalition: 'alert',
   tech_researched: 'build', road_built: 'build',
   war_declared: 'alert', peace_signed: 'alert', alliance_formed: 'alert', alliance_broken: 'alert', diplomatic_offer: 'alert',
@@ -1018,6 +1018,8 @@ const EVENT_TEXT = {
   unit_created: (e) => `${unitName(e.unit_type)}${e.name ? `「${e.name}」` : ""} 编成`,
   building_completed: (e) => `${cityName(e.city)} 建成 ${game.G.rules.buildings[e.building].name}`,
   facility_built: (e) => `${game.G.rules.buildings[e.facility].name} 竣工`,
+  fort_damaged: (e) => `${game.nationOf(e.nation)?.name ?? ''}的堡垒挨打 −${e.damage}（剩 ${e.hp}）`,
+  fort_destroyed: (e) => `${game.nationOf(e.nation)?.name ?? ''}的堡垒被摧毁`,
   city_grew: (e) => `${cityName(e.city)} 人口增长到 ${e.population}`,
   famine: (e) => `${cityName(e.city)} 饥荒，人口降到 ${e.population}`,
   borders_grew: (e) => `${cityName(e.city)} 辖区扩大 ${e.tiles.length} 格`,
@@ -1361,12 +1363,20 @@ function renderCityManagement(){
   for(const control of el.querySelectorAll('button,select'))control.disabled=commandBusy||worldBusy;
 }
 
+// 堡垒：血量、所属国（快照的 forts）
+function fortRows(tile) {
+  const f = game.G.forts?.get(tile);
+  if (!f) return '';
+  const pct = Math.round(100 * f.hp / Math.max(1, f.max));
+  return `<span>堡垒血量</span><b class="${pct < 34 ? 'danger' : ''}">${f.hp} / ${f.max}</b><span>守军加成</span><b>驻守的${esc(game.nationOf(f.nation)?.name ?? '')}部队防守 +60%</b>`;
+}
+
 function facilityCard(info) {
   const def = game.G.rules.buildings[info.facility];
   const box = document.createElement("div"); box.className = "card settlement-card";
   box.innerHTML = `<div class="settlement-hero"><div class="settlement-title"><small>城外设施</small><b>${esc(def.name)}</b><span>${esc(info.owner?.name ?? "无主地")}</span></div></div>` +
     `<div class="settlement-body">${xpHtml(game.facilityProgress(info.tile),"facility")}<h3 style="margin-top:0">设施基础产出</h3>${settlementYields(def.yields)}` +
-    `<div class="kv"><span>所需人口</span><b>${def.workers ?? 0}</b><span>维护费</span><b>${def.upkeep ?? 0} / 回合</b>${game.G.damaged?.has(info.tile) ? '<span>状态</span><b class="danger">被炸坏：修好前不产出、不能起降</b>' : ''}</div></div>`;
+    `<div class="kv"><span>所需人口</span><b>${def.workers ?? 0}</b><span>维护费</span><b>${def.upkeep ?? 0} / 回合</b>${game.G.damaged?.has(info.tile) ? '<span>状态</span><b class="danger">被炸坏：修好前不产出、不能起降</b>' : ''}${fortRows(info.tile)}</div></div>`;
   const nation = info.owner ? game.nationOf(info.owner.id) : null;
   const terrain = terrainInfo(info.col, info.row);
   settlementPreview(box, (ctx, x, y, z) => game.drawFacilityTile(ctx, def.icon, x, y, z, nation?.rgb ?? [120,120,120], terrain, info.tile));
@@ -1378,7 +1388,7 @@ function unitRow(u) {
   const nation = game.nationOf(u.nation);
   const row = document.createElement("div");
   row.className = "unit-row";
-  if (def.category === 'military' || def.tags?.includes('found_city') || u.rank) {
+  if (def.category === 'military' || def.tags?.includes('found_city') || def.tags?.includes('build_facility') || u.rank) {
     row.classList.add('selectable');row.classList.toggle('active',game.G.actor===u.id);
     row.tabIndex=0;row.setAttribute('role','button');row.setAttribute('aria-pressed',String(game.G.actor===u.id));row.dataset.unit=u.id;
     row.onclick=()=>chooseActor(u.id);row.onkeydown=e=>{if(e.key==='Enter'||e.key===' '){e.preventDefault();chooseActor(u.id);}};
@@ -2011,6 +2021,12 @@ function tacticalCard(actor) {
     buttons.appendChild(commandButton(actor.managed?'接管单位':'交回单位 AI','group',()=>executeCommand(actorOrder('unit_management',{enabled:!actor.managed})),commandBusy));
     if(air&&actor.sortie==='patrol')buttons.appendChild(commandButton('返航','fortify',()=>executeCommand(actorOrder('fortify')),commandBusy,'本回合飞回机场降落（降落占一个回合）'));
     else if(!actor.sortie)buttons.appendChild(commandButton('驻守','fortify',()=>executeCommand(actorOrder('fortify')),commandBusy));
+    const fort=game.G.tactics?.fort;
+    if(fort&&def.tags?.includes('build_facility')){
+      // 工兵修堡垒：两回合修好，驻守的本方部队防守 +60%，没人守也有控制区，敌军进不去
+      const why=game.G.tactics.fort_blocked;
+      buttons.appendChild(commandButton('修堡垒','fortify',()=>executeCommand(actorOrder('build_facility',{facility:fort.facility})),commandBusy||!!why,why??`在脚下这一格修堡垒（${fort.turns} 回合，血量 ${fort.hp}）：驻守的本方部队防守 +60%；没人守也有控制区，敌军进不去，要先拆掉`));
+    }
     if(def.domain==='land'&&game.G.tactics&&!game.G.tactics.demolish_blocked)buttons.appendChild(commandButton('拆路','pillage',()=>executeCommand(actorOrder('demolish_road')),commandBusy,'拆掉连到脚下这一格的本国道路，拖慢来犯之敌（用掉本回合行动）'));
     if(def.category==='military'&&def.domain==='land'){const p=game.G.tactics?.pillage;buttons.appendChild(commandButton('破坏','pillage',()=>executeCommand(actorOrder('pillage')),commandBusy||!p,p?`破坏${p.name}，掠走 ${p.loot} 金，所属城市稳定度下降`:(game.G.tactics?.pillage_blocked??'')));}
     if(actor.formation!=null)buttons.appendChild(commandButton('解散编队','group',()=>executeCommand(actorOrder('ungroup')),commandBusy));
@@ -2073,7 +2089,10 @@ function tacticalCard(actor) {
       const info=pending.info;
       const target=game.G.units.get(info.target)??game.G.cities.get(info.target);
       const own=(info.retaliation??0)+(info.flak??0);
-      preview.innerHTML=`<small>${KIND_TEXT[info.kind]??'远程攻击'}</small><b>${esc(target?.type?unitName(target.type):target?.name??'目标')}</b><div class="damage-preview"><span>敌方损失 <b>−${info.damage}</b></span><span>己方损失 <b>${own?'−'+own:'0'}</b></span></div>${modifierHtml(info)}<span>${info.flak?(info.damage?`进入敌方防空火力范围：先挨高射火力 −${info.flak}，带伤投弹`:`会被敌方高射炮击落（−${info.flak}）`):info.suppress&&target?.type?'炮击会压制守军：打中的部队失去驻守加成，近战随后冲锋更划算':target&&info.damage>=target.hp?(target.type?'预计消灭敌军':'城防将被摧毁'):'按当前生命、等级与地形结算'}</span>`;
+      // 堡垒：打堡垒里的部队顺带拆堡垒（fort_damage）；打没人守的堡垒（fort_strike）只拆堡垒
+      const fortHit=info.fort_damage?`<span>堡垒 <b>−${info.fort_damage}</b></span>`:'';
+      const enemyLoss=info.fort_strike?'':`<span>敌方损失 <b>−${info.damage}</b></span>`;
+      preview.innerHTML=`<small>${KIND_TEXT[info.kind]??'远程攻击'}</small><b>${esc(info.fort_strike?'堡垒（没人驻守）':target?.type?unitName(target.type):target?.name??'目标')}</b><div class="damage-preview">${enemyLoss}${fortHit}<span>己方损失 <b>${own?'−'+own:'0'}</b></span></div>${modifierHtml(info)}<span>${info.flak?(info.damage?`进入敌方防空火力范围：先挨高射火力 −${info.flak}，带伤投弹`:`会被敌方高射炮击落（−${info.flak}）`):info.suppress&&target?.type?'炮击会压制守军：打中的部队失去驻守加成，近战随后冲锋更划算':target&&info.damage>=target.hp?(target.type?'预计消灭敌军':'城防将被摧毁'):'按当前生命、等级与地形结算'}</span>`;
       if(info.from!=null)preview.insertAdjacentHTML('beforeend',`<span>先移动到 (${info.from%world.width}, ${Math.floor(info.from/world.width)})，再用剩下的移动力攻击</span>`);
       const b=document.createElement('button');b.className='primary attack-confirm';b.textContent=info.from!=null?'移动并攻击':'执行攻击';b.disabled=commandBusy;
       const attack=actorOrder(unit?'attack':'city_attack',{to:[col,row]});
@@ -2108,7 +2127,8 @@ async function tacticalClick(tile) {
   game.select(tile);
   if(mode==='diplomacy')updateLegend(); // 外交地图：点到的国家就是新的视角
   const info=game.tileInfo(tile);
-  const u=[...info.surface,...info.air].find(u=>game.unitDef(u).category==='military'||game.unitDef(u).tags?.includes('found_city')||u.rank);
+  // 能选中指挥的：军事单位、开拓者、工兵（修堡垒）、将领
+  const u=[...info.surface,...info.air].find(u=>game.unitDef(u).category==='military'||game.unitDef(u).tags?.includes('found_city')||game.unitDef(u).tags?.includes('build_facility')||u.rank);
   await chooseActor(u?.id??null);
   renderGame();redraw();
 }

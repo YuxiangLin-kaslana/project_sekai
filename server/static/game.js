@@ -174,6 +174,8 @@ export function setGame(snap, rules, W, H) {
   G.cities = new Map(snap.cities.map((c) => [c.id, c]));
   G.units = new Map(snap.units.map((u) => [u.id, u]));
   G.cityAt = new Map(snap.cities.map((c) => [c.tile, c]));
+  // 堡垒：格子 → {nation, hp, max}（快照的 forts 是 [格子, 国家编号, 血量, 血量上限]）
+  G.forts = new Map((snap.forts ?? []).map(([t, n, hp, max]) => [t, { nation: `nation:${n}`, hp, max }]));
   // 劳作：格子 → 在这里干活的人数（改良设施 1 人，区域 0–3 人）
   G.workers = new Map();
   for (const c of snap.cities) for (const [t, n] of Object.entries(c.jobs ?? {})) if (n) G.workers.set(+t, n);
@@ -587,7 +589,7 @@ const EDGE_ANGLE = [0, -60, -120, 180, 120, 60].map((d) => (d * Math.PI) / 180);
 // 远景只铺一层地面色时用的颜色
 const TILE_GROUND = {
   city: "#cbbd9b", farm: "#c3b25a", mine: "#9a8b76", lumber: "#667640", plantation: "#6f8a45",
-  oil: "#a8997c", factory: "#a29e94", base: "#ae9f74", airfield: "#93a362", port: "#bcb095",
+  oil: "#a8997c", factory: "#a29e94", base: "#ae9f74", fort: "#a49a78", airfield: "#93a362", port: "#bcb095",
   residential: "#b6ab8c", market: "#c9bd98", research: "#a9b39a", quarry: "#b3ad94", fishing: "#6c9db0", pasture: "#9fb46a",
 };
 
@@ -1297,6 +1299,42 @@ function factoryTile(ctx, x, y, z, R) {
   }
 }
 
+// 堡垒：星形棱堡土墙 + 一圈沙袋 + 中间的混凝土碉堡（射击孔）+ 本国旗帜
+function fortTile(ctx, x, y, z, R, c) {
+  const lw = lineWidth(z);
+  groundFill(ctx, x, y, z, "#a99f7c");
+  speckle(ctx, x, y, z, R, 16, ["rgba(90,80,55,0.3)"], 0.03);
+  const star = (r1, r2, dy = 0) => {
+    const pts = [];
+    for (let i = 0; i < 10; i++) {
+      const a = (Math.PI * i) / 5 - Math.PI / 2;
+      const r = i % 2 ? r2 : r1;
+      pts.push(x + Math.cos(a) * r * z, y + z * 0.08 + dy + Math.sin(a) * r * z * 0.62);
+    }
+    return pts;
+  };
+  fillPoly(ctx, star(0.86, 0.6, z * 0.05), "#7f7556", lw); // 土墙外坡（影子）
+  fillPoly(ctx, star(0.8, 0.55), "#c4b28a", lw); // 墙顶
+  fillPoly(ctx, star(0.56, 0.39), "#a8996f", lw); // 内场
+  // 沙袋
+  ctx.fillStyle = "#d3c59c";
+  ctx.strokeStyle = "rgba(60,52,36,0.6)";
+  ctx.lineWidth = Math.max(0.5, lw * 0.7);
+  for (let i = 0; i < 12; i++) {
+    const a = (Math.PI * 2 * i) / 12;
+    ctx.beginPath();
+    ctx.ellipse(x + Math.cos(a) * z * 0.47, y + z * 0.08 + Math.sin(a) * z * 0.29, z * 0.06, z * 0.035, 0, 0, Math.PI * 2);
+    ctx.fill(); ctx.stroke();
+  }
+  // 混凝土碉堡 + 射击孔
+  const by = y + z * 0.16;
+  isoBox(ctx, x, by, z * 0.2, z * 0.12, "#b8b6ac", "#8e8c82", lw, z * 0.16);
+  flatRoof(ctx, x, by, z * 0.2, z * 0.12, "#cfcdc3", lw, z * 0.16);
+  line(ctx, [x - z * 0.17, by - z * 0.07 - z * 0.17 * ISO * 0.2, x - z * 0.04, by - z * 0.07], "#26261f", Math.max(1, z * 0.03));
+  line(ctx, [x + z * 0.03, by - z * 0.07, x + z * 0.13, by - z * 0.07 - z * 0.13 * ISO * 0.4], "#26261f", Math.max(1, z * 0.03));
+  flag(ctx, x + z * 0.3, y - z * 0.08, z * 0.38, c, lw);
+}
+
 function baseTile(ctx, x, y, z, R, c) {
   const lw = lineWidth(z);
   groundFill(ctx, x, y, z, "#b9a97d");
@@ -1631,6 +1669,7 @@ const TILE_ART = {
   oil: oilTile,
   factory: factoryTile,
   base: baseTile,
+  fort: fortTile,
   airfield: airfieldTile,
   port: portTile,
 };
@@ -1642,6 +1681,7 @@ const ART_KEY = {
   plantation: (c, info) => `${info?.resource}`,
   oil: (c) => `${c}`,
   base: (c) => `${c}`,
+  fort: (c) => `${c}`,
   airfield: (c) => `${c}`,
   port: (c, info) => `${c}:${info?.coast}`,
   quarry: (c, info) => `${info?.color}`,
@@ -2366,6 +2406,47 @@ function drawUnits(ctx, v, part = "surface") {
   }
 }
 
+// 堡垒：格子上方一条血条（国家色描边，按剩余血量变色）；还没画设施插画的中远景，再画一个国家色的星形标记
+function drawForts(ctx, v) {
+  if (!G.forts?.size || v.z < 4) return;
+  const z = v.z;
+  ctx.save();
+  for (const [t, f] of visibleEntries(G.forts, v)) {
+    const c = G.nations.get(f.nation)?.rgb ?? [120, 120, 120];
+    const pct = Math.max(0, Math.min(100, (100 * f.hp) / Math.max(1, f.max)));
+    const [wx, wy] = center(t);
+    eachCopy(v, wx, wy, z * 1.5, (x, y) => {
+      if (z < FACILITY_ART_FROM) {
+        const r = Math.max(4, z * 0.5);
+        ctx.beginPath();
+        for (let i = 0; i < 10; i++) {
+          const a = (Math.PI * i) / 5 - Math.PI / 2, rr = i % 2 ? r * 0.5 : r;
+          ctx.lineTo(x + Math.cos(a) * rr, y + Math.sin(a) * rr);
+        }
+        ctx.closePath();
+        ctx.fillStyle = shade(c, -0.1); ctx.fill();
+        ctx.lineWidth = 1.2; ctx.strokeStyle = "rgba(255,248,230,0.9)"; ctx.stroke();
+      }
+      const w = Math.max(14, z * 0.9), h = Math.max(3, z * 0.09);
+      const bx = x - w / 2, by = y - z * (z < FACILITY_ART_FROM ? 0.95 : 0.74);
+      ctx.fillStyle = "rgba(20,18,14,0.78)";
+      ctx.fillRect(bx - 1, by - 1, w + 2, h + 2);
+      ctx.fillStyle = hpColor(pct);
+      ctx.fillRect(bx, by, (w * pct) / 100, h);
+      ctx.lineWidth = 1.2; ctx.strokeStyle = `rgb(${c.join(",")})`;
+      ctx.strokeRect(bx - 1, by - 1, w + 2, h + 2);
+      if (z >= 18) {
+        ctx.font = `600 ${Math.max(9, z * 0.16)}px ${FONT}`;
+        ctx.textAlign = "center"; ctx.textBaseline = "bottom";
+        ctx.lineWidth = 3; ctx.strokeStyle = "rgba(20,16,10,0.85)";
+        const label = `堡垒 ${f.hp}/${f.max}`;
+        ctx.strokeText(label, x, by - 2); ctx.fillStyle = "#f3e6c4"; ctx.fillText(label, x, by - 2);
+      }
+    });
+  }
+  ctx.restore();
+}
+
 // ---------------------------------------------------------------- 选中与移动路线
 
 function wrapDelta(dx, PW) {
@@ -2485,6 +2566,7 @@ export function drawOver(ctx, v) {
   drawDiplomacyLinks(ctx, v);
   if (G.layers.cities) drawCityMarkers(ctx, v);
   if (G.layers.units) drawCorps(ctx, v);
+  if (G.layers.facilities) drawForts(ctx, v);
   drawTactics(ctx, v);
   drawSelection(ctx, v);
   if (G.layers.units) {
