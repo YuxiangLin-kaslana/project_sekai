@@ -191,7 +191,7 @@ def _slim(state):
     s._network_cache = None
     for u in s.units.values():
         u.history = ()  # 战史只给人看，AI 规划用不上（大兵团时能省下不少序列化）
-    s.wars = []  # 战争记录同理
+    s.wars, s.alliances = [], []  # 战争、同盟记录同理
     return s
 
 

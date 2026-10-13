@@ -233,24 +233,60 @@ export function setGame(snap, rules, W, H) {
 }
 
 // 国名放在领土的重心（东西环绕：横坐标用圆周平均），字号随领土大小
+// 国名标注的位置：每国的领土按连成的块分开（飞地、海外领土、小岛），标城市最多的那块（一样多标大的）；
+// 别的块够大（至少 LABEL_MIN 格、主块的三分之一）也标。位置取块的重心，落到块里离重心最近的格子上（凹形领土
+// 的重心可能在国外）
+const LABEL_MIN = 20;
+const LABEL_GAP = 16; // 同一国家的两个国名至少隔这么多格
 function nationLabels(snap, W) {
-  const PW = SQRT3 * W;
-  const acc = snap.nations.map(() => ({ c: 0, s: 0, y: 0, n: 0 }));
+  const PW = SQRT3 * W, N = G.ownerOf.length;
+  const chunkOf = new Int32Array(N).fill(-1);
+  const chunks = []; // {idx, tiles}
   for (const [t, idx] of G.owned) {
-    const [x, y] = center(t);
-    const a = (2 * Math.PI * x) / PW;
-    const k = acc[idx];
-    k.c += Math.cos(a);
-    k.s += Math.sin(a);
-    k.y += y;
-    k.n++;
+    if (chunkOf[t] >= 0) continue;
+    const id = chunks.length, tiles = [], stack = [t];
+    chunkOf[t] = id;
+    while (stack.length) {
+      const x = stack.pop();
+      tiles.push(x);
+      for (let d = 0; d < 6; d++) {
+        const n = neighbor(x, d);
+        if (n >= 0 && chunkOf[n] < 0 && G.ownerOf[n] === idx) { chunkOf[n] = id; stack.push(n); }
+      }
+    }
+    chunks.push({ idx, tiles, cities: 0 });
   }
-  return snap.nations.map((n, idx) => {
-    const k = acc[idx];
-    if (!k.n) return null;
-    const x = ((Math.atan2(k.s, k.c) / (2 * Math.PI)) * PW + PW) % PW;
-    return { name: n.name, rgb: hexRgb(n.color), x, y: k.y / k.n, size: Math.sqrt(k.n) };
-  }).filter(Boolean);
+  for (const c of snap.cities) if (chunkOf[c.tile] >= 0) chunks[chunkOf[c.tile]].cities++;
+  const byNation = snap.nations.map(() => []);
+  for (const ch of chunks) byNation[ch.idx].push(ch);
+  const out = [];
+  snap.nations.forEach((n, idx) => {
+    const list = byNation[idx].sort((a, b) => b.cities - a.cities || b.tiles.length - a.tiles.length);
+    if (!list.length) return;
+    const main = list[0].tiles.length, mine = [];
+    for (const ch of list) {
+      if (ch !== list[0] && (ch.tiles.length < LABEL_MIN || ch.tiles.length < main / 3)) continue;
+      let c = 0, sn = 0, sy = 0;
+      for (const t of ch.tiles) {
+        const [x, y] = center(t), a = (2 * Math.PI * x) / PW;
+        c += Math.cos(a); sn += Math.sin(a); sy += y;
+      }
+      const cx = ((Math.atan2(sn, c) / (2 * Math.PI)) * PW + PW) % PW, cy = sy / ch.tiles.length;
+      let best = ch.tiles[0], bd = Infinity;
+      for (const t of ch.tiles) {
+        const [x, y] = center(t);
+        let dx = Math.abs(x - cx); dx = Math.min(dx, PW - dx);
+        const d = dx * dx + (y - cy) * (y - cy);
+        if (d < bd) { bd = d; best = t; }
+      }
+      const [x, y] = center(best);
+      // 离本国已经标过的位置太近（两块领土只隔一条窄缝）：不再重复标
+      if (mine.some(([px, py]) => { const dx = Math.min(Math.abs(px - x), PW - Math.abs(px - x)); return dx * dx + (py - y) ** 2 < (SQRT3 * LABEL_GAP) ** 2; })) continue;
+      mine.push([x, y]);
+      out.push({ name: n.name, rgb: hexRgb(n.color), x, y, size: Math.sqrt(ch.tiles.length), main: ch === list[0] });
+    }
+  });
+  return out;
 }
 
 export function clearGame() {
@@ -2518,25 +2554,31 @@ function drawRoutes(ctx, v) {
 }
 
 // subtle = 地形模式：字小一些、画在部队下面，只是标出谁在哪，不盖住地图
-function drawNationLabels(ctx, v, subtle = false) {
+// mode：far 最远景（地形模式，城市名牌出现之前）、political 国家模式的远景、watermark 拉近以后
+// （画在城市和部队下面的淡色大字，随时看得出这片地是谁的）
+function drawNationLabels(ctx, v, mode = "far") {
   ctx.save();
   ctx.textAlign = "center";
   ctx.textBaseline = "middle";
   ctx.lineJoin = "round";
-  // 大国先放；和已经放下的国名重叠就跳过（拉近以后有城市名牌接替）
+  const water = mode === "watermark";
+  if (water && "letterSpacing" in ctx) ctx.letterSpacing = "0.18em";
+  // 大国先放；和已经放下的国名重叠就跳过
   const placed = [];
-  for (const L of [...G.labels].sort((a, b) => b.size - a.size)) {
-    const fs = Math.round(Math.max(11, Math.min(subtle ? 17 : 30, L.size * v.z * (subtle ? 0.4 : 0.55))));
+  for (const L of [...G.labels].sort((a, b) => b.main - a.main || b.size - a.size)) {
+    const fs = water
+      ? Math.round(Math.max(16, Math.min(46, L.size * v.z * 0.32)))
+      : Math.round(Math.max(11, Math.min(mode === "far" ? 17 : 30, L.size * v.z * (mode === "far" ? 0.4 : 0.55))));
     ctx.font = `600 ${fs}px "Songti SC", "Noto Serif CJK SC", "Source Han Serif SC", ${FONT}`;
     const half = ctx.measureText(L.name).width / 2 + 4;
-    eachCopy(v, L.x, L.y, 200, (x, y) => {
+    eachCopy(v, L.x, L.y, half + 40, (x, y) => {
       const box = [x - half, y - fs * 0.65, x + half, y + fs * 0.65];
       if (placed.some((b) => box[0] < b[2] && box[2] > b[0] && box[1] < b[3] && box[3] > b[1])) return;
       placed.push(box);
-      ctx.lineWidth = Math.max(3, fs * 0.22);
-      ctx.strokeStyle = "rgba(251,246,232,0.9)";
+      ctx.lineWidth = Math.max(3, fs * (water ? 0.16 : 0.22));
+      ctx.strokeStyle = water ? "rgba(251,246,232,0.42)" : "rgba(251,246,232,0.9)";
       ctx.strokeText(L.name, x, y);
-      ctx.fillStyle = shade(L.rgb, -0.55);
+      ctx.fillStyle = water ? shade(L.rgb, -0.45).replace("rgb(", "rgba(").replace(")", ",0.5)") : shade(L.rgb, -0.55);
       ctx.fillText(L.name, x, y);
     });
   }
@@ -2560,7 +2602,10 @@ export function drawOver(ctx, v) {
     }
   }
   // 地形模式在城市名牌出现之前（最远景）也标国名，观战时一眼看出谁在哪；画在城市和部队下面
-  if (!G.political && G.layers.territory && v.z < LOD.cityPlate) drawNationLabels(ctx, v, true);
+  if (G.layers.territory) {
+    if (!G.political && v.z < LOD.cityPlate) drawNationLabels(ctx, v, "far");
+    else if (v.z >= (G.political ? POLITICAL_LABELS_BELOW : LOD.cityPlate)) drawNationLabels(ctx, v, "watermark");
+  }
   drawFronts(ctx, v);
   drawBattlePlans(ctx, v);
   drawDiplomacyLinks(ctx, v);
@@ -2577,7 +2622,7 @@ export function drawOver(ctx, v) {
   if (G.layers.cities) drawCityPlates(ctx, v);
   if (G.layers.units) drawUnits(ctx, v, "air"); // 飞机在上空：画在城市名牌之上
   drawEffects(ctx, v);
-  if (G.political && v.z < POLITICAL_LABELS_BELOW && G.layers.territory) drawNationLabels(ctx, v);
+  if (G.political && v.z < POLITICAL_LABELS_BELOW && G.layers.territory) drawNationLabels(ctx, v, "political");
   if (G.layers.units) drawCorpsLabels(ctx, v);
 }
 

@@ -421,20 +421,62 @@ def tide_view(s) -> dict:
     }
 
 
+def _nation_chip(s, nid) -> dict:
+    n = s.nations.get(nid)
+    return {
+        "nation": ref("nation", nid),
+        "name": n.name if n is not None else "",
+        "color": n.color if n is not None else "#888888",
+    }
+
+
+def alliances_view(s, limit: int = 30) -> list[dict]:
+    """同盟（engine/systems/wars.py）：现存的在前（新结成的在前），然后是瓦解了的（新瓦解的在前）。"""
+    now = sorted((a for a in s.alliances if a["end"] is None), key=lambda a: -a["id"])
+    gone = sorted(
+        (a for a in s.alliances if a["end"] is not None), key=lambda a: (-a["end"], -a["id"])
+    )
+    return [
+        {
+            "id": a["id"],
+            "name": a["name"],
+            "start": a["start"],
+            "end": a["end"],
+            "how": a["how"],
+            "members": [_nation_chip(s, n) for n in a["members"]],
+            "events": a["events"],
+        }
+        for a in [*now, *gone][:limit]
+    ]
+
+
 def wars_view(s, limit: int = 60) -> list[dict]:
     """战争记录（engine/systems/wars.py）：正在打的在前（新开的在前），然后是结束了的（新结束的在前）。
-    每场：名字、起止回合、怎么结束的、双方（损失支数、损失造价、攻占的城市数）、重大战损。"""
+    每场：名字、起止回合、怎么结束的、两边各国（损失支数、损失造价、攻占的城市数、是否中途退出）、
+    两边合计、两边是不是正好一个同盟（显示同盟名）、重大战损。"""
+    blocs = {frozenset(a["members"]): a["name"] for a in s.alliances if a["end"] is None}
 
-    def side(w, nid):
-        n = s.nations.get(nid)
-        lost = w["lost"][str(nid)]
+    def side(w, i):
+        members = []
+        for nid in w["sides"][i]:
+            lost = w["lost"].get(str(nid), [0, 0])
+            left = w["left"].get(str(nid))
+            members.append(
+                {
+                    **_nation_chip(s, nid),
+                    "lost": lost[0],
+                    "value": lost[1],
+                    "cities": w["cities"].get(str(nid), 0),
+                    "left": left[1] if left else None,
+                }
+            )
+        active = frozenset(n for n in w["sides"][i] if str(n) not in w["left"])
         return {
-            "nation": ref("nation", nid),
-            "name": n.name if n is not None else "",
-            "color": n.color if n is not None else "#888888",
-            "lost": lost[0],
-            "value": lost[1],
-            "cities": w["cities"][str(nid)],
+            "members": members,
+            "lost": sum(m["lost"] for m in members),
+            "value": sum(m["value"] for m in members),
+            "cities": sum(m["cities"] for m in members),
+            "alliance": blocs.get(active) if len(active) >= 2 else None,
         }
 
     ongoing = sorted((w for w in s.wars if w["end"] is None), key=lambda w: -w["id"])
@@ -447,7 +489,7 @@ def wars_view(s, limit: int = 60) -> list[dict]:
             "end": w["end"],
             "how": w["how"],
             "turns": (w["end"] if w["end"] is not None else s.turn) - w["start"],
-            "sides": [side(w, w["a"]), side(w, w["b"])],
+            "sides": [side(w, 0), side(w, 1)],
             "events": [[t, text] for t, _, text in sorted(w["events"], key=lambda e: e[0])],
         }
         for w in [*ongoing, *ended][:limit]
@@ -782,6 +824,7 @@ def _snapshot(game: Game, rules: Ruleset) -> dict:
         "tide": tide_view(s),  # 天下大势（分久必合，合久必分）
         "wars": wars_view(s),  # 战争记录：名字、交换比、重大战损
         "war_count": len(s.wars),
+        "alliances": alliances_view(s),  # 同盟：名字、成员
         "state_hash": game.state_hash(),
         "nations": nations,
         "cities": cities,

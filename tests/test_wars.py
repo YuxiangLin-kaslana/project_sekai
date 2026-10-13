@@ -25,9 +25,19 @@ def board():
     s.nations = {
         1: Nation(1, "凤翔共和国", "#aa3333", None, gold=1000),
         2: Nation(2, "卢米纳王国", "#3333aa", None, gold=1000),
+        3: Nation(3, "苍梧国", "#33aa33", None, gold=1000),
+        4: Nation(4, "天穹帝国", "#aaaa33", None, gold=1000),
     }
-    s.relations[diplomacy.key(1, 2)] = {"status": "peace", "since": 0}
+    for a in s.nations:
+        for b in s.nations:
+            if a < b:
+                s.relations[diplomacy.key(a, b)] = {"status": "peace", "since": 0, "value": 50}
     return s
+
+
+def ally(s, a, b):
+    diplomacy.make_alliance(ctx_of(s), a, b)
+    diplomacy._set_value(s, a, b, 140)
 
 
 def ctx_of(s):
@@ -53,7 +63,7 @@ def test_each_war_gets_a_name_and_repeat_wars_are_numbered(board):
     ctx = ctx_of(board)
     assert diplomacy.declare_war(ctx, 1, 2) is None
     w = wars.open_war(board, 1, 2)
-    assert w["name"] == "凤卢战争" and w["a"] == 1 and w["start"] == board.turn
+    assert w["name"] == "凤卢战争" and w["sides"] == [[1], [2]] and w["start"] == board.turn
     board.turn = 30
     diplomacy.make_peace(ctx, 2, 1)
     assert wars.open_war(board, 1, 2) is None and w["end"] == 30 and w["how"] == "议和"
@@ -62,7 +72,7 @@ def test_each_war_gets_a_name_and_repeat_wars_are_numbered(board):
     second = wars.open_war(board, 1, 2)
     # 同一对国家第二次开战：叫“第二次……”，第一场改名“第一次……”（名字只由国名和次数决定）
     # 这次是乙方先动手，名字照样沿用“凤卢战争”
-    assert second["name"] == "第二次凤卢战争" and second["a"] == 2
+    assert second["name"] == "第二次凤卢战争" and second["sides"] == [[2], [1]]
     assert board.wars[0]["name"] == "第一次凤卢战争"
 
 
@@ -122,3 +132,72 @@ def test_wars_end_when_a_side_is_eliminated(board):
     clone = board.clone()
     clone.wars[-1]["name"] = "改过"
     assert board.wars[-1]["name"] != "改过"  # 克隆是深拷贝
+
+
+def test_allies_join_the_same_war_and_it_is_named_as_an_alliance_war(board):
+    ally(board, 1, 3)
+    ctx = ctx_of(board)
+    diplomacy.declare_war(ctx, 1, 2)  # 苍梧是凤翔的盟友：一起参战，并进同一场战争
+    w = wars.open_war(board, 1, 2)
+    assert w["sides"] == [[1, 3], [2]] and w["name"] == "反卢米纳同盟战争"
+    assert wars.open_war(board, 3, 2) is w and len(board.wars) == 1
+    # 卢米纳的盟友天穹第二回合也参战：加入卢米纳那一边，名字不再改
+    ally(board, 2, 4)
+    board.turn += 1
+    diplomacy.declare_war(ctx_of(board), 4, 1)
+    assert w["sides"] == [[1, 3], [2, 4]] and w["name"] == "反卢米纳同盟战争"
+    # 苍梧单独和对面议和：退出，战争照打；最后一对也议和，战争结束
+    board.turn += 5
+    diplomacy.make_peace(ctx_of(board), 3, 2)
+    diplomacy.make_peace(ctx_of(board), 3, 4)
+    assert w["end"] is None and w["left"]["3"][1] == "议和"
+    diplomacy.make_peace(ctx_of(board), 1, 2)
+    diplomacy.make_peace(ctx_of(board), 1, 4)
+    assert w["end"] == board.turn and w["how"] == "议和"
+
+
+def test_multi_nation_wars_and_great_wars_get_names(board):
+    ally(board, 1, 3)
+    ally(board, 2, 4)
+    diplomacy.declare_war(ctx_of(board), 1, 2)  # 两边的盟友同一回合都参战：四国战争
+    w = wars.open_war(board, 1, 2)
+    assert sorted(w["sides"][0]) == [1, 3] and sorted(w["sides"][1]) == [2, 4]
+    assert w["name"].endswith("四国战争") and len(w["name"]) == len("凤苍卢天四国战争")
+
+
+def test_alliances_are_named_and_tracked(board):
+    ally(board, 1, 3)
+    wars.update_alliances(board)
+    a = board.alliances[-1]
+    assert a["members"] == [1, 3] and a["name"] == "凤苍同盟" and a["end"] is None
+    ally(board, 3, 4)  # 天穹和苍梧结盟：连起来，同一个同盟扩大，名字不变
+    board.turn += 1
+    wars.update_alliances(board)
+    assert len(board.alliances) == 1 and a["members"] == [1, 3, 4] and a["name"] == "凤苍同盟"
+    diplomacy.break_alliance(ctx_of(board), 1, 3)
+    diplomacy.break_alliance(ctx_of(board), 3, 4)
+    board.turn += 1
+    wars.update_alliances(board)
+    assert a["end"] == board.turn and a["how"] == "瓦解"
+    # 新结成的同盟：所有成员都在和同一国打仗，叫“反某某同盟”
+    diplomacy.declare_war(ctx_of(board), 1, 2)
+    diplomacy.declare_war(ctx_of(board), 4, 2)
+    ally(board, 1, 4)
+    board.turn += 1
+    wars.update_alliances(board)
+    assert board.alliances[-1]["name"] == "反卢米纳同盟"
+
+
+def test_eliminated_nations_do_not_rejoin_wars(board):
+    ally(board, 1, 3)
+    diplomacy.declare_war(ctx_of(board), 1, 2)
+    w = wars.open_war(board, 1, 2)
+    board.nations[3].eliminated = True
+    wars.close_nation(board, 3)
+    assert w["left"]["3"][1] == "灭亡" and w["end"] is None
+    # 同一回合里灭亡之后又有外交变动把它卷进来：不再参战，名单里也不会重复
+    diplomacy._set(board, 2, 3, "peace")
+    diplomacy._set(board, 2, 3, "war")
+    assert w["sides"][0].count(3) == 1 and w["left"]["3"][1] == "灭亡"
+    wars.close_nation(board, 2)
+    assert w["end"] == board.turn and w["how"] == "卢米纳王国灭亡"

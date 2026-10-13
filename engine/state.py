@@ -204,6 +204,7 @@ class GameState:
     # 世界大事记：[{turn, kind, text, nations, tile}]（首都陷落、灭国、内战、叛变、反霸同盟……）
     chronicle: list[dict] = field(default_factory=list)
     wars: list[dict] = field(default_factory=list)  # 战争记录（engine/systems/wars.py）
+    alliances: list[dict] = field(default_factory=list)  # 同盟记录（engine/systems/wars.py）
     # 外交（engine/systems/diplomacy.py）：{"a:b": {status, since, truce, progress}}；没有记录的按交战处理
     relations: dict[str, dict] = field(default_factory=dict)
     offers: list[dict] = field(default_factory=list)  # 给玩家国家的待处理提议
@@ -374,6 +375,7 @@ class GameState:
             forts={t: dict(f) for t, f in self.forts.items()},
             chronicle=list(self.chronicle),
             wars=pickle.loads(pickle.dumps(self.wars, pickle.HIGHEST_PROTOCOL)),  # 原地改：深拷贝
+            alliances=pickle.loads(pickle.dumps(self.alliances, pickle.HIGHEST_PROTOCOL)),
             region_xp=dict(self.region_xp),
             relations={k: dict(v) for k, v in self.relations.items()},
             offers=[dict(o) for o in self.offers],
@@ -412,6 +414,7 @@ class GameState:
             "forts": sorted((t, sorted(f.items())) for t, f in self.forts.items()),
             "chronicle": self.chronicle,
             "wars": self.wars,
+            "alliances": self.alliances,
             "region_xp": sorted(self.region_xp.items()),
             "roads": [[a, b, v] for (a, b), v in sorted(self.roads.items())],
             "grid": self.grid.content_hash(),

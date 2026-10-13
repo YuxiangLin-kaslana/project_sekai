@@ -321,5 +321,16 @@ def test_snapshot_lists_wars_with_names_and_losses():
     wars = client.get(f"/api/games/{gid}").json()["wars"]
     # 每场战争有名字、开战回合、双方（损失支数、折算兵力、攻占的城市）和重大战损
     assert len(wars) == 1 and wars[0]["name"].endswith("战争") and wars[0]["end"] is None
-    assert [x["nation"] for x in wars[0]["sides"]] == [f"nation:{a}", f"nation:{b}"]
-    assert wars[0]["sides"][0]["lost"] == 0 and wars[0]["events"] == []
+    sides = wars[0]["sides"]
+    assert [x["members"][0]["nation"] for x in sides] == [f"nation:{a}", f"nation:{b}"]
+    assert sides[0]["lost"] == 0 and sides[0]["members"][0]["left"] is None
+    assert wars[0]["events"] == []
+    # 同盟：结盟以后快照里有它的名字和成员
+    c = sorted(state.nations)[2]
+    diplomacy._set(state, a, c, "alliance")
+    from engine.systems import wars as war_records
+
+    war_records.update_alliances(state)
+    snap = client.get(f"/api/games/{gid}").json()
+    assert snap["alliances"][0]["name"].endswith("同盟")
+    assert {m["nation"] for m in snap["alliances"][0]["members"]} == {f"nation:{a}", f"nation:{c}"}
