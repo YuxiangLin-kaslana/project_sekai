@@ -353,6 +353,11 @@
   .nation-row em { font-style: normal; font-size: 10px; margin-left: 5px; padding: 0 5px; border-radius: 8px; }
   .nation-row em.unrest { color: #f2c0b0; background: rgba(155, 47, 36, 0.35); border: 1px solid rgba(214, 102, 82, 0.5); }
   .nation-row em.ai { color: var(--muted); border: 1px solid var(--line-strong); }
+  .nation-row em.culture, .diplo-row .culture { font-style: normal; font-size: 10px; padding: 0 5px; border-radius: 8px; border: 1px solid; }
+  .culture.east { color: #e6c98c; border-color: rgba(216, 184, 120, 0.45); }
+  .culture.west { color: #a9c4dc; border-color: rgba(143, 179, 201, 0.45); }
+  .diplo-row .aff { font-variant-numeric: tabular-nums; }
+  .diplo-row .aff.up { color: #9fd08a; } .diplo-row .aff.down { color: #e8907a; }
   .legend-units { display: grid; grid-template-columns: 1fr 1fr; gap: 4px 10px; font-size: 12px; }
   .legend-units div { display: flex; align-items: center; gap: 6px; }
   .empty { color: var(--muted); font-size: 12px; padding: 6px 0; }
@@ -1927,8 +1932,11 @@ function renderDiplomacy() {
     const truce = r.truce && r.truce > snap.turn ? ` · 休战到第 ${r.truce} 回合` : "";
     const since = r.since ? ` · 第 ${r.since} 回合起` : "";
     const v = Math.round(r.value ?? 50), tone = v < 0 ? "war" : v >= 100 ? "alliance" : "peace";
-    const meter = `<span class="rel-meter" title="关系值 ${v}%：低于 0% 开战，高于 100% 结盟。接壤、对方军队压境、没地方扩张会下降；有共同的敌国会上升；一国实力太强、只剩 4 国及以下时都会下降"><i class="${tone}" style="width:${Math.max(0, Math.min(100, (v + 50) / 2))}%"></i><b>${v}%</b></span>`;
-    row.innerHTML = `<i class="nation-dot" style="background:${n.color}"></i><div>${esc(n.name)}<span class="rel ${r.status}">${REL_TEXT[r.status]}</span>${meter}<span class="sub">${n.cities} 城 · ${n.units} 兵${since}${truce}</span></div>`;
+    // 文化亲疏：同小类上升、同大类略升、不同大类下降（关系目标值上的加减项）
+    const aff = snap.culture_affinity ?? {}, cult = me.subculture && n.subculture ? (me.subculture === n.subculture ? ["same", `同文化（${n.culture_label.split("·").pop()}）`] : me.culture === n.culture ? ["kin", `同为${n.culture_label.split("·")[0]}文化`] : ["foreign", `文化不同（${n.culture_label}）`]) : null;
+    const affHtml = cult ? ` · <span class="aff ${aff[cult[0]] > 0 ? "up" : "down"}" title="文化对关系的影响：同文化小类 ${aff.same > 0 ? "+" : ""}${aff.same}，同大类 ${aff.kin > 0 ? "+" : ""}${aff.kin}，不同大类 ${aff.foreign}">${esc(cult[1])} ${aff[cult[0]] > 0 ? "+" : ""}${aff[cult[0]]}</span>` : "";
+    const meter = `<span class="rel-meter" title="关系值 ${v}%：低于 0% 开战，高于 100% 结盟。接壤、对方军队压境、没地方扩张会下降；有共同的敌国、同文化会上升；不同文化、一国实力太强、只剩 4 国及以下时都会下降"><i class="${tone}" style="width:${Math.max(0, Math.min(100, (v + 50) / 2))}%"></i><b>${v}%</b></span>`;
+    row.innerHTML = `<i class="nation-dot" style="background:${n.color}"></i><div>${esc(n.name)}<span class="rel ${r.status}">${REL_TEXT[r.status]}</span>${meter}<span class="sub">${n.cities} 城 · ${n.units} 兵${since}${truce}${affHtml}</span></div>`;
     const acts = document.createElement("div"); acts.className = "acts";
     const btn = (label, type, title, disabled = false) => {
       const b = document.createElement("button"); b.type = "button"; b.textContent = label; b.title = title; b.disabled = disabled || commandBusy;
@@ -2030,7 +2038,8 @@ function renderNations() {
     row.className = "nation-row" + (n.id === managementNation ? " active" : "") + (n.cities ? "" : " gone");
     const restless = unrest.get(n.id) ?? 0;
     row.title = `维护费 ${n.upkeep}/回合 · 科研累计 ${n.science}${restless ? ` · ${restless} 座城市动荡` : ""}`;
-    row.innerHTML = `<i class="nation-dot" style="background:${n.color}"></i><div>${esc(n.name)}${restless ? `<em class="unrest">动荡 ${restless}</em>` : ""}${n.ai_enabled ? '<em class="ai">AI</em>' : ""}${(() => { const r = diploNation && n.id !== diploNation && n.cities ? relationOf(diploNation, n.id) : null; return r ? `<span class="rel ${r.status}">${REL_TEXT[r.status]}</span>` : ""; })()}</div><span>${fmt(n.gold)}</span><span>${n.cities}</span><span>${n.units}</span>`;
+    const culture = n.subculture ? `<em class="culture ${esc(n.culture)}" title="文化：${esc(n.culture_label)}（同文化的国家关系好，不同文化的疏远）">${esc(n.culture_label.split("·").pop())}</em>` : "";
+    row.innerHTML = `<i class="nation-dot" style="background:${n.color}"></i><div>${esc(n.name)}${culture}${restless ? `<em class="unrest">动荡 ${restless}</em>` : ""}${n.ai_enabled ? '<em class="ai">AI</em>' : ""}${(() => { const r = diploNation && n.id !== diploNation && n.cities ? relationOf(diploNation, n.id) : null; return r ? `<span class="rel ${r.status}">${REL_TEXT[r.status]}</span>` : ""; })()}</div><span>${fmt(n.gold)}</span><span>${n.cities}</span><span>${n.units}</span>`;
     row.addEventListener("click", () => {
       managementNation=n.id;
       diploNation=n.id;

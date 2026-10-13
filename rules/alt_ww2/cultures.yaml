@@ -1,0 +1,54 @@
+# 文化（engine/systems/culture.py）：大类 family 是东方 east / 西方 west（和 names.yaml 的名字系列对应），
+# 下面分小类。国家模板在 nations.yaml 里写 subculture；名字库（names.yaml）里的国名写在这里的 nations 下；
+# 都没写到的国名，按国名在同一大类的小类里确定地分一个。分裂出来的新政权继承文化（见 engine/systems/secession.py）。
+# 外交：同小类的国家关系好，同大类其次，不同大类差——关系目标值上的加减项（见 engine/systems/diplomacy.py）。
+
+# ---- 东方
+zhongyuan:
+  name: 中原
+  family: east
+  nations: [大夏帝国, 北燕王朝, 华胥国, 玄武王朝, 天穹帝国, 白虎王朝, 凤翔共和国]
+jingchu:
+  name: 荆楚
+  family: east
+  nations: [南楚王国, 苍梧国, 青丘国, 云梦国, 朱雀国, 九黎联邦]
+xiyu:
+  name: 西域
+  family: east
+  nations: [西凉国, 高昌国, 昆仑帝国, 龙城国]
+dongying:
+  name: 东瀛
+  family: east
+  nations: [蓬莱国, 瀛洲国]
+tianzhu:
+  name: 天竺
+  family: east
+nanyang:
+  name: 南洋
+  family: east
+  nations: [岭南联邦]
+
+# ---- 西方
+latin:
+  name: 拉丁
+  family: west
+  nations: [卡兰西亚帝国, 赫斯佩里亚联邦, 诺瓦里斯王国, 阿奎塔尼亚王国, 卢米纳联合王国, 格拉纳迪亚王国, 伊比利恩王国, 萨伏伊亚王国, 伊斯特里亚共和国]
+germanic:
+  name: 日耳曼
+  family: west
+  nations: [洛塔林吉亚公国, 维斯特法伦邦联, 奥斯特马克公国, 提罗利亚自由邦, 哈布斯塔德帝国, 弗里斯兰联邦, 勃兰登堡选侯国, 卡林西亚公国]
+nordic:
+  name: 北欧
+  family: west
+  nations: [斯卡迪亚联盟]
+anglo:
+  name: 盎格鲁
+  family: west
+  nations: [塞伦迪亚共和国]
+slavic:
+  name: 斯拉夫
+  family: west
+  nations: [莫拉维亚共和国]
+levant:
+  name: 近东
+  family: west

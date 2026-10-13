@@ -52,6 +52,10 @@ from engine.systems.combat import (
     lock_reason,
     strength,
 )
+from engine.systems.culture import FOREIGN as CULTURE_FOREIGN
+from engine.systems.culture import KIN as CULTURE_KIN
+from engine.systems.culture import SAME as CULTURE_SAME
+from engine.systems.culture import label as culture_label
 from engine.systems.diplomacy import DEFAULT as DIPLOMACY_DEFAULT
 from engine.systems.economy import unit_upkeep, upkeep
 from engine.systems.movement import GameState, air_radius, full_moves
@@ -606,6 +610,10 @@ def _snapshot(game: Game, rules: Ruleset) -> dict:
                 "name": n.name,
                 "color": n.color,
                 "capital": ref("city", n.capital) if n.capital is not None else None,
+                # 文化：大类（east / west）、小类和显示用的“东方·中原”（同文化关系好，见 engine/systems/culture.py）
+                "culture": n.culture,
+                "subculture": n.subculture,
+                "culture_label": culture_label(rules, n),
                 "gold": n.gold,
                 "science": n.science,
                 # 科技：研究完的（None = 不受科技限制）、正在研究的和进度、时代、能研究的
@@ -825,6 +833,8 @@ def _snapshot(game: Game, rules: Ruleset) -> dict:
         "wars": wars_view(s),  # 战争记录：名字、交换比、重大战损
         "war_count": len(s.wars),
         "alliances": alliances_view(s),  # 同盟：名字、成员
+        # 文化对关系目标值的加减（同小类 / 同大类 / 不同大类，见 engine/systems/culture.py）
+        "culture_affinity": {"same": CULTURE_SAME, "kin": CULTURE_KIN, "foreign": CULTURE_FOREIGN},
         "state_hash": game.state_hash(),
         "nations": nations,
         "cities": cities,

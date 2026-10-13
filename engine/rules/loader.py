@@ -10,6 +10,7 @@
     rules/<name>/buildings.yaml   市中心建筑 + 城外设施
     rules/<name>/nations.yaml     国家模板（名字、颜色、城市名、东方 / 西方系列）
     rules/<name>/names.yaml       名字库：每个系列的国名、城市名、人名
+    rules/<name>/cultures.yaml    文化小类（大类东方 / 西方）和归属的国名
 
 继承：ruleset.yaml 写 `extends: <父规则集名>`，子规则集里的同名条目整条覆盖父规则集，
 值写 null 表示删除该条目；ruleset.yaml 里的配置段（worldgen、cities 等）按字段合并。
@@ -28,7 +29,7 @@ from pydantic import ValidationError
 from engine.rules.schema import Ruleset
 
 RULES_ROOT = Path(__file__).resolve().parents[2] / "rules"
-_ENTRY_FILES = ("terrain", "resources", "units", "buildings", "nations", "techs")
+_ENTRY_FILES = ("terrain", "resources", "units", "buildings", "nations", "techs", "cultures")
 _CONFIG_SECTIONS = (
     "worldgen",
     "cities",

@@ -61,7 +61,8 @@ class Nation:
     defense: dict = field(default_factory=dict)
     research: str | None = None  # 正在研究的科技
     research_progress: int = 0  # 当前研究已投入的科研值
-    culture: str = "west"  # 名字系列（东方 east / 西方 west）：城市名、将领名从这个系列的名字库取
+    culture: str = "west"  # 名字系列（东方 east / 西方 west）：城市名、将领名从这个系列的名字库取；也是文化大类
+    subculture: str = ""  # 文化小类（规则集 cultures.yaml，如 zhongyuan 中原）：同文化关系好，见 engine/systems/culture.py
     upheaval_turn: int = -1000  # 上一次内战 / 将领叛变的回合（冷却，见 engine/systems/upheaval.py）
     coalition_turn: int = -1000  # 上一次成为反霸同盟的目标的回合
     decay: int = 0  # 大一统之后积累的腐败 / 离心（见 engine/systems/upheaval.py），远方城市因此不稳

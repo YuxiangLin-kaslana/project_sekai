@@ -412,7 +412,9 @@ def _pair_keys(borders) -> set[str]:
 
 def target_value(state, a, b, pw, borders, wars, crowded, dominant, few=0.0) -> tuple[float, bool]:
     """a、b 两国关系值的目标值（每回合向它靠拢，见模块说明），以及这是不是一个失去意义的同盟。"""
-    t = float(START_VALUE)
+    from engine.systems.culture import affinity
+
+    t = float(START_VALUE) + affinity(state, a, b)  # 文化：同小类亲近、同大类其次、不同大类疏远
     cause = True
     if wars[a] & wars[b]:
         t += COMMON_ENEMY  # 敌人的敌人就是朋友

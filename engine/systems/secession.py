@@ -22,11 +22,14 @@ def secede(
     cfg, g = rules.stability, s.grid
     from engine.rng import RngTree
     from engine.systems import diplomacy
+    from engine.systems.culture import of_city
     from engine.systems.names import distinct_color, nation_name
     from engine.systems.territory import rebalance
 
     nid = max(s.nations) + 1
-    culture = s.nations[old].culture  # 和原国家同一个名字系列
+    # 文化：继承首都那座城的百姓（被攻占过的城继承原主人的文化——“光复”；否则和原国家一样）
+    people = s.nations[of_city(s, seat, old)]
+    culture = people.culture  # 名字系列也跟着文化走
     nation = Nation(
         nid,
         name or nation_name(s, rules, culture, from_city=seat.name),
@@ -41,6 +44,7 @@ def secede(
         city_management=True,
         ai_enabled=True,
         culture=culture,
+        subculture=people.subculture,
         techs=None if s.nations[old].techs is None else list(s.nations[old].techs),
     )
     nation.upheaval_turn = s.turn

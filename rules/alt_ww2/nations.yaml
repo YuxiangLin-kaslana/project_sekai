@@ -1,107 +1,132 @@
 # 国家模板（架空）。开局按顺序取用：第 n 个起始点 = 第 n 个国家；城市名的第一个是首都。
-# culture：名字系列（east 东方 / west 西方，默认 west）。模板的城市名用完后，从 names.yaml 里同系列的
-# 城市名库取没用过的名字；国家模板用完后，新国家从名字库取国名。颜色用于领土、单位牌底色，尽量互相区分。
+# culture：名字系列（east 东方 / west 西方，默认 west），也是文化大类；subculture：文化小类（cultures.yaml，
+# 影响外交关系）。模板的城市名用完后，从 names.yaml 里同系列的城市名库取没用过的名字；国家模板用完后，
+# 新国家从名字库取国名。颜色用于领土、单位牌底色，尽量互相区分。
 
 aurelia:
   name: 奥雷利亚共和国
+  subculture: latin
   color: "#c8423a"
   cities: [新赫姆, 卡斯托, 维瑞港, 拉蒙德, 赛尔塔, 欧伦堡]
 nordmark:
   name: 诺德马克联邦
+  subculture: nordic
   color: "#3a6fc8"
   cities: [霍尔斯特, 林德瓦, 格伦堡, 艾斯港, 布兰卡, 奥德维克]
 tianshu:
   name: 天枢帝国
+  subculture: zhongyuan
   color: "#d8a826"
   culture: east
   cities: [承天, 镇远, 临川, 安澜, 景陵, 望海]
 valdoria:
   name: 瓦尔多利亚王国
+  subculture: latin
   color: "#7a4cb0"
   cities: [瓦尔兹, 圣洛林, 米拉贝尔, 托雷斯, 埃斯宾, 卡德隆]
 sarmat:
   name: 萨尔马特联盟
+  subculture: slavic
   color: "#2e9a6a"
   cities: [卡赞斯克, 伊尔格勒, 沃洛佳, 塔利姆, 别尔斯克, 乌拉格]
 helvan:
   name: 赫尔万自由邦
+  subculture: germanic
   color: "#d06a2a"
   cities: [赫尔维, 阿尔滕, 索默, 里希特, 弗雷堡, 卡尔滕]
 meridia:
   name: 梅里迪亚合众国
+  subculture: anglo
   color: "#2aa4c0"
   cities: [新阿尔比恩, 圣克莱尔, 威斯顿, 霍普威尔, 莱顿, 布莱克湾]
 khemet:
   name: 凯美特苏丹国
+  subculture: levant
   color: "#b8862e"
   cities: [阿斯旺迪, 塔尔哈, 苏梅尔, 卡赫拉, 伊斯纳, 巴德尔]
 yamato:
   name: 秋津皇国
+  subculture: dongying
   color: "#d84a7a"
   culture: east
   cities: [御影, 濑名, 高岭, 千里滨, 鹰栖, 白鹭]
 castilla:
   name: 卡斯蒂亚联合王国
+  subculture: latin
   color: "#9a2a3a"
   cities: [阿尔卡萨, 维拉诺瓦, 圣塔丽娜, 洛斯阿尔托, 梅塞塔, 帕尔马雷]
 borealis:
   name: 北极光议会国
+  subculture: nordic
   color: "#6aa0d8"
   cities: [斯瓦尔堡, 冰峡, 诺尔维特, 极光港, 雪原, 霜岭]
 taurica:
   name: 陶里卡共和国
+  subculture: slavic
   color: "#8aa832"
   cities: [塞瓦尔, 刻赤诺, 雅尔塔维, 阿卢什, 费奥多, 卡法]
 indra:
   name: 因陀罗联邦
+  subculture: tianzhu
   color: "#e0782e"
   culture: east
   cities: [阿瓦蒂, 苏拉特纳, 卡维里, 巴拉特, 恒河口, 维杰]
 lusitan:
   name: 卢西坦公国
+  subculture: latin
   color: "#3a8a8a"
   cities: [奥利斯波, 布拉卡拉, 科尼姆, 埃武拉, 斯卡拉比, 塔维拉]
 zarovia:
   name: 扎罗维亚人民国
+  subculture: slavic
   color: "#a83838"
   cities: [扎罗格勒, 斯塔林诺, 克拉斯纳, 波别达, 新顿涅, 伏尔加斯克]
 albion:
   name: 阿尔比恩王国
+  subculture: anglo
   color: "#2a4a8a"
   cities: [伦迪尼, 约维克, 卡迪夫, 埃博拉昆, 多佛林, 温彻斯]
 pacifica:
   name: 太平洋诸岛联邦
+  subculture: nanyang
   color: "#2ab0a0"
   culture: east
   cities: [珊瑚城, 帕劳纳, 马卢库, 塔希塔, 萨摩, 斐济纳]
 anatolia:
   name: 安纳托利亚帝国
+  subculture: levant
   color: "#b04a8a"
   cities: [君士坦, 安卡里, 伊兹米, 科尼亚, 布尔萨, 特拉布]
 dravid:
   name: 德拉维达邦联
+  subculture: tianzhu
   color: "#c0a040"
   culture: east
   cities: [马杜拉, 坦焦尔, 卡纳提, 维杰亚, 科钦纳, 塔米尔]
 patagon:
   name: 巴塔哥尼亚共和国
+  subculture: latin
   color: "#5a7ac0"
   cities: [新圣地, 火地港, 巴里洛, 门多萨, 科尔多, 罗萨里]
 scythia:
   name: 斯基泰汗国
+  subculture: xiyu
   color: "#8a6a3a"
   culture: east
   cities: [萨莱, 奥特拉尔, 布哈兰, 撒马尔, 塔拉斯, 怛罗斯]
 avalon:
   name: 阿瓦隆神圣同盟
+  subculture: anglo
   color: "#9a8ad8"
   cities: [卡美洛, 廷塔杰, 格拉斯顿, 莱昂尼斯, 阿斯托拉, 洛格雷]
 nubia:
   name: 努比亚联合国
+  subculture: levant
   color: "#6a9a3a"
   cities: [麦罗埃, 纳帕塔, 克尔玛, 阿克苏, 栋古拉, 法拉斯]
 siam:
   name: 暹逻王国
+  subculture: nanyang
   color: "#d8c040"
   culture: east
   cities: [阿瑜陀, 素可泰, 清迈纳, 华富里, 彭世洛, 宋卡]

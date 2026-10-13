@@ -268,9 +268,19 @@ class NationTemplate(_Strict):
     name: str
     color: str
     cities: list[str] = Field(min_length=1)
-    culture: str = "west"  # 名字系列：names.yaml 里的键（east / west）
+    culture: str = "west"  # 名字系列：names.yaml 里的键（east / west），也是文化大类
+    subculture: str | None = None  # 文化小类：cultures.yaml 里的键
 
     check_color = field_validator("color")(_check_color)
+
+
+class CultureType(_Strict):
+    """文化小类：属于哪个大类（east 东方 / west 西方），名字库里哪些国名属于它。"""
+
+    id: str
+    name: str
+    family: str
+    nations: list[str] = []
 
 
 class NamePool(_Strict):
@@ -495,6 +505,7 @@ class Ruleset(_Strict):
     buildings: dict[str, BuildingType] = {}
     nations: dict[str, NationTemplate] = {}
     names: dict[str, NamePool] = {}  # 名字库：系列 → 国名、城市名、人名
+    cultures: dict[str, CultureType] = {}  # 文化小类（大类东方 / 西方），影响外交关系
     industry: IndustryConfig = IndustryConfig()
     eras: list[Era] = []  # 时代（科技的 era 指向这里）
     techs: dict[str, TechType] = {}
@@ -561,6 +572,16 @@ class Ruleset(_Strict):
             known("单位", f"单位 {u.id!r} 的 damage_vs_types", list(u.damage_vs_types), self.units)
             for m in u.modifiers:
                 known("地形", f"单位 {u.id!r} 的修正器", m.when.terrain_in or [], self.terrain)
+        for tpl in self.nations.values():
+            if tpl.subculture is not None:
+                culture = self.cultures.get(tpl.subculture)
+                if culture is None:
+                    raise ValueError(f"国家模板 {tpl.id!r} 的文化 {tpl.subculture!r} 不存在")
+                if culture.family != tpl.culture:
+                    raise ValueError(
+                        f"国家模板 {tpl.id!r}：文化 {tpl.subculture!r} 属于 {culture.family}，"
+                        f"和名字系列 {tpl.culture!r} 不一致"
+                    )
         for b in self.buildings.values():
             owner = f"建筑 {b.id!r}"
             known("地形", owner, b.allowed_terrain, self.terrain)

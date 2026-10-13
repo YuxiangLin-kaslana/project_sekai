@@ -147,19 +147,22 @@ def new_game(world: World, rules: Ruleset, tuning: dict | None = None) -> GameSt
     grid.facility[:] = 0
     state = GameState(turn=1, seed=world.params.seed, ruleset_id=rules.id, grid=grid)
 
+    # 国家：模板和名字库的国名按种子洗牌后取（换种子就换一批国家、配色），见 engine/systems/names.py
+    from engine.systems.culture import subculture_for
     from engine.systems.names import nation_name, pick_nations
     from engine.systems.techs import start_techs
 
-    # 国家：模板和名字库的国名按种子洗牌后取（换种子就换一批国家、配色），见 engine/systems/names.py
     for pick in pick_nations(rules, state.seed, len(world.starts)):
         nid = state.new_id()
+        name = pick["name"] or nation_name(state, rules, pick["culture"])
         state.nations[nid] = Nation(
             id=nid,
-            name=pick["name"] or nation_name(state, rules, pick["culture"]),
+            name=name,
             color=pick["color"],
             template=pick["template"],
             gold=rules.start.gold * grid.tuning.get("start_gold", 100) // 100,
             culture=pick["culture"],
+            subculture=subculture_for(rules, name, pick["culture"]),  # 文化小类（影响外交）
             techs=start_techs(rules) if rules.techs else None,  # 开局科技
         )
 
