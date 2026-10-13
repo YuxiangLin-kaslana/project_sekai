@@ -46,6 +46,8 @@ APPROACH_SHARE = (
 APPROACH_TARGETS = 4  # 每次最多细算几个目标
 ARROW_REACH = 12  # 进攻箭头只画离目标城这么近（× 地图尺度的平方根）的战线段
 DEFENSIVE_SCORE = 20  # 防守时只打这么划算以上的（或者能击杀）
+# 积极防御：防守时先走再打的（血量下限 %, 打分下限），同进攻一样只要不亏就打（出发格仍不离开防线位置）
+ACTIVE_DEFENSE = (40, 0)
 MAIN_WEIGHT = 2.5  # 主攻方向分兵的份额加倍（集中兵力在一处突破，其余地段薄守）
 MAIN_OFFENSE = 1.0  # 主攻方向兵力和对面相当就进攻（别的地段要 OFFENSE 倍）
 CAP_PER_ENEMY = 1.5  # 每段最多放 LINE_STACK × 格数 + 对面敌军数 × 这么多（主攻方向再 ×1.5）；多出来的留作机动兵力
@@ -790,9 +792,15 @@ def approach_budget(ctx, nid) -> int:
     return ai["approach_budget"]
 
 
+def _defensive_bar(ctx, unit) -> tuple[int, int]:
+    """防守姿态下先走再打的门槛（血量下限 %, 打分下限）：积极防御，划算就打，不坐等敌军整条线压上来
+    （对照实验里被动防守的地段会被整片吃掉）。出发格仍要在本单位战线位置 1 格内，不被引出防线。"""
+    return ACTIVE_DEFENSE
+
+
 def approach_attack(ctx, unit, *, offensive: bool, reposition: bool = False) -> bool:
     """文明 6 式先走再打：在本回合走得到、还剩攻击要的移动力的格子里，挑一个能打到划算目标的位置，
-    走过去再攻击（攻击用掉剩下的移动力）。进攻时只要不亏就打，防守时只打能击杀的或很划算的。
+    走过去再攻击（攻击用掉剩下的移动力）。只要不亏就打；防守时出发格不离开本单位的战线位置（_defensive_bar）。
     reposition：贴着敌军的远程部队先往后挪到贴得少的格子再开火（射程内的目标也算）。"""
     R = _r()
     s, rules, g = ctx.state, ctx.rules, ctx.state.grid
@@ -801,7 +809,8 @@ def approach_attack(ctx, unit, *, offensive: bool, reposition: bool = False) -> 
         return False
     if unit.engaged_turn == s.turn or combat.lock_reason(s, rules, unit):
         return False
-    if R.health(rules, unit) < (40 if offensive else 60):
+    floor, bar = (40, 0) if offensive else _defensive_bar(ctx, unit)
+    if R.health(rules, unit) < floor:
         return False
     reach = combat.attack_range(rules, unit, g)
     moves = movement.unit_moves(g, rules.units[unit.type])
@@ -878,7 +887,7 @@ def approach_attack(ctx, unit, *, offensive: bool, reposition: bool = False) -> 
         kill = info["damage"] >= max(1, left)
         if loss >= unit.hp and not kill:
             continue
-        weight = 1.2 / math.sqrt(R._superiority(ctx, unit.nation, victim.nation))
+        weight = R._loss_weight(ctx, unit, victim.nation)
         score = info["damage"] - loss * weight + (60 if kill else 0)
         if info.get("capture") or (isinstance(victim, City) and R._hp(ctx, victim) == 0):
             score += 200
@@ -889,7 +898,7 @@ def approach_attack(ctx, unit, *, offensive: bool, reposition: bool = False) -> 
         score += R.learned_bias(
             s, rules, unit.nation, unit.type, isinstance(victim, City), info.get("modifiers")
         )
-        if not offensive and not kill and score < DEFENSIVE_SCORE:
+        if not offensive and not kill and score < bar:
             continue
         if score < 0 and loss > 0:
             continue

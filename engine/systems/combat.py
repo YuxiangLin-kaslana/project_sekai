@@ -1330,6 +1330,13 @@ def _execute(ctx: StepContext, order) -> None:
     tile = s.grid.idx(*order.to)
     # 先移动后攻击（文明 6 式）：这时部队已经走完，按走到的位置和剩下的移动力结算（lock_reason）
     info, problem = preview(s, rules, actor, tile)
+    for alt in getattr(order, "alternates", None) or () if problem else ():
+        # 原目标打不了（走开了、够不着）：按顺序改打备选目标里第一个打得了的
+        other = s.grid.idx(*alt)
+        alt_info, alt_problem = preview(s, rules, actor, other)
+        if alt_problem is None:
+            tile, info, problem = other, alt_info, None
+            break
     if problem:
         if automatic_order:
             ctx.log.add(

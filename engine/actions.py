@@ -129,6 +129,9 @@ class Attack(_Order):
     type: Literal["attack"] = "attack"
     unit: str
     to: tuple[int, int]
+    # 备选目标：结算时 to 已经打不了（目标走开了、够不着），按顺序改打第一个打得了的（各国同时行动，
+    # 攻击在双方移动之后结算）
+    alternates: list[tuple[int, int]] = []
 
 
 class Patrol(_Order):

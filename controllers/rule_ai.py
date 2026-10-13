@@ -454,7 +454,7 @@ def _facility_kind(ctx, tile, airfield) -> str:
     return "other"
 
 
-def attack_choice(ctx, actor, *, only_static=False):
+def attack_choice(ctx, actor, *, only_static=False, ranked=False):
     """在射程内挑攻击目标（返回格子）：攻击收益（伤害、击杀、集火、占城……）加上偏好加分（_priority：
     对自己有威胁的敌人、海上的敌方陆军；轰炸机 军团 → 机场 → 城市 → 重要资源 → 部队 → 港口），挑总分最高的。
     集火：已有其他单位打算打的目标累计伤害，能凑够击杀的加分，已经会被打死的不再浪费火力。"""
@@ -533,7 +533,7 @@ def attack_choice(ctx, actor, *, only_static=False):
         if loss >= actor.hp and not kill or info.get("flak") and not info["damage"]:
             continue
         # 兵力占优时损失按优势的平方根打折：人多的一方愿意拿交换比换进度，弱的一方仍然谨慎
-        weight = 1.2 / math.sqrt(_superiority(ctx, actor.nation, target.nation))
+        weight = _loss_weight(ctx, actor, target.nation)
         score = info["damage"] - loss * weight
         if kill:
             score += 60
@@ -569,6 +569,8 @@ def attack_choice(ctx, actor, *, only_static=False):
             )
         if score >= 0 or loss == 0:
             best.append((-score, tile, info, target))
+    if ranked:
+        return [(tile, info, target) for _, tile, info, target in sorted(best, key=lambda b: b[:2])]
     if not best:
         return None
     _, tile, info, target = min(best, key=lambda b: b[:2])
@@ -4333,6 +4335,14 @@ def _resting(ctx, unit) -> bool:
     return unit.ai_goal.startswith(REST_GOAL) and health(ctx.rules, unit) < REST_TARGET
 
 
+LOSS_WEIGHT = 1.2  # 进攻算账：挨的反击按这么多倍算（兵力占优时按优势的平方根打折）
+
+
+def _loss_weight(ctx, actor, enemy) -> float:
+    """进攻时自己损失的权重：LOSS_WEIGHT ÷ √兵力优势（人多的一方愿意拿交换比换进度，弱的一方仍然谨慎）。"""
+    return LOSS_WEIGHT / math.sqrt(_superiority(ctx, actor.nation, enemy))
+
+
 def _pull_back(ctx, unit) -> bool:
     """远程部队贴着敌军（下回合会挨近战）：先挪开再开火。"""
     from controllers import frontline
@@ -5121,6 +5131,37 @@ def resolve_attacks(ctx):
     ai["intents"] = []
 
 
+ALTERNATES = 2  # 攻击指令带几个备选目标
+
+
+def _alternates(ctx, actor, tile) -> list[int]:
+    """攻击指令的备选目标：从走到的位置看，原目标之外打得着、划算的目标（按 attack_choice 的打分排好）。
+    结算时原目标走开了就改打它们（各国同时行动，残血的敌军常常撤走）。"""
+    if not isinstance(actor, Unit):
+        return []
+    spot = _ai(ctx).get("approach", {}).get(actor.id)
+    if spot is None:
+        ranked = attack_choice(ctx, actor, ranked=True) or []
+    else:
+        # 先走再打的部队规划时还没动（只记了目的地）：临时放到出发格上挑，挑完挪回（同 combat.preview_from）
+        s = ctx.state
+        old = (actor.tile, actor.moves_left, actor.road_credit, actor.facing, actor.fortified)
+        destination = actor.destination
+        try:
+            if spot[0] != actor.tile:
+                s.move_unit(actor, spot[0])
+                actor.fortified = False
+            actor.moves_left, actor.road_credit = divmod(spot[1], MOVE_STEPS)
+            actor.destination = None
+            ranked = attack_choice(ctx, actor, ranked=True) or []
+        finally:
+            if actor.tile != old[0]:
+                s.move_unit(actor, old[0])
+            actor.moves_left, actor.road_credit, actor.facing, actor.fortified = old[1:]
+            actor.destination = destination
+    return [t for t, _, _ in ranked if t != tile][:ALTERNATES]
+
+
 def _submit(ctx, actor, tile, reason):
     s = ctx.state
     if isinstance(actor, City):
@@ -5142,6 +5183,7 @@ def _submit(ctx, actor, tile, reason):
                 issuer=ref("nation", actor.nation),
                 unit=ref("unit", actor.id),
                 to=s.grid.col_row(tile),
+                alternates=[s.grid.col_row(t) for t in _alternates(ctx, actor, tile)],
             ),
             reason,
         )
@@ -5184,7 +5226,7 @@ def _assault_sweep(ctx):
                     v.fortified = fortified
                 if problem:
                     continue
-                weight = 1.2 / math.sqrt(_superiority(ctx, u.nation, defenders[0].nation))
+                weight = _loss_weight(ctx, u, defenders[0].nation)
                 score = info["damage"] - info["retaliation"] * weight
                 if score >= 0:
                     options.append((-score, u.id, u))
