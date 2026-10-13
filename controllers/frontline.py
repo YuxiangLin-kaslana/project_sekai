@@ -728,6 +728,30 @@ def _advance(ctx, unit, slot, target) -> bool:
 CUT_WEIGHT = 0.5  # 先走再打的出发格能切断敌军退路（穿插价值）时，攻击打分加这么多倍的穿插价值
 
 
+def _hostile(ctx, nid):
+    """本回合 nid 可能打得到的格子（R._occupied 里有交战国城市或部队的）及其轴向坐标 (格子, q, r)，
+    先走再打时向量化算距离用。规划时只有本国部队在动，敌占格不会变。"""
+    R = _r()
+    cache = R._ai(ctx).setdefault("hostile", {})
+    hit = cache.get(nid)
+    if hit is None:
+        s, g = ctx.state, ctx.state.grid
+        found = []
+        for t in R._occupied(ctx):
+            city = s.city_at(t)
+            if (city is not None and at_war(s, city.nation, nid)) or any(
+                at_war(s, u.nation, nid) for u in s.units_at(t)
+            ):
+                found.append(t)
+        tiles = np.array(found, dtype=np.int64)
+        hit = cache[nid] = (
+            tiles,
+            g.axial_q[tiles].astype(np.int64),
+            g.axial_r[tiles].astype(np.int64),
+        )
+    return hit
+
+
 def approach_attack(ctx, unit, *, offensive: bool) -> bool:
     """文明 6 式先走再打：在本回合走得到、还剩攻击要的移动力的格子里，挑一个能打到划算目标的位置，
     走过去再攻击（攻击用掉剩下的移动力）。进攻时只要不亏就打，防守时只打能击杀的或很划算的。"""
@@ -742,14 +766,20 @@ def approach_attack(ctx, unit, *, offensive: bool) -> bool:
         return False
     reach = combat.attack_range(rules, unit, g)
     moves = movement.unit_moves(g, rules.units[unit.type])
-    near = [
-        t
-        for t in R._occupied(ctx)
-        if g.distance(unit.tile, t) <= moves + reach and g.distance(unit.tile, t) > reach
-    ]
+    tiles, q, r = _hostile(ctx, unit.nation)
+    if not len(tiles):
+        return False
+    # 到各个敌占格的六角距离（同 HexGrid.distance，一次算完；大兵团时逐个算是头号热点）
+    dr = int(g.axial_r[unit.tile]) - r
+    x = 2 * (int(g.axial_q[unit.tile]) - q) + dr
+    if g.wrap_x:
+        x = (x + g.width) % (2 * g.width) - g.width
+    dr, x = np.abs(dr), np.abs(x)
+    dist = np.where(x <= dr, dr, (x + dr) >> 1)
+    keep = (dist > reach) & (dist <= moves + reach)
     foes = []
     planned = ai["damage"]
-    for t in near:
+    for t, d in zip(tiles[keep].tolist(), dist[keep].tolist()):
         victim = combat.target_at(s, rules, unit, t)
         if victim is None or not R.stays(ctx, t, unit):
             continue
@@ -761,7 +791,7 @@ def approach_attack(ctx, unit, *, offensive: bool) -> bool:
         bonus = R._priority(
             ctx, unit, victim
         )  # 对自己有威胁的、海上的敌人加分（见 rule_ai._priority）
-        foes.append((left - 2 * bonus, left, g.distance(unit.tile, t), t, victim))
+        foes.append((left - 2 * bonus, left, d, t, victim))
     if not foes:
         return False
     ai["approach_used"] = ai.get("approach_used", 0) + 1
