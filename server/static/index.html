@@ -975,7 +975,7 @@ const EVENT_KIND = {
   facility_bombed: 'war', fort_damaged: 'war', fort_destroyed: 'war', unit_captured: 'war', nation_eliminated: 'alert', base_fire: 'war', district_captured: 'war',
   partisans: 'war', civil_war: 'alert', surrendered: 'alert', city_revolt: 'alert', directive_set: 'alert', general_defected: 'alert', coalition: 'alert',
   tech_researched: 'build', road_built: 'build',
-  war_declared: 'alert', peace_signed: 'alert', alliance_formed: 'alert', alliance_broken: 'alert', diplomatic_offer: 'alert',
+  units_expelled: 'alert', war_declared: 'alert', peace_signed: 'alert', alliance_formed: 'alert', alliance_broken: 'alert', diplomatic_offer: 'alert',
 };
 function logHtml() {
   return logLines.filter((l) => logKind === "all" || l.head || l.bad || (logKind === "other" ? !l.kind : l.kind === logKind)).map((l) => `<div class="${l.bad ? 'bad' : l.head ? 'head' : l.kind ?? ''}">${esc(l.text)}</div>`).join('');
@@ -1020,6 +1020,7 @@ const EVENT_TEXT = {
   facility_built: (e) => `${game.G.rules.buildings[e.facility].name} 竣工`,
   fort_damaged: (e) => `${game.nationOf(e.nation)?.name ?? ''}的堡垒挨打 −${e.damage}（剩 ${e.hp}）`,
   fort_destroyed: (e) => `${game.nationOf(e.nation)?.name ?? ''}的堡垒被摧毁`,
+  units_expelled: (e) => `停战：${game.nationOf(e.nation)?.name ?? ''} ${e.count} 支部队撤出${game.nationOf(e.from)?.name ?? '对方'}领土，回到本国`,
   city_grew: (e) => `${cityName(e.city)} 人口增长到 ${e.population}`,
   famine: (e) => `${cityName(e.city)} 饥荒，人口降到 ${e.population}`,
   borders_grew: (e) => `${cityName(e.city)} 辖区扩大 ${e.tiles.length} 格`,

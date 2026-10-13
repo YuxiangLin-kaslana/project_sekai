@@ -3242,6 +3242,10 @@ export function playEvents(events, before) {
       const duration = Math.min(1500, 320 + e.path.length*140) * k;
       G.effects.push({type:'movement', path:e.path, unit, count,
         start:now+(combats.some(c=>c.attacker===e.unit)?650*k:0), duration});
+    } else if (e.type === 'unit_expelled' && e.source != null && e.source !== e.tile) {
+      // 停战遣返：部队直接送回本国，画一段较快的移动
+      const unit = G.units.get(e.unit);
+      if (unit) G.effects.push({type:'movement', path:[e.source, e.tile], unit, count:1, start:now, duration:700*k});
     } else if ((e.type === 'air_sortie' || e.type === 'air_returned') && e.source != null && e.source !== e.tile) {
       // 飞机起飞飞往目标上空 / 返航降落：飞机牌沿直线飞过去
       const unit = old.get(e.unit) ?? G.units.get(e.unit);
