@@ -752,9 +752,28 @@ def _hostile(ctx, nid):
     return hit
 
 
-def approach_attack(ctx, unit, *, offensive: bool) -> bool:
+EXPOSE = 30  # 远程部队挑出发格：每贴着一格敌军扣这么多（贴着敌军开完炮，下回合就挨近战反扑）
+
+
+def exposure(ctx, nid, tile) -> int:
+    """tile 四周有几格是交战国的部队 / 城市（远程部队站在这里会挨近战）。"""
+    R = _r()
+    cache = R._ai(ctx).setdefault("hostile_set", {})
+    if nid not in cache:
+        cache[nid] = set(_hostile(ctx, nid)[0].tolist())
+    hostile = cache[nid]
+    return sum(1 for n in ctx.state.grid.neighbors_of(tile) if n in hostile)
+
+
+def _expose_weight(rules, unit) -> int:
+    """出发格贴着敌军的扣分：远程（炮兵）怕近战，近战部队本来就要贴上去打，不扣。"""
+    return EXPOSE if _r().is_siege(rules, unit) else 0
+
+
+def approach_attack(ctx, unit, *, offensive: bool, reposition: bool = False) -> bool:
     """文明 6 式先走再打：在本回合走得到、还剩攻击要的移动力的格子里，挑一个能打到划算目标的位置，
-    走过去再攻击（攻击用掉剩下的移动力）。进攻时只要不亏就打，防守时只打能击杀的或很划算的。"""
+    走过去再攻击（攻击用掉剩下的移动力）。进攻时只要不亏就打，防守时只打能击杀的或很划算的。
+    reposition：贴着敌军的远程部队先往后挪到贴得少的格子再开火（射程内的目标也算）。"""
     R = _r()
     s, rules, g = ctx.state, ctx.rules, ctx.state.grid
     ai = R._ai(ctx)
@@ -776,7 +795,7 @@ def approach_attack(ctx, unit, *, offensive: bool) -> bool:
         x = (x + g.width) % (2 * g.width) - g.width
     dr, x = np.abs(dr), np.abs(x)
     dist = np.where(x <= dr, dr, (x + dr) >> 1)
-    keep = (dist > reach) & (dist <= moves + reach)
+    keep = (dist <= moves + reach) & (reposition | (dist > reach))
     foes = []
     planned = ai["damage"]
     for t, d in zip(tiles[keep].tolist(), dist[keep].tolist()):
@@ -798,6 +817,8 @@ def approach_attack(ctx, unit, *, offensive: bool) -> bool:
     best_map, parents = movement.movement_map(s, rules, unit)
     need = movement.attack_steps(rules, unit)
     slot = ai.get("fslot", {}).get(unit.id)
+    expose = _expose_weight(rules, unit)
+    exposed = exposure(ctx, unit.nation, unit.tile) if reposition else 0
     spots = [
         t
         for t, left in best_map.items()
@@ -806,6 +827,7 @@ def approach_attack(ctx, unit, *, offensive: bool) -> bool:
         and movement.has_room(s, rules, unit, t)
         # 防守：只打“打完不会离开防线位置”的仗（出发格离本单位的战线位置不超过 1 格），不被敌人引出去
         and (offensive or slot is None or g.distance(t, slot) <= 1)
+        and (not reposition or exposure(ctx, unit.nation, t) < exposed)
     ]
     if not spots:
         return False
@@ -819,9 +841,15 @@ def approach_attack(ctx, unit, *, offensive: bool) -> bool:
         if not options:
             continue
         # 出发格：能切断敌军退路的、剩的移动力多、地形好守、不在敌城射程里的优先
+        # 远程部队还要躲开贴着敌军的格子（EXPOSE）
         spot = max(
             options,
-            key=lambda sp: (cut.get(sp, 0), best_map[sp], R._ground(ctx, sp, tile), -sp),
+            key=lambda sp: (
+                cut.get(sp, 0) - (expose * exposure(ctx, unit.nation, sp) if expose else 0),
+                best_map[sp],
+                R._ground(ctx, sp, tile),
+                -sp,
+            ),
         )
         info, problem = combat.preview_from(s, rules, unit, spot, best_map[spot], tile)
         if problem or info is None or info.get("facility_strike"):

@@ -4333,6 +4333,19 @@ def _resting(ctx, unit) -> bool:
     return unit.ai_goal.startswith(REST_GOAL) and health(ctx.rules, unit) < REST_TARGET
 
 
+def _pull_back(ctx, unit) -> bool:
+    """远程部队贴着敌军（下回合会挨近战）：先挪开再开火。"""
+    from controllers import frontline
+
+    return frontline.exposure(ctx, unit.nation, unit.tile) > 0
+
+
+def _ranged_first(rules, u) -> bool:
+    """规划时远程陆军先挑目标：炮火的预计伤害记进集火账上，近战再看着补刀（结算也是远程先）。"""
+    ut = rules.units[u.type]
+    return ut.domain == "land" and ut.ranged_strength is not None
+
+
 def _rest(ctx, unit):
     """伤兵休整：原地驻守、往后退到敌军下回合够不着的地方驻守（野外回血 healing.field%），或回本国城市
     （healing.city%），按“路上花的回合 + 回到 REST_TARGET 要的回合 + 危险”比较，挑恢复最快的。
@@ -4842,6 +4855,14 @@ def decide_unit(ctx, unit, plan, guards, claimed):
         return
     if "carrier" in ut.tags and _carrier_exposed(ctx, unit) and _carrier(ctx, unit, plan, None):
         return  # 航母防御弱：敌舰下回合就打得到，先撤再说（不在这里开火恋战）
+    if is_siege(rules, unit) and ut.domain == "land" and _pull_back(ctx, unit):
+        from controllers import frontline
+
+        # 贴着敌军的炮兵：先往后挪开再开火，不留在原地挨近战
+        if frontline.approach_attack(
+            ctx, unit, offensive=plan.get("stance") == "进攻", reposition=True
+        ):
+            return
     # 只挑本回合不会离开的目标：会走开的目标打不着，这回合还白白耗在原地；挑不到就照常行军
     choice = attack_choice(ctx, unit, only_static=True)
     if choice is not None:
@@ -5450,9 +5471,10 @@ def nation_turn(ctx, job):
         if naval.afloat(s, rules, u):
             return 0
         if rules.units[u.type].domain != "sea":
-            return 1
+            return 1 if _ranged_first(rules, u) else 2
+        # 舰船最后
         # 航母先定这回合去哪，作战群的护航舰再跟上去
-        return 3 if u.id in _ai(ctx).get("cv_escort", {}) else 2
+        return 4 if u.id in _ai(ctx).get("cv_escort", {}) else 3
 
     for uid in sorted(job["active"], key=order):
         u = s.units.get(uid)
