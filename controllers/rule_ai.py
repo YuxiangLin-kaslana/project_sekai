@@ -4288,6 +4288,122 @@ def _retreat(ctx, unit, reason):
     )
 
 
+REST_GOAL = "伤兵休整"  # 休整中的部队的 ai_goal 前缀（下回合接着休整，回到 REST_TARGET 再上前线）
+REST_TARGET = 70  # 伤兵休整到这么多（满血的百分比）再回前线
+REST_RISK = 8  # 休整地点在敌军下回合够得着的范围里：越往里越不划算，最深处按这么多回合的代价算
+REST_SEARCH = 3  # 往后找安全格最多找到“敌军威胁半径 × 这么多”步
+
+
+def _danger(ctx, nid):
+    """（每格离最近的敌方地面战斗单位几步，敌军威胁半径）：威胁半径 = 敌方陆军一回合走的步数 + 射程，
+    敌城的射程也折算进来（离敌城 CITY_RANGE 格内按威胁半径边缘算）。按回合缓存在 AI 草稿里。"""
+    cache = _ai(ctx).setdefault("danger", {})
+    if nid not in cache:
+        s, rules, g = ctx.state, ctx.rules, ctx.state.grid
+        tiles, reach = set(), 1
+        for u in s.units.values():
+            ut = rules.units[u.type]
+            if (
+                ut.category == "military"
+                and ut.domain == "land"
+                and u.layer == "surface"
+                and at_war(s, u.nation, nid)
+                and not naval.afloat(s, rules, u)
+            ):
+                tiles.add(u.tile)
+                reach = max(reach, movement.unit_moves(g, ut) + combat.attack_range(rules, u, g))
+        limit = REST_SEARCH * reach + 2
+        land = ~g.is_water
+        src = np.zeros(g.size, dtype=np.bool_)
+        if tiles:
+            src[np.fromiter(tiles, dtype=np.int64)] = True
+        field = kernels.masked_bfs(src, land, g.neighbors, limit).astype(np.int64)
+        towns = [c.tile for c in s.cities.values() if at_war(s, c.nation, nid)]
+        if towns:
+            near = _near_field(g, set(towns), CITY_RANGE).astype(np.int64)
+            field = np.minimum(
+                field, np.where(near <= CITY_RANGE, reach - CITY_RANGE + near, 1 << 20)
+            )
+        cache[nid] = (field, reach)
+    return cache[nid]
+
+
+def _resting(ctx, unit) -> bool:
+    """休整中、还没回到 REST_TARGET 的伤兵（上回合起在后方驻守回血的）。"""
+    return unit.ai_goal.startswith(REST_GOAL) and health(ctx.rules, unit) < REST_TARGET
+
+
+def _rest(ctx, unit):
+    """伤兵休整：原地驻守、往后退到敌军下回合够不着的地方驻守（野外回血 healing.field%），或回本国城市
+    （healing.city%），按“路上花的回合 + 回到 REST_TARGET 要的回合 + 危险”比较，挑恢复最快的。
+    大会战时前线离本国城市很远，不再一律走几十格回城（整条战线跟着塌掉）。"""
+    s, rules, g = ctx.state, ctx.rules, ctx.state.grid
+    ut = rules.units[unit.type]
+    heal = rules.healing
+    need = max(1, REST_TARGET - health(rules, unit))
+    moves = max(1, movement.unit_moves(g, ut))
+    danger, reach = _danger(ctx, unit.nation)
+
+    def risk(t):
+        return REST_RISK * max(0, reach + 1 - int(danger[t])) / (reach + 1)
+
+    comps = geography(s, rules)["land_components"]
+    home = comps[unit.tile]
+    here = risk(unit.tile)
+    # (预计回合数, 种类, 目标格)：原地驻守 / 往后撤到安全处驻守 / 回城
+    options = [(need / max(1, heal.field) + here, 0, unit.tile)]
+    if here > 0:
+        back = max(0, reach + 1 - int(danger[unit.tile]))
+        options.append((back / moves + 1 + need / max(1, heal.field), 1, None))
+    for c in s.nation_cities(unit.nation):
+        if comps[c.tile] == home:
+            d = g.distance(unit.tile, c.tile)
+            options.append((d / moves + need / max(1, heal.city) + risk(c.tile), 2, c.tile))
+    _, kind, goal = min(options, key=lambda o: (o[0], o[1], o[2] or 0))
+    why = f"{REST_GOAL}：{('原地驻守', '撤到后方驻守', '回本国城市')[kind]}恢复生命"
+    if kind == 1 and _fall_back(ctx, unit, danger, why):
+        return
+    if kind == 2 and goal != unit.tile and march(ctx, unit, goal, why):
+        return
+    if not unit.fortified:
+        emit(ctx, unit, Fortify(issuer=ref("nation", unit.nation), unit=ref("unit", unit.id)), why)
+    else:
+        unit.ai_goal = why
+
+
+def _fall_back(ctx, unit, danger, why) -> bool:
+    """往后撤：本回合走得到、站得下的格子里挑离敌军最远的（同样远挑走得少的、编号小的），走过去。"""
+    s, rules, g = ctx.state, ctx.rules, ctx.state.grid
+    if unit.moves_left <= 0:
+        return False
+    best, parents = movement.movement_map(s, rules, unit)
+    spots = [
+        t
+        for t, left in best.items()
+        if t != unit.tile
+        and danger[t] > danger[unit.tile]
+        and movement.has_room(s, rules, unit, t)
+        and not naval.at_sea(s, t)
+    ]
+    if not spots:
+        return False
+    spot = max(spots, key=lambda t: (int(danger[t]), best[t], -t))
+    path = [spot]
+    while path[-1] != unit.tile:
+        path.append(parents[path[-1]])
+    path.reverse()
+    ctx.planned_routes[unit.id] = path
+    if not emit(
+        ctx,
+        unit,
+        Move(issuer=ref("nation", unit.nation), unit=ref("unit", unit.id), to=g.col_row(spot)),
+        why,
+    ):
+        ctx.planned_routes.pop(unit.id, None)
+        return False
+    return True
+
+
 def _siege(ctx, unit, plan, target):
     """围城中的野战军：远程进射程轰击，近战在城外待命、城防低时贴城、打空时占领。"""
     rules, g = ctx.rules, ctx.state.grid
@@ -4693,8 +4809,11 @@ def decide_unit(ctx, unit, plan, guards, claimed):
     )
     if _escape(ctx, unit):
         return
-    if health(rules, unit) < (SIEGE_WOUNDED if in_city_range else WOUNDED):
-        _retreat(ctx, unit, "伤兵撤向本国城市休整")
+    if health(rules, unit) < (SIEGE_WOUNDED if in_city_range else WOUNDED) or _resting(ctx, unit):
+        if ut.domain == "land":
+            _rest(ctx, unit)  # 陆军：原地 / 后方 / 回城，挑恢复最快的
+        else:
+            _retreat(ctx, unit, "伤兵撤向本国城市休整")  # 舰船回港、飞机回机场
         return
     if ut.domain == "sea" and _escort(ctx, unit):
         return  # 护航：和下了海的本方部队同格
