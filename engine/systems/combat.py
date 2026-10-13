@@ -573,9 +573,17 @@ def preview(state, rules, actor, tile) -> tuple[dict | None, str | None]:
     origin = actor.sortie["base"] if overhead else actor.tile
     if overhead and actor.sortie["stage"] == "outbound" and tile != actor.tile:
         return None, "轰炸机只能轰炸飞到的这一格"
-    if (tile == actor.tile and not overhead) or state.grid.distance(origin, tile) > attack_range(
-        rules, actor, state.grid
-    ):
+    out_of_range = state.grid.distance(origin, tile) > attack_range(rules, actor, state.grid)
+    if out_of_range and overhead and actor.sortie["stage"] == "patrol":
+        # 巡逻中的战斗机（防空圈，engine/systems/air.py）：打防空圈（离它 PATROL_RADIUS 格以内）里的
+        # 敌机不受机场作战半径限制
+        from engine.systems.air import PATROL_RADIUS
+
+        out_of_range = not (
+            state.grid.distance(actor.tile, tile) <= PATROL_RADIUS
+            and any(_war(state, u.nation, actor.nation) for u in state.units_at(tile, "air"))
+        )
+    if (tile == actor.tile and not overhead) or out_of_range:
         return None, "超出攻击范围" if not overhead else "超出机场的作战半径"
     kind = attack_kind(rules, actor)
     if kind == "ranged" and line_blocked(state, rules, actor, actor.tile, tile):

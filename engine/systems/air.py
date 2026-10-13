@@ -152,9 +152,10 @@ def fly(ctx, plane, dst) -> bool:
 
 
 def _patrol_zone(ctx, bomber, path) -> bool:
-    """轰炸机沿 path 飞：进了敌方巡逻战斗机的防空圈（PATROL_RADIUS 格）就在那一格被拦截。返回它还在不在。"""
+    """轰炸机沿 path 飞：进了敌方巡逻战斗机的防空圈（离它 PATROL_RADIUS 格以内，不受机场作战半径限制）
+    就在那一格被拦截。返回它还在不在。"""
     from engine.actions import Attack
-    from engine.systems.combat import _execute, lock_reason
+    from engine.systems.combat import _execute, lock_reason, preview
     from engine.systems.diplomacy import at_war
 
     s, rules, g = ctx.state, ctx.rules, ctx.state.grid
@@ -184,9 +185,15 @@ def _patrol_zone(ctx, bomber, path) -> bool:
         for fighter in near:
             if fighter.id not in s.units or lock_reason(s, rules, fighter) is not None:
                 continue
+            here = bomber.tile
+            if here != t:
+                s.move_unit(bomber, t)  # 在防空圈里被截住
+            _, problem = preview(s, rules, fighter, t)
+            if problem:
+                if here != t:
+                    s.move_unit(bomber, here)
+                continue
             done.add((fighter.id, bomber.id))
-            if bomber.tile != t:
-                s.move_unit(bomber, t)  # 在防空圈边上被截住
             order = Attack(
                 issuer=ref("nation", fighter.nation), unit=ref("unit", fighter.id), to=g.col_row(t)
             )

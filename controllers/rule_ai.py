@@ -3423,8 +3423,11 @@ def _air_evacuate(ctx, unit) -> bool:
     )
 
 
-def _bomber_threat(ctx, nation, tile) -> int:
-    """够得着 tile 的交战国轰炸机（不是战斗机的飞机，按它的机场量作战半径）有几架。"""
+PATROL_RADIUS_AI = 5  # 和 engine/systems/air.PATROL_RADIUS 一致（AI 判断巡逻的防空圈有没有用）
+
+
+def _bomber_threat(ctx, nation, tile, slack=0) -> int:
+    """够得着 tile（再放宽 slack 格）的交战国轰炸机（不是战斗机的飞机，按它的机场量作战半径）有几架。"""
     from engine.systems.air import base_of, is_fighter
 
     s, rules, g = ctx.state, ctx.rules, ctx.state.grid
@@ -3434,7 +3437,7 @@ def _bomber_threat(ctx, nation, tile) -> int:
         if v.layer == "air"
         and not is_fighter(rules, v)
         and at_war(s, v.nation, nation)
-        and g.distance(base_of(v), tile) <= movement.air_radius(g, rules.units[v.type])
+        and g.distance(base_of(v), tile) <= movement.air_radius(g, rules.units[v.type]) + slack
     )
 
 
@@ -3446,6 +3449,7 @@ def _cap(ctx, unit, plan) -> bool:
 
     s, rules, g = ctx.state, ctx.rules, ctx.state.grid
     reach = movement.air_radius(g, rules.units[unit.type])
+    # 要掩护的：敌方轰炸机够得着的本方陆军（轰炸机炸的就是它们），战斗机一回合飞得到的
     tiles = [
         u.tile
         for u in s.units.values()
@@ -3453,14 +3457,19 @@ def _cap(ctx, unit, plan) -> bool:
         and is_military(rules, u)
         and rules.units[u.type].domain == "land"
         and u.layer == "surface"
-        and g.distance(u.tile, unit.tile) <= reach
+        and g.distance(u.tile, unit.tile) <= reach + PATROL_RADIUS
+        and _bomber_threat(ctx, unit.nation, u.tile)
     ]
     if not tiles:
         return False
+    # 巡逻点：战斗机飞得到的格子里，防空圈罩住最多还没人罩的受威胁部队的那一格
+    spots = {t for x in tiles for t in g.within(x, 2) if g.distance(t, unit.tile) <= reach}
     zones = _ai(ctx).setdefault("cap", [])
     covered = {x for z in zones for x in tiles if g.distance(x, z) <= PATROL_RADIUS}
+    if not spots:
+        return False
     spot = max(
-        tiles,
+        spots,
         key=lambda t: (
             sum(1 for x in tiles if x not in covered and g.distance(x, t) <= PATROL_RADIUS),
             -g.distance(t, unit.tile),
@@ -3468,7 +3477,7 @@ def _cap(ctx, unit, plan) -> bool:
         ),
     )
     fresh = sum(1 for x in tiles if x not in covered and g.distance(x, spot) <= PATROL_RADIUS)
-    threat = _bomber_threat(ctx, unit.nation, spot)
+    threat = _bomber_threat(ctx, unit.nation, spot, PATROL_RADIUS)  # 防空圈罩住的范围里有它够得着的
     if not threat or not fresh or patrol_problem(s, rules, unit, spot):
         return False
     if not emit(
@@ -4222,6 +4231,13 @@ def decide_unit(ctx, unit, plan, guards, claimed):
                 tile, info, victim = choice
                 intend_attack(ctx, unit, tile, info, victim, "战斗机留空巡逻，继续空战 / 扫射")
                 return
+            if (
+                unit.sortie.get("cap")
+                and health(rules, unit) >= WOUNDED
+                and _bomber_threat(ctx, unit.nation, unit.tile, PATROL_RADIUS_AI)
+            ):
+                unit.ai_goal = "在本方部队上空巡逻，敌方轰炸机进防空圈就拦截"
+                return  # 巡逻不用目标：敌方轰炸机还够得着就接着留空
             if combat.lock_reason(s, rules, unit) is None:
                 emit(ctx, unit, Fortify(issuer=issuer, unit=uid), "没有目标，战斗机返航降落")
             return
