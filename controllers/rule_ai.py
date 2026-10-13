@@ -138,6 +138,7 @@ SCREEN_REAR = 3  # 只抽离敌军这么多格以外的部队（不削弱第一�
 MOVE_ARROWS = 16  # 每国每回合最多记几条包抄 / 包围动作箭头
 IDLE_PERIOD = 3  # 驻守不动、附近没有外国军队的部队每这么多回合（按单位编号错开）才重新决策一次
 IDLE_RADIUS = 5  # “附近”：这么多格以内（敌军一回合走 2–4 格，加上射程）
+IDLE_SEA_RADIUS = 12  # 舰船看这么远：敌舰一回合开 6 格左右再开火（战列舰射程 4），航母等不起
 ENGAGE_RADIUS = 6  # 去目标的路被敌军挡住时，上前和这么近的敌军交战打开通道
 # 姿态与战线
 EXPANSION_TURNS = 120  # 扩张期最长这么多回合（随地图放大）
@@ -162,6 +163,10 @@ STORM_HP = 80  # 城防低于这个数，近战不等炮火直接强攻城墙
 DROP_PER_TILE = 2  # 跨海登陆：每个登陆格每回合最多认领这么多支下船部队
 AIRFIELD_MARGIN = 2  # 机场离目标至少留这么多格（别修在敌城射程里）
 CARRIER_STANDOFF = 5  # 航母停在目标城外这么远（舰载机够得着，岸上火力打不着）
+# 海边陆战支援（_shore_support）：没有靠海目标城的舰船，去打挨着本舰开得到的海面、正在和本方陆军交战的敌军。
+# 打分：离本方陆军越近越像正在打的战线（SHORE_FRONT × 距离），路越远越扣分（SHORE_TRAVEL × 距离）
+SHORE_REACH = 3  # 敌军离本舰开得到的海面这么近，舰炮、舰载机才打得着
+SHORE_FRONT, SHORE_TRAVEL = 3, 1
 # 跨海登陆
 OVERSEAS_CANDIDATES = 4  # 只细算最近的这么多座海外敌城
 OVERSEAS_STEPS = (
@@ -3580,11 +3585,80 @@ def _sea_support(ctx, unit):
     return {**f, "mode": mode, "target_city": city.id}, city
 
 
+def _naval_danger(ctx, nation, tile) -> int:
+    """tile 下一回合会被几艘交战国战舰打到（它的航程 + 射程以内）。航母防御弱，不往这种地方开。"""
+    s, rules, g = ctx.state, ctx.rules, ctx.state.grid
+    out = 0
+    for u in s.units.values():
+        ut = rules.units[u.type]
+        if (
+            u.layer != "surface"
+            or ut.domain != "sea"
+            or not is_military(rules, u)
+            or "carrier" in ut.tags
+            or not at_war(s, u.nation, nation)
+        ):
+            continue
+        if g.distance(u.tile, tile) <= movement.unit_moves(g, ut) + combat.attack_range(
+            rules, u, g
+        ):
+            out += 1
+    return out
+
+
+def _shore_target(ctx, unit):
+    """海边陆战支援的目标：挨着本舰开得到的海面（SHORE_REACH 格内）的交战国陆军里，离本方陆军近（正在打的
+    战线）、离本舰也近的那一支所在的格子。没有返回 None。"""
+    s, g = ctx.state, ctx.state.grid
+    seas = _sea_comps(ctx, unit.tile)
+    wc = geography(s, ctx.rules)["water_components"]
+    armies = _ai(ctx).get("land_armies") or []
+    mine = [t for t, n in armies if n == unit.nation]
+    if not mine:
+        return None
+    best = None
+    for t, n in armies:
+        if not at_war(s, n, unit.nation):
+            continue
+        if not any(wc[w] >= 0 and int(wc[w]) in seas for w in g.within(t, SHORE_REACH)):
+            continue
+        front = min(g.distance(t, m) for m in mine)
+        score = SHORE_FRONT * front + SHORE_TRAVEL * g.distance(unit.tile, t)
+        if best is None or (score, t) < best[:2]:
+            best = (score, t)
+    return None if best is None else best[1]
+
+
+def _shore_support(ctx, unit) -> bool:
+    """海边陆战支援：战舰开进射程炮击岸上的敌军，航母停在舰载机够得着、岸上打不着的距离（CARRIER_STANDOFF）。
+    到了射程里由攻击打分（attack_choice）接手开火。"""
+    rules, g = ctx.rules, ctx.state.grid
+    ut = rules.units[unit.type]
+    if not is_military(rules, unit) or unit.hp * 100 // ut.hp < 50:
+        return False
+    tile = _shore_target(ctx, unit)
+    if tile is None:
+        return False
+    carrier = "carrier" in ut.tags
+    if carrier and _naval_danger(ctx, unit.nation, tile):
+        return False  # 那片海敌舰下回合就打得到：航母不去（自己受威胁时 _carrier 已经退回港口）
+    stand = CARRIER_STANDOFF if carrier else combat.attack_range(rules, unit, g)
+    why = (
+        "航母开到海边的战场外海，舰载机支援陆战"
+        if carrier
+        else "开到海边的战场，炮击岸上的敌军支援陆战"
+    )
+    if g.distance(unit.tile, tile) > stand and march(ctx, unit, tile, why, stop_within=stand):
+        return True
+    _hold(ctx, unit, why)
+    return True
+
+
 def _carrier(ctx, unit, plan, target):
     """航母：开到战线目标城外海（舰载机够得着、岸上火力打不着的距离），敌舰靠近就退回港口。"""
     s, g = ctx.state, ctx.state.grid
-    threat = [t for t, n in _enemy_ships(ctx) if n != unit.nation and g.distance(t, unit.tile) <= 3]
-    if threat:
+    # 敌舰下一回合就打得到（它的航程 + 射程以内）：航母防御弱，先退回港口
+    if _naval_danger(ctx, unit.nation, unit.tile):
         ports = [c for c in s.nation_cities(unit.nation) if coastal(g, c.tile)]
         if ports:
             home = min(ports, key=lambda c: (g.distance(unit.tile, c.tile), c.id))
@@ -4307,6 +4381,12 @@ def decide_unit(ctx, unit, plan, guards, claimed):
         and _air_evacuate(ctx, unit)
     ):
         return
+    if (
+        "carrier" in ut.tags
+        and _naval_danger(ctx, unit.nation, unit.tile)
+        and _carrier(ctx, unit, plan, None)
+    ):
+        return  # 航母防御弱：敌舰下回合就打得到，先撤再说（不在这里开火恋战）
     # 只挑本回合不会离开的目标：会走开的目标打不着，这回合还白白耗在原地；挑不到就照常行军
     choice = attack_choice(ctx, unit, only_static=True)
     if choice is not None:
@@ -4358,6 +4438,8 @@ def decide_unit(ctx, unit, plan, guards, claimed):
             plan, target = support
     if ut.domain == "sea" and (_fleet(ctx, unit, plan, target) or _navy(ctx, unit, plan, target)):
         return
+    if ut.domain == "sea" and target is None and unit.corps is None and _shore_support(ctx, unit):
+        return  # 没有靠海目标城可打：支援海边正在打的陆战
     if (
         target is not None
         and ut.domain == "land"
@@ -4752,9 +4834,10 @@ def _idle(ctx, unit, armies):
         return False  # 刚交还给 AI、还没决策过的部队先决策一次
     if ut.domain == "air":
         return False
+    radius = IDLE_SEA_RADIUS if ut.domain == "sea" else IDLE_RADIUS
     return not any(
         n != unit.nation
-        for t in ctx.state.grid.within(unit.tile, IDLE_RADIUS)
+        for t in ctx.state.grid.within(unit.tile, radius)
         for n in armies.get(t, ())
     )
 

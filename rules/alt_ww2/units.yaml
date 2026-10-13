@@ -133,10 +133,10 @@ anti_air:
   name: 高射炮营
   short: 高
   strength: 6
-  anti_air: 16
+  anti_air: 22       # 原来 16：实测挡不住轰炸机（和战斗机防空圈、混编配合时才有用）
   range: 3
   moves: 3
-  cost: 115
+  cost: 100
   population: 1
   gold: 30
   upkeep: 1
