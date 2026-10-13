@@ -15,7 +15,8 @@
 这回合还能出击的；轰炸机在它机场的作战半径里）自动拦截一次——机场待命的战斗机就此起飞，算作这次出击
 的第一次攻击。每架轰炸机最多被拦截一次。
 
-降落：原基地丢了、满了，就去最近的本国机场 / 航母；哪里都降不了就坠毁。降落当回合不能再行动。
+降落：原基地丢了、满了，就去最近的本国机场 / 航母；敌方陆军已经贴着的机场排在最后（落下去就跑不掉了）；
+哪里都降不了就坠毁。降落当回合不能再行动。
 
 机场失守（stranded，占领结算和动荡结算之后）：停在地上的飞机脚下的机场不再是本国的（被敌军占领、
 所属城市陷落、分裂出去）或者机场没了：敌方陆军就站在这格上的，飞机就地投降（记进那支部队的战绩）；
@@ -284,6 +285,8 @@ def land(ctx, plane) -> None:
         if v.nation == plane.nation and rules.units[v.type].air_capacity
     ]
     options += sorted(set(bases), key=lambda t: (g.distance(plane.tile, t), t))
+    # 敌方陆军已经贴着的机场排到最后（降落占一个回合，落下去就跑不掉了）
+    options.sort(key=lambda t: _menaced(s, rules, plane.nation, t))
     for t in options:
         if is_air_base(s, rules, plane.nation, t) and has_room(s, rules, t, "air", plane.nation):
             source = plane.tile
@@ -399,6 +402,21 @@ def stranded(ctx) -> None:
             tile=target,
             reason="机场失守，紧急转场",
         )
+
+
+def _menaced(s, rules, nation, tile) -> bool:
+    """tile（机场）旁边一格以内有交战国的地表陆军。"""
+    from engine.systems.diplomacy import at_war
+
+    g = s.grid
+    return any(
+        v.nation != nation
+        and rules.units[v.type].category == "military"
+        and rules.units[v.type].domain == "land"
+        and at_war(s, v.nation, nation)
+        for n in (tile, *g.neighbors_of(tile))
+        for v in s.units_at(n, "surface")
+    )
 
 
 def _hostile(s, a, b) -> bool:

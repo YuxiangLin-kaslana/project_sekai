@@ -128,7 +128,9 @@ EXPLOIT_CAUTION = 0.4  # 侧翼暴露度（engine/systems/learning.exposure）�
 # 防穿插（plan_screens）：站在敌人的角度推演——敌方快速部队这回合够得着、站上去能切断 / 拉长我军补给线的格子，
 # 派附近不在第一线的部队去占住（保护侧翼、堵住战线缺口）。最近越常被侧击、背击、合围（暴露度越高），
 # 门槛越低、派得越多
-SCREEN_MIN = 90  # 威胁分（和穿插同样的算法）不到这么多不派兵；暴露度满时降到 SCREEN_MIN × (1 − SCREEN_LEARN)
+SCREEN_MIN = (
+    90  # 威胁分（和穿插同样的算法）不到这么多不派兵；暴露度满时降到 SCREEN_MIN × (1 − SCREEN_LEARN)
+)
 SCREEN_LEARN = 0.6  # 吃过亏才学会防：开阔地上的对照实验里，不分情况地派兵堵缺口没有可测的好处
 SCREEN_MAX = 2  # 每国每回合最多派这么多支（暴露度满时再多 SCREEN_EXTRA 支）
 SCREEN_EXTRA = 3
@@ -3293,9 +3295,116 @@ def _air_hop(ctx, unit, goal, bases):
     return None if best is None else first[best]
 
 
+AIR_SAFE = 4  # 机场这么多格以内有敌方陆军就算受威胁（越近越危险）：飞机撤走，转场也不挑它
+AIR_FLEE = 3  # 威胁到这么多（敌军已在两格内）：停在地上的飞机先撤离，不再从这里出击（攻击目标一走开就飞不起来）
+
+
+def _air_danger(ctx, nation, tile) -> float:
+    """机场 tile 受敌方陆军威胁的程度：AIR_SAFE 格内每支敌方陆军按（AIR_SAFE + 1 − 距离）计。"""
+    s, g = ctx.state, ctx.state.grid
+    armies = _ai(ctx).get("land_armies")
+    if armies is None:
+        _air_bases(ctx, nation)  # 顺带统计各国陆军位置
+        armies = _ai(ctx).get("land_armies", ())
+    return sum(
+        AIR_SAFE + 1 - g.distance(t, tile)
+        for t, n in armies
+        if g.distance(t, tile) <= AIR_SAFE and at_war(s, n, nation)
+    )
+
+
+def _air_bases(ctx, nation):
+    """本国现在能起降的机场和本方航母所在的格子。"""
+    s, rules, g = ctx.state, ctx.rules, ctx.state.grid
+    ai = _ai(ctx)
+    if "land_armies" not in ai:
+        ai["land_armies"] = [
+            (u.tile, u.nation)
+            for u in s.units.values()
+            if u.layer == "surface"
+            and is_military(rules, u)
+            and rules.units[u.type].domain == "land"
+        ]
+    bases = [
+        int(t)
+        for t in np.flatnonzero((g.owner == nation) & (g.facility > 0))
+        if movement.is_air_base(s, rules, nation, int(t))
+    ]
+    bases += [
+        v.tile for v in s.units.values() if v.nation == nation and rules.units[v.type].air_capacity
+    ]
+    return sorted(set(bases))
+
+
+def _air_route(ctx, unit, bases, value):
+    """在机场网里（相邻两站不超过转场半径）找 value 最高、比现在这一站高的站，返回去那里的第一跳；
+    没有更好的站返回 None。"""
+    from collections import deque
+
+    rules, g = ctx.rules, ctx.state.grid
+    reach = movement.air_radius(g, rules.units[unit.type])
+    nodes = sorted(set(bases) - {unit.tile})
+    first = {}
+    queue = deque()
+    for t in nodes:
+        if g.distance(unit.tile, t) <= reach and (
+            movement.local_step_problem(ctx, unit, unit.tile, t) is None
+        ):
+            first[t] = t
+            queue.append(t)
+    while queue:
+        a = queue.popleft()
+        for b in nodes:
+            if b not in first and g.distance(a, b) <= reach:
+                first[b] = first[a]
+                queue.append(b)
+    here = value(unit.tile)
+    best = max(first, key=lambda t: (value(t), -g.distance(unit.tile, t), -t), default=None)
+    if best is None or value(best) <= here:
+        return None
+    return first[best]
+
+
+def _send_path(ctx, unit, path, reason) -> bool:
+    """按给定的路线下移动指令（飞机转场用：path = [当前格, 下一站]）。"""
+    g = ctx.state.grid
+    ctx.planned_routes[unit.id] = path
+    unit.ai_target = path[-1]
+    if not emit(
+        ctx,
+        unit,
+        Move(issuer=ref("nation", unit.nation), unit=ref("unit", unit.id), to=g.col_row(path[-1])),
+        reason,
+    ):
+        ctx.planned_routes.pop(unit.id, None)
+        return False
+    return True
+
+
+def _air_evacuate(ctx, unit) -> bool:
+    """敌军逼近机场：停在地上的飞机撤到受威胁最小的机场（经机场网一跳一跳地撤）。"""
+    if combat.lock_reason(ctx.state, ctx.rules, unit) and unit.moves_left < (
+        ctx.rules.units[unit.type].moves
+    ):
+        return False  # 刚降落：这回合动不了
+    s, g = ctx.state, ctx.state.grid
+    foes = [t for t, n in _ai(ctx).get("land_armies", ()) if at_war(s, n, unit.nation)]
+
+    def value(t):
+        # 受威胁越小越好；同样安全的，离敌军越远越好（别撤到另一座马上也要丢的前沿机场）
+        far = min((g.distance(t, f) for f in foes), default=AIR_SAFE * 3)
+        return -10 * _air_danger(ctx, unit.nation, t) + min(far, AIR_SAFE * 3)
+
+    hop = _air_route(ctx, unit, _air_bases(ctx, unit.nation), value)
+    return hop is not None and _send_path(
+        ctx, unit, [unit.tile, hop], "敌军逼近机场：飞机撤到安全的机场"
+    )
+
+
 def _air_rebase(ctx, unit) -> bool:
-    """这回合没仗打的飞机：转场到离主战场最近的本国机场 / 航母（主攻方向优先，其次进攻中的战线、
-    离得最近的敌军），让战线落在作战半径里；已经够得着就原地待命。"""
+    """这回合没仗打的飞机：转场到能把本方战线（主攻方向优先，其次进攻中的战线、离得最近的敌军）罩在
+    作战半径里、又最安全（_air_danger 最低）的本国机场 / 航母——不往最前沿的机场挤，前线一推过来，
+    停在地上的飞机会连机场一起丢掉。所在机场受威胁时先撤到安全的机场。"""
     s, rules, g = ctx.state, ctx.rules, ctx.state.grid
     from engine.systems.movement import air_radius
 
@@ -3308,20 +3417,40 @@ def _air_rebase(ctx, unit) -> bool:
         if f.get("kind") == "land"
     ]
     for f in sorted(fronts, key=lambda f: (not f.get("main"), f.get("stance") != "进攻", f["id"])):
+        # 罩住本方战线（集结点）就够了，不用贴着敌城
         city = s.cities.get(f.get("objective"))
-        goal = city.tile if city is not None else f.get("stage")
+        goal = f.get("stage") if f.get("stage") is not None else city.tile if city else None
         if goal is not None:
             break
+    bases = _air_bases(ctx, unit.nation)
     if goal is None:
         foes = [t for t, n in _ai(ctx).get("land_armies", ()) if at_war(s, n, unit.nation)]
         if foes:
             goal = min(foes, key=lambda t: (g.distance(t, unit.tile), t))
+    reach = air_radius(g, rules.units[unit.type])
+    cover = max(2, reach - 2)
+
+    def value(t):
+        danger = _air_danger(ctx, unit.nation, t)
+        if goal is None:
+            return -danger
+        d = g.distance(t, goal)
+        return (100 if d <= cover else -d) - 30 * danger
+
+    if _air_danger(ctx, unit.nation, unit.tile) > 0:
+        hop = _air_route(ctx, unit, bases, value)
+        if hop is not None and _air_danger(ctx, unit.nation, hop) < _air_danger(
+            ctx, unit.nation, unit.tile
+        ):
+            path = [unit.tile, hop]
+            if _send_path(ctx, unit, path, "敌军逼近机场：飞机撤到安全的机场"):
+                return True
     if goal is None:
         return False
-    reach = air_radius(g, rules.units[unit.type])
-    if g.distance(unit.tile, goal) <= max(2, reach - 2):
-        return False  # 主战场已经在作战半径里
-    return march(ctx, unit, goal, "转场到离战线近的机场，让前线落在作战半径里")
+    hop = _air_route(ctx, unit, bases, value)
+    if hop is None:
+        return False  # 现在这一站已经最合适（罩得住战线、又安全）
+    return _send_path(ctx, unit, [unit.tile, hop], "转场到罩得住战线、又安全的机场")
 
 
 def _sea_support(ctx, unit):
@@ -4037,6 +4166,13 @@ def decide_unit(ctx, unit, plan, guards, claimed):
         if march(ctx, unit, job[0], job[2]):
             _record_move(ctx, unit, job[0], "encircle")
             return
+    if (
+        ut.domain == "air"
+        and unit.sortie is None
+        and _air_danger(ctx, unit.nation, unit.tile) >= AIR_FLEE
+        and _air_evacuate(ctx, unit)
+    ):
+        return
     # 只挑本回合不会离开的目标：会走开的目标打不着，这回合还白白耗在原地；挑不到就照常行军
     choice = attack_choice(ctx, unit, only_static=True)
     if choice is not None:
