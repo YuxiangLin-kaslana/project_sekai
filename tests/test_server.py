@@ -306,3 +306,20 @@ def test_unit_war_history_names_the_units_it_killed():
     assert kill["foe"]["nation_name"] == state.nations[foe].name and not kill["foe"]["alive"]
     missing = client.get(f"/api/games/{gid}/history", params={"unit": "unit:999999"})
     assert missing.status_code == 404
+
+
+def test_snapshot_lists_wars_with_names_and_losses():
+    from engine.systems import diplomacy
+    from server.app import GAMES
+
+    snap = client.post("/api/games", json=SMALL).json()
+    gid = snap["id"]
+    assert snap["wars"] == [] and snap["war_count"] == 0  # 开局各国和平
+    state = GAMES.get(gid).state
+    a, b = sorted(state.nations)[:2]
+    diplomacy._set(state, a, b, "war")
+    wars = client.get(f"/api/games/{gid}").json()["wars"]
+    # 每场战争有名字、开战回合、双方（损失支数、折算兵力、攻占的城市）和重大战损
+    assert len(wars) == 1 and wars[0]["name"].endswith("战争") and wars[0]["end"] is None
+    assert [x["nation"] for x in wars[0]["sides"]] == [f"nation:{a}", f"nation:{b}"]
+    assert wars[0]["sides"][0]["lost"] == 0 and wars[0]["events"] == []

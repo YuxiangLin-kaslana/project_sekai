@@ -116,7 +116,9 @@ def resolve(ctx: StepContext) -> None:
         pct = max(pct, heal.field if u.fortified else 0)
         full = rules.units[u.type].hp
         u.hp = min(full, u.hp + full * pct // 100)  # 按生命上限的百分比回
-    # 被包围的部队每回合减员，减到 0 溃散
+    from engine.systems.wars import blame
+
+    # 被包围的部队每回合减员，减到 0 溃散（算进包围它的国家的战果，见 engine/systems/wars.py）
     for uid in sorted(ring.units):
         u = s.units.get(uid)
         if u is None:
@@ -130,6 +132,7 @@ def resolve(ctx: StepContext) -> None:
                 unit_type=u.type,
                 nation=ref("nation", u.nation),
                 reason="被包围断补给，溃散",
+                **({"by": ref("nation", n)} if (n := blame(s, rules, u)) is not None else {}),
             )
             s.remove_unit(u.id)
     s._worked_cache.clear()

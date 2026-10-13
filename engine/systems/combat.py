@@ -1054,8 +1054,10 @@ def _capture(ctx, city, unit):
                 unit_type=parked.type,
                 nation=ref("nation", parked.nation),
                 reason="投降",
+                **({"name": parked.name} if parked.name else {}),
+                **_by(unit),
             )
-            _lost_aboard(ctx, parked)
+            _lost_aboard(ctx, parked, unit)
             s.remove_unit(parked.id)
     if s.nations[previous].capital == city.id:
         remaining = s.nation_cities(previous)
@@ -1074,7 +1076,12 @@ def _capture(ctx, city, unit):
     )
 
 
-def _lost_aboard(ctx, ship) -> None:
+def _by(entity) -> dict:
+    """unit_destroyed 事件的 by：击毁它的国家（部队或城市；不知道是谁打的就不带，战争记录不算战损）。"""
+    return {"by": ref("nation", entity.nation)} if entity is not None else {}
+
+
+def _lost_aboard(ctx, ship, by=None) -> None:
     """船 / 航母被击沉或投降前：船上的部队、舰载机记为随船损失（state.remove_unit 会一起移除）。"""
     for rider in ctx.state.aboard(ship):
         ctx.log.add(
@@ -1084,6 +1091,7 @@ def _lost_aboard(ctx, ship) -> None:
             unit_type=rider.type,
             nation=ref("nation", rider.nation),
             reason="随船沉没",
+            **_by(by),
         )
 
 
@@ -1108,8 +1116,9 @@ def _destroy(ctx, unit, tile, reason=None, by=None):
         unit_type=unit.type,
         nation=ref("nation", unit.nation),
         **extra,
+        **_by(by),
     )
-    _lost_aboard(ctx, unit)
+    _lost_aboard(ctx, unit, by)
     ctx.state.remove_unit(unit.id)
 
 
@@ -1512,8 +1521,9 @@ def _execute(ctx: StepContext, order) -> None:
             unit_type=target.type,
             nation=ref("nation", target.nation),
             **({"name": target.name} if target.name else {}),
+            **_by(actor),
         )
-        _lost_aboard(ctx, target)
+        _lost_aboard(ctx, target, actor)
         s.remove_unit(target.id)
     if actor.hp <= 0 and isinstance(actor, Unit):
         credit(target, actor, s)  # 反击打死了攻击方
@@ -1523,8 +1533,10 @@ def _execute(ctx: StepContext, order) -> None:
             tile=start,
             unit_type=actor.type,
             nation=ref("nation", actor.nation),
+            **({"name": actor.name} if actor.name else {}),
+            **_by(target),
         )
-        _lost_aboard(ctx, actor)
+        _lost_aboard(ctx, actor, target)
         s.remove_unit(actor.id)
     elif info["kind"] == "melee" and isinstance(target, Unit):
         # 近战从相邻格打，敌我不同格：目标格的敌人打光了才开进去（留下的敌方平民被消灭）

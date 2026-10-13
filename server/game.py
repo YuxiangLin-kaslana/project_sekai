@@ -421,6 +421,39 @@ def tide_view(s) -> dict:
     }
 
 
+def wars_view(s, limit: int = 60) -> list[dict]:
+    """战争记录（engine/systems/wars.py）：正在打的在前（新开的在前），然后是结束了的（新结束的在前）。
+    每场：名字、起止回合、怎么结束的、双方（损失支数、损失造价、攻占的城市数）、重大战损。"""
+
+    def side(w, nid):
+        n = s.nations.get(nid)
+        lost = w["lost"][str(nid)]
+        return {
+            "nation": ref("nation", nid),
+            "name": n.name if n is not None else "",
+            "color": n.color if n is not None else "#888888",
+            "lost": lost[0],
+            "value": lost[1],
+            "cities": w["cities"][str(nid)],
+        }
+
+    ongoing = sorted((w for w in s.wars if w["end"] is None), key=lambda w: -w["id"])
+    ended = sorted((w for w in s.wars if w["end"] is not None), key=lambda w: (-w["end"], -w["id"]))
+    return [
+        {
+            "id": w["id"],
+            "name": w["name"],
+            "start": w["start"],
+            "end": w["end"],
+            "how": w["how"],
+            "turns": (w["end"] if w["end"] is not None else s.turn) - w["start"],
+            "sides": [side(w, w["a"]), side(w, w["b"])],
+            "events": [[t, text] for t, _, text in sorted(w["events"], key=lambda e: e[0])],
+        }
+        for w in [*ongoing, *ended][:limit]
+    ]
+
+
 def _foe_view(s, rules, foe) -> dict:
     """战史里的对手：兵种名、国家、名字，现在还在不在（在的话在哪一格）。"""
     kind, nation, name, oid = foe
@@ -747,6 +780,8 @@ def _snapshot(game: Game, rules: Ruleset) -> dict:
         # 世界大事记（最近 80 条，新的在前）：首都陷落、灭国、内战、将领叛变、反霸同盟……
         "chronicle": list(reversed(s.chronicle[-80:])),
         "tide": tide_view(s),  # 天下大势（分久必合，合久必分）
+        "wars": wars_view(s),  # 战争记录：名字、交换比、重大战损
+        "war_count": len(s.wars),
         "state_hash": game.state_hash(),
         "nations": nations,
         "cities": cities,

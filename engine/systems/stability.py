@@ -178,6 +178,9 @@ def eliminate(ctx: StepContext) -> None:
         s.invalidate_paths()
         s._network_cache = None
         ctx.log.add("nation_eliminated", nation=ref("nation", nid), name=n.name)
+        from engine.systems import wars
+
+        wars.close_nation(s, nid)  # 它卷进的战争都结束
 
 
 def resolve(ctx: StepContext) -> None:

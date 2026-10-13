@@ -57,6 +57,9 @@ def secede(
             "value": diplomacy.START_VALUE,
         }
     s._closed_cache.clear()
+    from engine.systems import wars
+
+    wars.start(s, nid, old, independence=True)  # 战争记录：“新政权独立战争”
     for c in group:
         c.nation, c.capital, c.stability = nid, c is seat, max(c.stability, cfg.independent)
         c.managed, c.gold_assist = True, False

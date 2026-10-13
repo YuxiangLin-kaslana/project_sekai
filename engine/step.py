@@ -33,6 +33,7 @@ from engine.systems import (
     progression,
     stability,
     upheaval,
+    wars,
     zoc,
 )
 from engine.systems import orders as order_system
@@ -69,6 +70,7 @@ PIPELINE: tuple[tuple[str, Callable[[StepContext], None]], ...] = (
     ("upheaval", upheaval.resolve),
     ("forts", forts.resolve),
     ("progression", progression.resolve),
+    ("wars", wars.resolve),  # 战争记录：统计这一步的战损、攻城、重大战损
     ("refresh", _refresh),
 )
 

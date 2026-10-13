@@ -112,10 +112,17 @@ def allied(state, a: int, b: int) -> bool:
 
 
 def _set(state, a, b, new, **extra):
+    from engine.systems import wars
+
     old = relation(state, a, b)
     state.relations[key(a, b)] = {**old, "status": new, "since": state.turn, **extra}
     state._closed_cache.clear()
     state.invalidate_paths()  # 边境开关变了：距离场作废
+    # 战争记录：开战（a 是先动手的一方）、停战
+    if new == "war" and old["status"] != "war":
+        wars.start(state, a, b)
+    elif old["status"] == "war" and new != "war":
+        wars.finish(state, a, b, {"peace": "议和", "alliance": "结盟"}.get(new, new))
 
 
 def enemies(state, nation: int) -> list[int]:
