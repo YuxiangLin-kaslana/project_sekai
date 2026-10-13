@@ -1502,13 +1502,22 @@ def _escape(ctx, unit):
     s, rules, g = ctx.state, ctx.rules, ctx.state.grid
     if rules.units[unit.type].domain != "land" or s.city_at(unit.tile) is not None:
         return False
-    occ = encirclement.occupants(s, rules)
     around = ring(ctx, unit.tile)
+
+    def foreign(n):
+        # 同 encirclement.occupants 的口径（地表军事单位，下了海的陆军不算），只查四周几格：
+        # 规划时本国部队一动全图占位缓存就作废，逐支重算全图是大兵团时的热点
+        return any(
+            v.nation != unit.nation
+            and rules.units[v.type].category == "military"
+            and not naval.afloat(s, rules, v)
+            for v in s.units_at(n, "surface")
+        )
+
     hostile = [
         n
         for n in around
-        if any(o != unit.nation for o in occ.get(n, ()))
-        or (s.city_at(n) is not None and s.city_at(n).nation != unit.nation)
+        if foreign(n) or (s.city_at(n) is not None and s.city_at(n).nation != unit.nation)
     ]
     free = [n for n in around if n not in hostile]
     if len(free) > 1 or len(hostile) < 3:
@@ -4330,6 +4339,11 @@ def _danger(ctx, nid):
     return cache[nid]
 
 
+def _rest_floor(ctx, unit, in_city_range=False) -> float:
+    """血量低于这条线就下前线休整：WOUNDED（在敌城射程里 SIEGE_WOUNDED）。"""
+    return SIEGE_WOUNDED if in_city_range else WOUNDED
+
+
 def _resting(ctx, unit) -> bool:
     """休整中、还没回到 REST_TARGET 的伤兵（上回合起在后方驻守回血的）。"""
     return unit.ai_goal.startswith(REST_GOAL) and health(ctx.rules, unit) < REST_TARGET
@@ -4832,7 +4846,7 @@ def decide_unit(ctx, unit, plan, guards, claimed):
     )
     if _escape(ctx, unit):
         return
-    if health(rules, unit) < (SIEGE_WOUNDED if in_city_range else WOUNDED) or _resting(ctx, unit):
+    if health(rules, unit) < _rest_floor(ctx, unit, in_city_range) or _resting(ctx, unit):
         if ut.domain == "land":
             _rest(ctx, unit)  # 陆军：原地 / 后方 / 回城，挑恢复最快的
         else:

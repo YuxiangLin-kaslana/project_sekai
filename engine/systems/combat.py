@@ -554,6 +554,8 @@ def target_at(state, rules, actor, tile):
             if attack_kind(rules, actor) == "melee":
                 enemies = [u for u in enemies if domain_of(state, rules, u) == ut.domain]
     enemies = _screened(state, rules, enemies)
+    if len(enemies) == 1:
+        return enemies[0]  # 只有一支：不用比战斗力（大兵团时这里调用极多）
     if enemies:
         return max(enemies, key=lambda u: (strength(state, rules, u, defending=True), -u.id))
     city = state.city_at(tile)
