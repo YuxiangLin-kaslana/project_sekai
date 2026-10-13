@@ -167,6 +167,8 @@ CARRIER_STANDOFF = 5  # 航母停在目标城外这么远（舰载机够得着�
 # 打分：离本方陆军越近越像正在打的战线（SHORE_FRONT × 距离），路越远越扣分（SHORE_TRAVEL × 距离）
 SHORE_REACH = 3  # 敌军离本舰开得到的海面这么近，舰炮、舰载机才打得着
 SHORE_FRONT, SHORE_TRAVEL = 3, 1
+SHORE_DANGER = 0.5  # 航母挑支援位置：那片海每有 1 点敌舰火力够得着，打分扣这么多（按距离算的分）
+CARRIER_NERVE = 1.0  # 敌舰火力超过护航火力的这么多倍，航母才撤
 # 跨海登陆
 OVERSEAS_CANDIDATES = 4  # 只细算最近的这么多座海外敌城
 OVERSEAS_STEPS = (
@@ -3585,10 +3587,16 @@ def _sea_support(ctx, unit):
     return {**f, "mode": mode, "target_city": city.id}, city
 
 
-def _naval_danger(ctx, nation, tile) -> int:
-    """tile 下一回合会被几艘交战国战舰打到（它的航程 + 射程以内）。航母防御弱，不往这种地方开。"""
+def _naval_power(rules, u) -> float:
+    """一艘战舰的海战火力（鱼雷、舰炮、近战取大的），按剩余生命打折。"""
+    ut = rules.units[u.type]
+    return max(ut.strength, ut.ranged_strength or 0, ut.torpedo or 0) * u.hp / max(1, ut.hp)
+
+
+def _naval_danger(ctx, nation, tile) -> float:
+    """tile 下一回合会挨的交战国战舰火力：航程 + 射程够得着的敌舰（航母不算）的火力（_naval_power）之和。"""
     s, rules, g = ctx.state, ctx.rules, ctx.state.grid
-    out = 0
+    out = 0.0
     for u in s.units.values():
         ut = rules.units[u.type]
         if (
@@ -3602,8 +3610,28 @@ def _naval_danger(ctx, nation, tile) -> int:
         if g.distance(u.tile, tile) <= movement.unit_moves(g, ut) + combat.attack_range(
             rules, u, g
         ):
-            out += 1
+            out += _naval_power(rules, u)
     return out
+
+
+def _escort_power(ctx, carrier) -> float:
+    """航母身边（2 格内）本方战舰的火力，加上航母自己的。"""
+    s, rules, g = ctx.state, ctx.rules, ctx.state.grid
+    return sum(
+        _naval_power(rules, u)
+        for t in g.within(carrier.tile, 2)
+        for u in s.units_at(t, "surface")
+        if u.nation == carrier.nation
+        and rules.units[u.type].domain == "sea"
+        and is_military(rules, u)
+    )
+
+
+def _carrier_exposed(ctx, unit, tile=None) -> bool:
+    """航母在 tile（默认脚下）会不会吃亏：敌舰下回合够得着的火力比身边护航（连同航母自己）的火力多出
+    CARRIER_NERVE 倍。护航越强越敢留下，一艘残血驱逐舰吓不跑满编的航母群。"""
+    danger = _naval_danger(ctx, unit.nation, unit.tile if tile is None else tile)
+    return danger > CARRIER_NERVE * _escort_power(ctx, unit)
 
 
 def _shore_target(ctx, unit):
@@ -3624,6 +3652,8 @@ def _shore_target(ctx, unit):
             continue
         front = min(g.distance(t, m) for m in mine)
         score = SHORE_FRONT * front + SHORE_TRAVEL * g.distance(unit.tile, t)
+        if "carrier" in ctx.rules.units[unit.type].tags:
+            score += SHORE_DANGER * _naval_danger(ctx, unit.nation, t)  # 越危险越不去
         if best is None or (score, t) < best[:2]:
             best = (score, t)
     return None if best is None else best[1]
@@ -3640,8 +3670,8 @@ def _shore_support(ctx, unit) -> bool:
     if tile is None:
         return False
     carrier = "carrier" in ut.tags
-    if carrier and _naval_danger(ctx, unit.nation, tile):
-        return False  # 那片海敌舰下回合就打得到：航母不去（自己受威胁时 _carrier 已经退回港口）
+    if carrier and _carrier_exposed(ctx, unit, tile):
+        return False  # 那片海的敌舰火力压过护航：航母不去
     stand = CARRIER_STANDOFF if carrier else combat.attack_range(rules, unit, g)
     why = (
         "航母开到海边的战场外海，舰载机支援陆战"
@@ -3657,8 +3687,8 @@ def _shore_support(ctx, unit) -> bool:
 def _carrier(ctx, unit, plan, target):
     """航母：开到战线目标城外海（舰载机够得着、岸上火力打不着的距离），敌舰靠近就退回港口。"""
     s, g = ctx.state, ctx.state.grid
-    # 敌舰下一回合就打得到（它的航程 + 射程以内）：航母防御弱，先退回港口
-    if _naval_danger(ctx, unit.nation, unit.tile):
+    # 敌舰下一回合打得到的火力压过身边的护航：航母防御弱，先退回港口
+    if _carrier_exposed(ctx, unit):
         ports = [c for c in s.nation_cities(unit.nation) if coastal(g, c.tile)]
         if ports:
             home = min(ports, key=lambda c: (g.distance(unit.tile, c.tile), c.id))
@@ -4381,11 +4411,7 @@ def decide_unit(ctx, unit, plan, guards, claimed):
         and _air_evacuate(ctx, unit)
     ):
         return
-    if (
-        "carrier" in ut.tags
-        and _naval_danger(ctx, unit.nation, unit.tile)
-        and _carrier(ctx, unit, plan, None)
-    ):
+    if "carrier" in ut.tags and _carrier_exposed(ctx, unit) and _carrier(ctx, unit, plan, None):
         return  # 航母防御弱：敌舰下回合就打得到，先撤再说（不在这里开火恋战）
     # 只挑本回合不会离开的目标：会走开的目标打不着，这回合还白白耗在原地；挑不到就照常行军
     choice = attack_choice(ctx, unit, only_static=True)
