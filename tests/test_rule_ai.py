@@ -671,3 +671,18 @@ def test_ai_screens_the_gap_an_enemy_tank_could_use_to_cut_it_off(board):
     assert any(
         encirclement.steps(board, net, (tile,))[u.tile] >= encirclement.UNREACHED for u in front
     )
+
+
+def test_chokepoints_find_mountain_passes_not_open_ground(board):
+    """咽喉要地：山墙上留的一格山口是卡口，开阔平原、海岸的小湾都不是。"""
+    from controllers import rule_ai
+
+    g = board.grid
+    mountains = RULES.terrain_index("mountains")
+    for row in range(g.height):
+        if row != 12:
+            g.terrain[g.idx(16, row)] = mountains  # 一道南北山墙，第 12 行留一个山口
+    ctx = StepContext(board, RULES, [], EventLog(board.turn), RngTree(board.seed, "t", 1))
+    chokes = rule_ai._chokepoints(ctx)
+    assert g.idx(16, 12) in chokes
+    assert g.idx(8, 8) not in chokes and g.idx(25, 15) not in chokes

@@ -177,3 +177,25 @@ def test_dominant_side_refuses_peace_when_few_nations_remain(monkeypatch):
     monkeypatch.setattr(tide, "at", lambda seed, turn: -0.8)  # 偏“分”：终局推力弱，僵持就和
     ok, _ = diplomacy.accepts(s, "peace", 1, 2, pw)
     assert ok
+
+
+def test_peace_sends_troops_back_to_their_own_territory():
+    """停战遣返：签了和约，双方留在对方领土上的部队送回本国最近的领土。"""
+    from engine.events import EventLog
+    from engine.rng import RngTree
+    from engine.state import Unit
+    from engine.systems.context import StepContext
+
+    s = board(2)
+    g = s.grid
+    rel = diplomacy.relation(s, 1, 2)
+    s.relations[diplomacy.key(1, 2)] = {**rel, "status": "war", "since": 0}
+    mine = [t for t in range(g.size) if int(g.owner[t]) == 1 and s.city_at(t) is None]
+    theirs = [t for t in range(g.size) if int(g.owner[t]) == 2 and s.city_at(t) is None]
+    assert mine and theirs
+    raider = s.add_unit(Unit(s.new_id(), "infantry", 1, theirs[0], "surface", hp=180))
+    ctx = StepContext(s, RULES, [], EventLog(s.turn), RngTree(s.seed, "t"))
+    diplomacy.make_peace(ctx, 1, 2)
+    assert int(g.owner[s.units[raider.id].tile]) == 1
+    events = [e for e in ctx.log.events if e["type"] == "units_expelled"]
+    assert events and events[0]["count"] == 1 and events[0]["from"] == "nation:2"

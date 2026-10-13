@@ -199,6 +199,9 @@ def make_peace(ctx, a: int, b: int) -> None:
     _set(s, a, b, "peace", truce=s.turn + TRUCE, value=PEACE_VALUE, peace_turn=s.turn)
     _drop_offers(s, a, b)
     ctx.log.add("peace_signed", nation=ref("nation", a), target=ref("nation", b), truce=TRUCE)
+    from engine.systems.borders import expel
+
+    expel(ctx, a, b)  # 和约规定撤军：双方留在对方领土上的部队送回本国
 
 
 def make_alliance(ctx, a: int, b: int) -> None:

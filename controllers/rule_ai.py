@@ -121,7 +121,6 @@ EXPLOIT_DANGER = 15  # 四周每多一支敌军（第一支不算）
 EXPLOIT_EXPOSED = 25  # 停在那里自己的补给也断了
 EXPLOIT_TRAVEL = 2  # 每格路程
 EXPLOIT_MIN = 25  # 总分不到这么多不值得冒险穿插
-EXPLOIT_DEFENSIVE = 0.4  # 防守中的战线也会穿插反击，但要的分数按这个比例提高（更保守）
 EXPLOIT_LOCAL = 3  # 局部兵力：看这么多格以内
 EXPLOIT_OUTNUMBERED = 10  # 局部敌军比本方（连同已分好的穿插部队）每多一支：钻进去容易被反包围
 EXPLOIT_CANDIDATES = 40  # 每国每回合最多评估这么多个候选格
@@ -131,8 +130,11 @@ EXPLOIT_CANDIDATES = 40  # 每国每回合最多评估这么多个候选格
 FORT_THREAT, FORT_DEFENSIVE, FORT_SPREAD, FORT_TRAVEL, FORT_MIN = 1.0, 1.6, 40, 3, 25
 FORT_COVER, FORT_CONTACT = 15, 30  # 有本方部队站着加分；两格内每有一支敌军扣分
 FORT_LINE = 10  # 战线格比后一排加分
+FORT_CHOKE = 30  # 咽喉要地（_chokepoints）加分：一座堡垒就能卡住一条通道
+CHOKE_RADIUS = 4  # 判断卡口：拿掉这一格后两边在这么多格内连不起来
 ENGINEER_MAX = 2  # 每国最多养几个工兵（只在防守时用来修堡垒）
 SENTRY_FORT = 3  # 边境哨挑位置：本方堡垒相当于离敌军远这么多格（优先进驻）
+SENTRY_CHOKE = 3  # 边境哨挑位置：本国境内的咽喉要地（山口）同样优先
 FORT_VALUE = 0.6  # 攻击打分：每打掉堡垒 1 点血算这么多分（拆掉敌方堡垒，进攻才推得动）
 EXPLOIT_CAUTION = 0.4  # 侧翼暴露度（engine/systems/learning.exposure）每 +1，穿插的胆量打这么多折
 # 防穿插（plan_screens）：站在敌人的角度推演——敌方快速部队这回合够得着、站上去能切断 / 拉长我军补给线的格子，
@@ -1071,7 +1073,7 @@ def _fast(rules, u):
 
 
 def plan_exploits(ctx, nid, units, guards, plan):
-    """穿插：战线上的快速部队钻到敌后（防守中的战线也会，但更保守，见 EXPLOIT_DEFENSIVE）。候选格是它们一回合够得着、敌军附近的空格（避开敌城射程）。
+    """穿插：进攻战线上的快速部队钻到敌后（防守时保持防线完整，不穿插）。候选格是它们一回合够得着、敌军附近的空格（避开敌城射程）。
     每格打分（见 EXPLOIT_*）：在推演里放上本方部队连同它的控制区，附近敌军回补给源的路拉长了多少、
     有没有被切断（断补给 = 包围）；能不能贴到敌后的炮兵、机场；四周敌军多、自己补给也断了就减分。
     贪心地一格一格分配，前面分好的格子算进后面的推演——两翼的装甲自然会凑成钳形合围。
@@ -1082,13 +1084,14 @@ def plan_exploits(ctx, nid, units, guards, plan):
     s, rules, g = ctx.state, ctx.rules, ctx.state.grid
     from engine.systems.learning import exposure
 
-    # 单位 → 所在战线的胆量：进攻 1，防守 EXPLOIT_DEFENSIVE（门槛相应提高）；最近常被合围、侧击就更保守
+    # 单位 → 胆量（门槛按它提高）：最近常被合围、侧击就更保守
     caution = 1 - EXPLOIT_CAUTION * exposure(s, nid)
     bold = {}
     for f in plan.get("fronts") or ():
-        if f.get("kind") == "land":
+        if f.get("kind") == "land" and f.get("stance") == "进攻":
+            # 只有进攻的战线穿插：防守时要保持防线完整，不被敌人引出去
             for uid in f.get("units", ()):
-                bold[uid] = (1.0 if f.get("stance") == "进攻" else EXPLOIT_DEFENSIVE) * caution
+                bold[uid] = caution
     taken = set(_ai(ctx).get("encircle", {}))
     fast = [
         u
@@ -1218,6 +1221,67 @@ def plan_exploits(ctx, nid, units, guards, plan):
     return out
 
 
+_CHOKE_CACHE: dict = {}
+
+
+def _chokepoints(ctx) -> frozenset:
+    """咽喉要地（山口、地峡、窄桥两端……）：能走的陆地格，它能走的陆地邻格在六邻环上被隔成两段以上，
+    而且拿掉它以后这几段在 CHOKE_RADIUS 格内连不起来（真的是卡口，不是海岸的小湾）。只看地形，
+    按地形缓存（地形一局里不变）。"""
+    import hashlib
+    from collections import deque
+
+    rules, g = ctx.rules, ctx.state.grid
+    key = (g.width, g.height, hashlib.blake2b(g.terrain.tobytes(), digest_size=8).hexdigest())
+    hit = _CHOKE_CACHE.get(key)
+    if hit is not None:
+        return hit
+    walk = np.array(
+        [t.move_cost is not None and not t.water for t in rules.terrain.values()], dtype=bool
+    )[g.terrain]
+    nb = g.neighbors
+    ok = np.where(nb >= 0, walk[np.maximum(nb, 0)], False)
+    # 六邻环上“不能走 → 能走”的次数 = 能走的邻格分成几段
+    arcs = sum((~ok[:, k - 1]) & ok[:, k] for k in range(6))
+    out = set()
+    for t in np.flatnonzero(walk & (arcs >= 2)).tolist():
+        groups, cur = [], []
+        start = next(k for k in range(6) if not ok[t, k - 1] and ok[t, k])
+        for i in range(6):
+            k = (start + i) % 6
+            if ok[t, k]:
+                cur.append(int(nb[t, k]))
+            elif cur:
+                groups.append(cur)
+                cur = []
+        if cur:
+            groups.append(cur)
+        if len(groups) < 2:
+            continue
+        # 从第一段出发、不经过 t，CHOKE_RADIUS 格内能不能走到其他段
+        goal = {x for grp in groups[1:] for x in grp}
+        seen, queue = {t, *groups[0]}, deque(groups[0])
+        linked = False
+        while queue and not linked:
+            a = queue.popleft()
+            for b in nb[a]:
+                b = int(b)
+                if b < 0 or b in seen or not walk[b] or g.distance(b, t) > CHOKE_RADIUS:
+                    continue
+                if b in goal:
+                    linked = True
+                    break
+                seen.add(b)
+                queue.append(b)
+        if not linked:
+            out.add(t)
+    hit = frozenset(out)
+    if len(_CHOKE_CACHE) > 16:
+        _CHOKE_CACHE.clear()
+    _CHOKE_CACHE[key] = hit
+    return hit
+
+
 def plan_forts(ctx, nid, plan, units):
     """堡垒规划：每条陆上战线挑一格最值得修堡垒的战线格（见 FORT_*），分给离得最近的空闲工兵。
     返回 {工兵 ID: (格子, 说明)}。"""
@@ -1265,7 +1329,9 @@ def plan_forts(ctx, nid, plan, units):
             continue  # 只在防守的战线上修（进攻不需要工兵）
         defensive = FORT_DEFENSIVE
         line = set(f.get("tiles") or ())
-        options = sorted(line)  # 只修在战线格上（部队排兵就站在这里）
+        chokes = _chokepoints(ctx)
+        # 战线格（部队排兵就站在这里），加上战线附近（2 格内）的咽喉要地
+        options = sorted(line | {c for c in chokes if any(g.distance(c, t) <= 2 for t in line)})
         while True:
             crew = [u for u in crew if u.id not in out]
             if not crew:
@@ -1288,6 +1354,7 @@ def plan_forts(ctx, nid, plan, units):
                     + terrain.defense / 5
                     + FORT_COVER * (t in own_at)  # 有本方部队站着：工兵有掩护
                     + FORT_LINE * (t in line)  # 战线格优先（部队排兵就站在这里），后一排次之
+                    + FORT_CHOKE * (t in chokes)  # 咽喉要地：一座堡垒卡住一条通道
                     - FORT_CONTACT * contact  # 离敌军太近：没修完就被打死
                     - FORT_SPREAD * near
                     - FORT_TRAVEL * travel
@@ -4129,20 +4196,27 @@ def _border_posts(ctx, nid):
             for t in np.flatnonzero(border & (g.city_of == c.id))
             if costs[int(t)] > 0 and s.city_at(int(t)) is None
         ]
-        # 本方的堡垒（战线挪走以后留在后面的也算）：边境哨优先进驻，别让它空着
+        # 本方的堡垒（战线挪走以后留在后面的也算）、本国境内的咽喉要地（山口：推进时也留人看守）：
+        # 边境哨优先进驻
         mine = [
             t
             for t, f in s.forts.items()
             if f["nation"] == nid and f["hp"] > 0 and g.distance(t, c.tile) <= watch
         ]
-        tiles = sorted(set(tiles) | set(mine))
+        passes = [
+            t
+            for t in _chokepoints(ctx)
+            if int(g.city_of[t]) == c.id and s.city_at(t) is None and costs[t] > 0
+        ]
+        tiles = sorted(set(tiles) | set(mine) | set(passes))
         if not tiles:
             continue
 
-        def danger(t, near=near, mine=frozenset(mine)):
+        def danger(t, near=near, mine=frozenset(mine), passes=frozenset(passes)):
             terrain = rules.terrain_at(int(g.terrain[t]))
             fort = SENTRY_FORT if t in mine else 0
-            return min(g.distance(t, e) for e in near) - terrain.defense / 25 - fort
+            choke = SENTRY_CHOKE if t in passes else 0
+            return min(g.distance(t, e) for e in near) - terrain.defense / 25 - fort - choke
 
         count = 1 + (len(near) >= 4)
         for t in sorted(tiles, key=lambda t: (danger(t), t)):

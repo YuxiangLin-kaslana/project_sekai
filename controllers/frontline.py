@@ -502,9 +502,14 @@ def _slots(ctx, seg, ours=None):
     fill = Counter()
     members = sorted((s.units[uid] for uid in seg["units"] if uid in s.units), key=lambda u: u.id)
     if defending and members:
-        # 防守：这段战线前后两排里的本方堡垒，先各派一支离得最近的近战部队进驻（堡垒不能空着）
+        # 防守：这段战线前后两排里的本方堡垒、咽喉要地（山口），先各派一支离得最近的近战部队守住
         nation = members[0].nation
-        held = sorted(t for t in set(line) | set(back) if forts.friendly(s, nation, t))
+        chokes = R._chokepoints(ctx)
+        held = sorted(
+            t
+            for t in set(line) | set(back)
+            if forts.friendly(s, nation, t) or (t in chokes and s.city_at(t) is None)
+        )
         free = [u for u in members if not (R.is_siege(rules, u) or R.is_air_defense(rules, u))]
         for t in held:
             if not free:
@@ -722,10 +727,15 @@ def approach_attack(ctx, unit, *, offensive: bool) -> bool:
     ai["approach_used"] = ai.get("approach_used", 0) + 1
     best_map, parents = movement.movement_map(s, rules, unit)
     need = movement.attack_steps(rules, unit)
+    slot = ai.get("fslot", {}).get(unit.id)
     spots = [
         t
         for t, left in best_map.items()
-        if t != unit.tile and left >= need and movement.has_room(s, rules, unit, t)
+        if t != unit.tile
+        and left >= need
+        and movement.has_room(s, rules, unit, t)
+        # 防守：只打“打完不会离开防线位置”的仗（出发格离本单位的战线位置不超过 1 格），不被敌人引出去
+        and (offensive or slot is None or g.distance(t, slot) <= 1)
     ]
     if not spots:
         return False
