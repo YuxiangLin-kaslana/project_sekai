@@ -2954,6 +2954,17 @@ def _navy_plan(ctx, nation, p, units, cities):
         if at_war(s, n, nation.id)
         and any(g.distance(t, c.tile) <= 12 * map_scale(g) for c in ports)
     )
+    # 敌舰按舰种分（城市托管按克制关系造：敌方驱逐舰多就多造反驱逐的巡洋舰）
+    kinds = Counter(
+        u.type
+        for u in s.units.values()
+        if u.layer == "surface"
+        and rules.units[u.type].domain == "sea"
+        and is_military(rules, u)
+        and at_war(s, u.nation, nation.id)
+        and any(g.distance(u.tile, c.tile) <= 12 * map_scale(g) for c in ports)
+    )
+    p["enemy_fleet_types"] = dict(sorted(kinds.items()))
     components = geography(s, rules)["land_components"]
     home = {int(components[c.tile]) for c in cities}
     settled = {}

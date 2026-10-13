@@ -61,7 +61,7 @@ def test_three_warship_tiers_differ_in_speed_and_reach():
 
 def test_destroyer_torpedoes_only_hit_ships_hard_at_close_range(board):
     tin = add(board, "destroyer", 1, 6, 3)
-    target = add(board, "cruiser", 2, 7, 3)
+    target = add(board, "destroyer", 2, 7, 3)  # 驱逐舰挨鱼雷不减伤（巡洋舰、战列舰有装甲）
     shore = add(board, "infantry", 2, 4, 3)  # 岸上的步兵：鱼雷打不到，用甲板炮打
     targets = {t["tile"]: t for t in tactics(board, RULES, tin)["targets"]}
     assert set(targets) == {target.tile, shore.tile}
@@ -82,7 +82,7 @@ def test_destroyer_torpedoes_only_hit_ships_hard_at_close_range(board):
 
 def test_carrier_air_wing_strikes_ships_and_shore(board):
     """航母自带舰载机群：不靠另外搭载的飞机也能对海、对岸打击（不看视线，没有反击）。"""
-    carrier = add(board, "carrier", 1, 6, 3)
+    carrier = add(board, "carrier", 1, 6, 3, hp=RULES.units["carrier"].hp)
     ship = add(board, "destroyer", 2, 7, 3)
     assert lock_reason(board, RULES, carrier) is None
     result = act(board, order(carrier, "attack", to=[7, 3]))
@@ -346,3 +346,26 @@ def test_ports_spawn_shelter_and_heal_ships_and_change_hands(board):
     out = step(board, [], RULES)
     assert int(out.state.grid.owner[port]) == 2
     assert any(e["type"] == "district_captured" for e in out.events)
+
+
+def test_naval_counter_cycle_multipliers(board):
+    """克制循环：巡洋舰打驱逐舰伤害加倍；战列舰挨鱼雷减半。"""
+    from engine.systems.combat import preview
+
+    cruiser = add(board, "cruiser", 1, 6, 3)
+    dd = add(board, "destroyer", 2, 8, 3)
+    vs_dd, _ = preview(board, RULES, cruiser, dd.tile)
+    board.remove_unit(dd.id)
+    other = add(board, "cruiser", 2, 8, 3)
+    vs_ca, _ = preview(board, RULES, cruiser, other.tile)
+    assert vs_dd["damage"] > vs_ca["damage"] * 1.5  # 反驱逐
+    board.remove_unit(other.id)
+    torp = add(board, "destroyer", 2, 9, 5)
+    bb = add(board, "battleship", 1, 9, 4)
+    hit_bb, _ = preview(board, RULES, torp, bb.tile)
+    board.remove_unit(bb.id)
+    ca = add(board, "cruiser", 1, 9, 4)
+    hit_ca, _ = preview(board, RULES, torp, ca.tile)
+    # 战列舰挨鱼雷只吃 50%（巡洋舰 70%），按同样的攻防比算伤害会更低
+    assert RULES.units["battleship"].torpedo_taken < RULES.units["cruiser"].torpedo_taken
+    assert hit_bb["damage"] < hit_ca["damage"] * 1.2

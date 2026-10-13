@@ -450,6 +450,11 @@ def _damage_scale(rules, actor, target, state=None) -> int:
         and "air_superiority" not in rules.units[target.type].tags
     ):
         base = base * FIGHTER_VS_BOMBER // 100  # 战斗机打轰炸机
+    if isinstance(actor, Unit):
+        # 兵种克制（damage_vs_types：比如巡洋舰打驱逐舰）、重装甲挨鱼雷减伤（torpedo_taken）
+        base = base * rules.units[actor.type].damage_vs_types.get(target.type, 100) // 100
+        if attack_kind(rules, actor) == "torpedo":
+            base = base * rules.units[target.type].torpedo_taken // 100
     return base * vs // 100
 
 

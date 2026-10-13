@@ -208,6 +208,8 @@ cruiser:
   moves: 9
   sight: 3
   cost: 240
+  damage_vs_types: { destroyer: 250 }   # 反驱逐舰：打驱逐舰 ×2.5（克制循环：驱逐舰 > 战列舰 > 巡洋舰 > 驱逐舰）
+  torpedo_taken: 70    # 挨鱼雷只吃 70%
   population: 1
   gold: 70
   upkeep: 3
@@ -225,6 +227,7 @@ battleship:
   damage_vs_city: 200   # 重炮削城防
   moves: 7
   cost: 390
+  torpedo_taken: 50    # 重装甲：挨鱼雷只吃一半（驱逐舰仍然克制它，但不再是一边倒）
   population: 1
   gold: 100
   upkeep: 4
@@ -238,9 +241,13 @@ carrier:
   short: 航
   domain: sea
   strength: 12           # 原来 8：一碰就沉，只敢躲在港里
-  ranged_strength: 20    # 舰载机群：从海上对地、对海打击（不看视线），不靠另外搭载的飞机也能打
+  ranged_strength: 26    # 原来 20。舰载机群：从海上对地、对海打击（不看视线），不靠另外搭载的飞机也能打
   range: 6
   damage_vs_city: 130
+  damage_vs_units: 150   # 舰载机打部队、打舰船都狠
+  torpedo_taken: 70      # 船体大：挨鱼雷只吃 70%
+  hp: 150                # 原来 100：一碰就沉
+  flak: 6                # 舰载防空
   moves: 9
   sight: 4
   cost: 300              # 原来 360：实测每千造价只打出约 75 伤害

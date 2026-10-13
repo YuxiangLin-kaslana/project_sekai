@@ -140,6 +140,9 @@ class UnitType(_Strict):
     )  # 打部队的伤害（百分比；不改战斗力，不影响反击）
     damage_vs_city: int = Field(100, ge=0, le=500)  # 打城市（城防）的伤害（百分比）
     torpedo: int = Field(0, ge=0)  # 鱼雷：只打舰船，射程 range（近距离），伤害高
+    # 克制：打这些兵种时的伤害倍率（%），乘在 damage_vs_units 上（比如巡洋舰打驱逐舰）
+    damage_vs_types: dict[str, int] = Field(default_factory=dict)
+    torpedo_taken: int = Field(100, ge=0, le=500)  # 挨鱼雷时受到的伤害（%）：重装甲的大舰吃得住
     deck_gun: int = Field(0, ge=0)  # 驱逐舰甲板炮：没有敌舰时打岸上部队 / 城市（射程 range）
     fuel: bool = False  # 靠石油燃料（坦克、飞机）：本国没有石油供应时战斗力 −30%
     flak: int = Field(0, ge=0)  # 舰艇自带防空火力：敌机飞进 / 飞出 flak_range 圈时各开火一次
@@ -552,6 +555,7 @@ class Ruleset(_Strict):
                 known("单位", f"科技 {t.id!r} 的加成", bonus.units, self.units)
         for u in self.units.values():
             known("资源", f"单位 {u.id!r}", u.requires_resources, self.resources)
+            known("单位", f"单位 {u.id!r} 的 damage_vs_types", list(u.damage_vs_types), self.units)
             for m in u.modifiers:
                 known("地形", f"单位 {u.id!r} 的修正器", m.when.terrain_in or [], self.terrain)
         for b in self.buildings.values():
