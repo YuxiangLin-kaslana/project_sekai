@@ -1887,33 +1887,15 @@ function drawSymbol(ctx, icon, x, y, w, h, ink) {
       break;
     }
     case "fighter":
-    case "bomber": {
-      const s = Math.min(w, h) * 0.42;
-      ctx.moveTo(x, y - s); ctx.lineTo(x, y + s); // 机身
-      ctx.moveTo(x - s * 1.1, y + s * 0.1); ctx.lineTo(x, y - s * 0.25); ctx.lineTo(x + s * 1.1, y + s * 0.1); // 机翼
-      ctx.moveTo(x - s * 0.45, y + s * 0.85); ctx.lineTo(x, y + s * 0.65); ctx.lineTo(x + s * 0.45, y + s * 0.85); // 尾翼
-      if (icon === "bomber") { ctx.moveTo(x - s * 0.6, y - s * 0.02); ctx.lineTo(x - s * 0.6, y + s * 0.3); ctx.moveTo(x + s * 0.6, y - s * 0.02); ctx.lineTo(x + s * 0.6, y + s * 0.3); }
+    case "bomber":
+      drawPlane(ctx, icon, x, y, w, h);
       break;
-    }
     case "destroyer":
     case "cruiser":
-    case "battleship": {
-      // 船身 + 桅杆；巡洋多一座矮舰楼，战列是长舰楼
-      const s = w * 0.4;
-      ctx.moveTo(x - s, y + h * 0.05); ctx.lineTo(x + s, y + h * 0.05); ctx.lineTo(x + s * 0.7, y + h * 0.3); ctx.lineTo(x - s * 0.75, y + h * 0.3); ctx.closePath();
-      ctx.moveTo(x - s * 0.1, y + h * 0.05); ctx.lineTo(x - s * 0.1, y - h * 0.3);
-      if (icon === "cruiser") { ctx.moveTo(x - s * 0.4, y + h * 0.05); ctx.lineTo(x - s * 0.4, y - h * 0.05); ctx.lineTo(x + s * 0.15, y - h * 0.05); ctx.lineTo(x + s * 0.15, y + h * 0.05); }
-      if (icon === "battleship") { ctx.moveTo(x - s * 0.55, y + h * 0.05); ctx.lineTo(x - s * 0.55, y - h * 0.1); ctx.lineTo(x + s * 0.4, y - h * 0.1); ctx.lineTo(x + s * 0.4, y + h * 0.05); }
+    case "battleship":
+    case "carrier":
+      drawShip(ctx, icon, x, y, w, h);
       break;
-    }
-    case "carrier": {
-      // 平直的飞行甲板 + 右舷舰岛
-      const s = w * 0.42;
-      ctx.moveTo(x - s, y + h * 0.02); ctx.lineTo(x + s, y + h * 0.02); ctx.lineTo(x + s * 0.8, y + h * 0.3); ctx.lineTo(x - s * 0.8, y + h * 0.3); ctx.closePath();
-      ctx.moveTo(x + s * 0.35, y + h * 0.02); ctx.lineTo(x + s * 0.35, y - h * 0.22); ctx.lineTo(x + s * 0.6, y - h * 0.22); ctx.lineTo(x + s * 0.6, y + h * 0.02);
-      ctx.moveTo(x - s * 0.7, y - h * 0.08); ctx.lineTo(x + s * 0.1, y - h * 0.08);
-      break;
-    }
     default:
       ctx.font = `700 ${Math.round(h * 0.7)}px ${FONT}`;
       ctx.textAlign = "center";
@@ -1922,6 +1904,71 @@ function drawSymbol(ctx, icon, x, y, w, h, ink) {
   }
   ctx.stroke();
   ctx.restore();
+}
+
+// 飞机：俯视实心剪影（机头朝上），小尺寸也分得清——战斗机小、后掠翼；轰炸机翼展宽的平直长翼、
+// 四台发动机、机身粗
+function drawPlane(ctx, icon, x, y, w, h) {
+  const bomber = icon === "bomber";
+  const s = Math.min(w / (bomber ? 2.4 : 2.1), h / 2);
+  ctx.beginPath();
+  if (bomber) {
+    ctx.ellipse(x, y, s * 0.2, s * 0.98, 0, 0, Math.PI * 2); // 机身
+    ctx.moveTo(x - s * 1.18, y - s * 0.08); ctx.lineTo(x + s * 1.18, y - s * 0.08); // 平直长翼
+    ctx.lineTo(x + s * 1.1, y + s * 0.2); ctx.lineTo(x - s * 1.1, y + s * 0.2); ctx.closePath();
+    for (const dx of [-0.82, -0.44, 0.44, 0.82]) ctx.rect(x + dx * s - s * 0.1, y - s * 0.36, s * 0.2, s * 0.36); // 四台发动机
+    ctx.rect(x - s * 0.5, y + s * 0.68, s, s * 0.16); // 平尾
+  } else {
+    ctx.ellipse(x, y, s * 0.15, s * 0.98, 0, 0, Math.PI * 2); // 机身
+    ctx.moveTo(x, y - s * 0.4); // 后掠翼
+    ctx.lineTo(x + s * 1.02, y + s * 0.34); ctx.lineTo(x + s * 0.98, y + s * 0.52);
+    ctx.lineTo(x, y + s * 0.26); ctx.lineTo(x - s * 0.98, y + s * 0.52); ctx.lineTo(x - s * 1.02, y + s * 0.34); ctx.closePath();
+    ctx.moveTo(x, y + s * 0.56); // 尾翼
+    ctx.lineTo(x + s * 0.44, y + s * 0.94); ctx.lineTo(x, y + s * 0.84); ctx.lineTo(x - s * 0.44, y + s * 0.94); ctx.closePath();
+  }
+  ctx.fill();
+  ctx.beginPath(); // 清掉路径：drawSymbol 末尾的 stroke 不再描它
+}
+
+// 舰船：侧视实心剪影（舰艏朝右）——驱逐舰短、细、两根烟囱；巡洋舰中等、前后两座炮塔；
+// 战列舰最长最厚、高耸的塔楼和三座主炮；航母是平直的飞行甲板加右舷舰岛
+function drawShip(ctx, icon, x, y, w, h) {
+  const L = w * { destroyer: 0.72, cruiser: 0.86, battleship: 0.98, carrier: 1.0 }[icon];
+  const deck = y + h * 0.1;
+  const keel = y + h * { destroyer: 0.3, cruiser: 0.34, battleship: 0.4, carrier: 0.34 }[icon];
+  const l = x - L / 2, r = x + L / 2;
+  ctx.beginPath();
+  // 船体：舰艉方、舰艏前倾
+  ctx.moveTo(l, deck); ctx.lineTo(r, deck - h * 0.04); ctx.lineTo(r - L * 0.1, keel); ctx.lineTo(l + L * 0.04, keel); ctx.closePath();
+  const block = (cx, width, top) => ctx.rect(cx - (width * L) / 2, deck - h * top, width * L, h * top + 1);
+  const turret = (cx, dir, size) => {
+    block(cx, size, 0.11);
+    ctx.rect(dir > 0 ? cx * 1 + (size * L) / 2 : cx - (size * L) / 2 - L * 0.12, deck - h * 0.08, L * 0.12, Math.max(1, h * 0.035)); // 炮管
+  };
+  if (icon === "destroyer") {
+    block(x + L * 0.14, 0.14, 0.17); // 舰桥
+    block(x - L * 0.04, 0.06, 0.27); // 两根烟囱
+    block(x - L * 0.17, 0.06, 0.24);
+    turret(x + L * 0.32, 1, 0.07);
+  } else if (icon === "cruiser") {
+    block(x, 0.28, 0.2); // 舰楼
+    block(x + L * 0.04, 0.08, 0.36); // 前桅楼
+    turret(x + L * 0.26, 1, 0.1);
+    turret(x - L * 0.28, -1, 0.1);
+  } else if (icon === "battleship") {
+    block(x - L * 0.02, 0.24, 0.2); // 塔楼（阶梯状，高耸）
+    block(x + L * 0.01, 0.12, 0.38);
+    block(x + L * 0.02, 0.05, 0.5);
+    turret(x + L * 0.22, 1, 0.1);
+    turret(x + L * 0.34, 1, 0.09);
+    turret(x - L * 0.3, -1, 0.11);
+  } else {
+    // 航母：比船体更宽的平直飞行甲板，右舷一座舰岛
+    ctx.rect(l - L * 0.02, deck - h * 0.12, L * 1.04, h * 0.12);
+    block(x + L * 0.22, 0.1, 0.36);
+  }
+  ctx.fill();
+  ctx.beginPath(); // 清掉路径：drawSymbol 末尾的 stroke 不再描它
 }
 
 // ---------------------------------------------------------------- 单位牌
@@ -1967,7 +2014,28 @@ function drawCard(ctx, x, y, w, h, u, count, c, full) {
   ctx.lineWidth = Math.max(1, w * (full ? 0.03 : 0.04));
   ctx.strokeStyle = ink;
   ctx.stroke();
-  drawSymbol(ctx, def.icon, x, by, bw * 0.78, bh * 0.72, ink);
+  const naval = def.domain === "sea";
+  if (!full && naval && def.short) {
+    // 小牌：舰船剪影缩到十几个像素分不清，写简称（驱 / 巡 / 战 / 航）
+    ctx.font = `800 ${Math.round(bh * 0.95)}px ${FONT}`;
+    ctx.textAlign = "center"; ctx.textBaseline = "middle"; ctx.fillStyle = ink;
+    ctx.fillText(def.short, x, by + 0.5);
+  } else {
+    drawSymbol(ctx, def.icon, x, by, bw * 0.78, bh * 0.72, ink);
+  }
+  if (full && naval) {
+    // 舰船牌：符号框下面一道波浪线，一眼分出海军
+    const wy = by + bh / 2 + Math.max(2, h * 0.05), amp = Math.max(1, h * 0.03), n = 4;
+    ctx.save();
+    ctx.beginPath();
+    for (let i = 0; i <= n * 8; i++) {
+      const px = x - bw / 2 + (bw * i) / (n * 8);
+      const py = wy + Math.sin((i / 8) * Math.PI * 2) * amp;
+      i ? ctx.lineTo(px, py) : ctx.moveTo(px, py);
+    }
+    ctx.lineWidth = Math.max(1, w * 0.025); ctx.strokeStyle = "#9fd0f2"; ctx.stroke();
+    ctx.restore();
+  }
   const fs = Math.max(8, Math.round(h * 0.24));
   ctx.textBaseline = "middle";
   if (full) {
@@ -1994,7 +2062,8 @@ function drawCard(ctx, x, y, w, h, u, count, c, full) {
       ctx.fillText(`${corps.title.replace(/[^0-9]/g, "")}军`, x + w / 2 - w * .06, y + h * .23);
     }
     // 将领：牌下方写名字和番号；战舰写舰名
-    if (u.name) {
+    // 舰名只在拉近、不在城里时写（停在港口城市时会和城市名牌挤在一起）
+    if (u.name && (u.rank || (w >= 56 && !G.cityAt.has(u.tile)))) {
       ctx.save();
       ctx.font = `700 ${Math.max(9, fs * .8)}px ${FONT}`; ctx.textAlign = "center";
       ctx.lineJoin = "round"; ctx.lineWidth = Math.max(2, fs * .28); ctx.strokeStyle = "rgba(20,16,10,.85)";
@@ -2075,7 +2144,14 @@ function drawAirCard(ctx, x, y, s, u, count, c) {
   ctx.arc(x, y, s * 0.48, 0, Math.PI * 2);
   ctx.fillStyle = "#f7f1e3";
   ctx.fill();
-  drawSymbol(ctx, def.icon, x, y, s * 0.72, s * 0.72, "#1f1a12");
+  if (s < 13 && def.short) {
+    // 小菱形：剪影太小分不清，写简称（歼 / 轰）
+    ctx.font = `800 ${Math.round(s * 0.62)}px ${FONT}`;
+    ctx.textAlign = "center"; ctx.textBaseline = "middle"; ctx.fillStyle = "#1f1a12";
+    ctx.fillText(def.short, x, y + 0.5);
+  } else {
+    drawSymbol(ctx, def.icon, x, y, s * 0.72, s * 0.72, "#1f1a12");
+  }
   if (s >= 10) {
     ctx.font = `600 ${Math.max(8, s*.38)}px ${FONT}`; ctx.textAlign='center';ctx.textBaseline='middle';
     ctx.strokeStyle='#24312b';ctx.lineWidth=3;ctx.strokeText(`L${u.level??0}`,x,y+s*.85);
@@ -2107,11 +2183,12 @@ function drawBoat(ctx, x, y, w) {
   ctx.restore();
 }
 
-function drawStack(ctx, x, y, z, st) {
+// part：只画地表的牌（"surface"）或只画上空的飞机（"air"，城市名牌之后再画一遍，飞机不被名牌挡住）
+function drawStack(ctx, x, y, z, st, part) {
   const w = Math.max(24, Math.min(88, SQRT3 * z * 0.7));
   const h = w * 0.76;
   const full = w >= LOD.fullCard;
-  if (st.surface.length) {
+  if (st.surface.length && part !== "air") {
     const top = st.surface[0];
     if (st.surface.some((u) => u.afloat)) drawBoat(ctx, x, y + h * 0.52, w);
     const c = G.nations.get(top.nation).rgb;
@@ -2130,10 +2207,10 @@ function drawStack(ctx, x, y, z, st) {
     drawCard(ctx, x, y, w, h, top, st.surface.length, c, full);
     if (top.facing != null && G.rules.units[top.type]?.category === 'military' && w >= 30) drawFacing(ctx, x, y, w, h, top.facing, c);
   }
-  if (st.air.length) {
+  if (st.air.length && part !== "surface") {
     const top = st.air[0];
     const c = G.nations.get(top.nation).rgb;
-    const s = w * 0.36;
+    const s = w * 0.42; // 飞机菱形放大一点：战斗机 / 轰炸机的剪影要看得清
     const ax = st.surface.length ? x + w * 0.5 : x;
     const ay = st.surface.length ? y - h * 0.62 : y - h * 0.2;
     drawAirCard(ctx, ax, ay, s, top, st.air.length, c);
@@ -2238,6 +2315,13 @@ function drawToken(ctx, x, y, z, units) {
     ctx.textBaseline = "middle";
     ctx.fillStyle = ink;
     ctx.fillText(String(military.length), x, y + 0.5);
+  } else if (["sea", "air"].includes(unitDef(top).domain) && unitDef(top).short) {
+    // 远景的小牌只有十来个像素：舰船、飞机的剪影缩到这么小分不清，改写简称（驱 / 巡 / 战 / 航 / 歼 / 轰）
+    ctx.font = `800 ${Math.round(h * 0.74)}px ${FONT}`;
+    ctx.textAlign = "center";
+    ctx.textBaseline = "middle";
+    ctx.fillStyle = ink;
+    ctx.fillText(unitDef(top).short, x, y + 0.5);
   } else {
     drawSymbol(ctx, unitDef(top).icon, x, y, w * 0.62, h * 0.56, ink);
   }
@@ -2257,9 +2341,10 @@ function drawArmyTokens(ctx, v) {
   }
 }
 
-function drawUnits(ctx, v) {
+function drawUnits(ctx, v, part = "surface") {
   const z = v.z;
   if (z < (G.snap.stress ? 20 : LOD.counters)) {
+    if (part === "air") return;
     // 压力测试场景部队成千上万，远景仍只画小点
     if (!G.snap.stress) drawArmyTokens(ctx, v);
     else if (z >= LOD.armyDot) drawArmyDots(ctx, v);
@@ -2275,8 +2360,9 @@ function drawUnits(ctx, v) {
     const [wx, wy] = center(t);
     const [ox, oy] = attackOffset(st.surface[0] ?? st.air[0], v);
     // 城里的部队画小一点、放在城市图形前面，不把城市整个挡住
-    if (G.cityAt.has(t)) eachCopy(v, wx, wy, pad, (x, y) => drawStack(ctx, x + z * 0.68 + ox, y + z * 0.48 + oy, z * 0.6, st));
-    else eachCopy(v, wx, wy, pad, (x, y) => drawStack(ctx, x + ox, y + z * 0.08 + oy, z, st));
+    if (part === "air" && !st.air.length) continue;
+    if (G.cityAt.has(t)) eachCopy(v, wx, wy, pad, (x, y) => drawStack(ctx, x + z * 0.68 + ox, y + z * 0.48 + oy, z * 0.6, st, part));
+    else eachCopy(v, wx, wy, pad, (x, y) => drawStack(ctx, x + ox, y + z * 0.08 + oy, z, st, part));
   }
 }
 
@@ -2407,6 +2493,7 @@ export function drawOver(ctx, v) {
   }
   drawLevelBadges(ctx, v);
   if (G.layers.cities) drawCityPlates(ctx, v);
+  if (G.layers.units) drawUnits(ctx, v, "air"); // 飞机在上空：画在城市名牌之上
   drawEffects(ctx, v);
   if (G.political && v.z < POLITICAL_LABELS_BELOW && G.layers.territory) drawNationLabels(ctx, v);
   if (G.layers.units) drawCorpsLabels(ctx, v);
