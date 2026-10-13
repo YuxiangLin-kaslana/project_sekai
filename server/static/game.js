@@ -3313,10 +3313,11 @@ G.roadPlan = null;
 G.roadStart = null;
 G.roadNation = null;
 
-function roadSegment(ctx,v,seg,preview=false){
+// decor：路面已经由 roadNetwork 画好了，只补桥面、栏杆、隧道（预览和隧道照常整段画）
+function roadSegment(ctx,v,seg,preview=false,decor=false){
   const [ax,ay]=center(seg.a),[bx0,by]=center(seg.b);
   const bx=ax+wrapDelta(bx0-ax,v.PW);
-  const z=v.z, width=Math.max(1.6,Math.min(9,z*.13));
+  const z=v.z, width=Math.max(1.4,Math.min(7,z*.11)); // 和 drawRoads 的路面一样宽
   for(let k=v.k0;k<=v.k1;k++){
     const x0=v.sx(ax,k),y0=v.sy(ay),x1=v.sx(bx,k),y1=v.sy(by);
     if(Math.max(x0,x1)<-z||Math.min(x0,x1)>v.vw+z||Math.max(y0,y1)<-z||Math.min(y0,y1)>v.vh+z)continue;
@@ -3354,11 +3355,13 @@ function roadSegment(ctx,v,seg,preview=false){
       ctx.restore();continue;
     }
     // Low-key compact gravel surface; the darker edge preserves contrast on farms.
-    ctx.strokeStyle='rgba(37,36,31,.7)';ctx.lineWidth=width+2;
-    ctx.beginPath();ctx.moveTo(x0,y0);ctx.lineTo(x1,y1);ctx.stroke();
-    ctx.strokeStyle='#bbaa87';ctx.lineWidth=width;
-    ctx.stroke();
-    if(z>=16){ctx.strokeStyle='rgba(237,222,185,.45)';ctx.lineWidth=Math.max(.65,width*.2);ctx.stroke();}
+    if(!decor){
+      ctx.strokeStyle='rgba(37,36,31,.7)';ctx.lineWidth=width+2;
+      ctx.beginPath();ctx.moveTo(x0,y0);ctx.lineTo(x1,y1);ctx.stroke();
+      ctx.strokeStyle='#bbaa87';ctx.lineWidth=width;
+      ctx.stroke();
+      if(z>=16){ctx.strokeStyle='rgba(237,222,185,.45)';ctx.lineWidth=Math.max(.65,width*.2);ctx.stroke();}
+    }
     if(seg.kind==='bridge'||seg.kind==='causeway'){
       const dx=x1-x0,dy=y1-y0,len=Math.hypot(dx,dy),nx=-dy/len,ny=dx/len;
       const start=seg.water?0:.33,end=seg.water?1:.67;
@@ -3387,33 +3390,74 @@ function roadSegment(ctx,v,seg,preview=false){
 
 // 道路按缩放分级：远景不画（几万段道路在远处会糊成一层斜线），中景细淡线，近景完整路面和桥梁
 const ROAD_FROM = 5;
+
+// 道路网：每格拆成“格心 → 和邻格之间的边中点”的半段。只连两条路的格子把两段画成经过格心的平滑曲线
+// （和邻格在边中点相接，方向连续），路口、尽头、桥头、隧道口画直线到格心；城市格只画到城边，不压住
+// 城市图案。整张网一次描边、一次铺路面，路口不会一段压一段地出现深色接缝。隧道另画（虚线 + 洞口）。
+function roadNetwork(v, roads) {
+  const links = new Map();
+  const straight = new Set();
+  for (const seg of roads) {
+    if (seg.kind === "tunnel") continue;
+    for (const [a, b] of [[seg.a, seg.b], [seg.b, seg.a]]) {
+      if (!links.has(a)) links.set(a, []);
+      links.get(a).push(b);
+      if (seg.kind !== "road") straight.add(a); // 桥头、堤道：直着上桥
+    }
+  }
+  const path = new Path2D(), z = v.z;
+  for (const [t, ns] of links) {
+    const [cx, cy] = center(t);
+    const mids = ns.map((n) => {
+      const [nx, ny] = center(n);
+      return [cx + wrapDelta(nx - cx, v.PW) / 2, cy + (ny - cy) / 2];
+    });
+    const city = G.cityAt.has(t);
+    for (let k = v.k0; k <= v.k1; k++) {
+      const X = (x) => v.sx(x, k), Y = (y) => v.sy(y);
+      const sx = X(cx), sy = Y(cy);
+      if (sx < -2 * z || sx > v.vw + 2 * z || sy < -2 * z || sy > v.vh + 2 * z) continue;
+      if (ns.length === 2 && !city && !straight.has(t)) {
+        path.moveTo(X(mids[0][0]), Y(mids[0][1]));
+        path.quadraticCurveTo(sx, sy, X(mids[1][0]), Y(mids[1][1]));
+        continue;
+      }
+      const reach = city ? 0.5 : 1; // 城市格：从城边进来一半就停
+      for (const [mx, my] of mids) {
+        path.moveTo(X(mx), Y(my));
+        path.lineTo(X(mx + (cx - mx) * reach), Y(my + (cy - my) * reach));
+      }
+    }
+  }
+  return path;
+}
+
 function drawRoads(ctx,v){
   if(!G.layers.roads||v.z<ROAD_FROM)return;
   ctx.save();
   const roads=new Set();
   for(const [,segments] of visibleEntries(G.roadsAt,v))for(const seg of segments)roads.add(seg);
+  const net=roadNetwork(v,roads);
+  ctx.lineCap='round';ctx.lineJoin='round';
   if(v.z<10) {
-    const paths=new Map();
-    for(const seg of roads) {
-      if(!paths.has(seg.kind))paths.set(seg.kind,new Path2D());
-      const path=paths.get(seg.kind),[ax,ay]=center(seg.a),[bx,by]=center(seg.b);
-      const dx=wrapDelta(bx-ax,v.PW);
-      for(let k=v.k0;k<=v.k1;k++) {
-        const x0=v.sx(ax,k),y0=v.sy(ay),x1=v.sx(ax+dx,k),y1=v.sy(by);
-        if(Math.max(x0,x1)<-v.z||Math.min(x0,x1)>v.vw+v.z||Math.max(y0,y1)<-v.z||Math.min(y0,y1)>v.vh+v.z)continue;
-        path.moveTo(x0,y0);path.lineTo(x1,y1);
-      }
+    // 中景：细淡线（路网一笔画完），隧道虚线
+    ctx.globalAlpha=Math.min(.85,0.3+(v.z-ROAD_FROM)*0.11);
+    ctx.lineWidth=Math.max(1,v.z*.16);ctx.strokeStyle='#a8977a';ctx.stroke(net);
+    const tunnels=new Path2D();
+    for(const seg of roads){
+      if(seg.kind!=='tunnel')continue;
+      const [ax,ay]=center(seg.a),[bx0,by]=center(seg.b),bx=ax+wrapDelta(bx0-ax,v.PW);
+      for(let k=v.k0;k<=v.k1;k++){tunnels.moveTo(v.sx(ax,k),v.sy(ay));tunnels.lineTo(v.sx(bx,k),v.sy(by));}
     }
-    ctx.lineCap='round';
-    ctx.globalAlpha=Math.min(1,0.35+(v.z-ROAD_FROM)*0.13);
-    for(const [kind,path] of paths) {
-      ctx.setLineDash(kind==='tunnel'?[3,3]:[]);
-      ctx.lineWidth=kind==='bridge'?2:1;
-      ctx.strokeStyle=kind==='bridge'?'#dccca8':kind==='tunnel'?'#776b79':kind==='causeway'?'#b3ae95':'#ac9b7b';
-      ctx.stroke(path);
-    }
-    ctx.setLineDash([]);
-  }else for(const seg of roads)roadSegment(ctx,v,seg);
+    ctx.setLineDash([3,3]);ctx.strokeStyle='#776b79';ctx.stroke(tunnels);ctx.setLineDash([]);
+  }else{
+    // 近景：浅色路面 + 细深边，整张网一次画完；桥、堤道、隧道再加各自的样子
+    const width=Math.max(1.4,Math.min(7,v.z*.11));
+    ctx.strokeStyle='rgba(44,40,32,.5)';ctx.lineWidth=width+1.6;ctx.stroke(net);
+    ctx.strokeStyle='#c4b38f';ctx.lineWidth=width;ctx.stroke(net);
+    if(v.z>=16){ctx.strokeStyle='rgba(240,228,196,.4)';ctx.lineWidth=Math.max(.6,width*.18);ctx.stroke(net);}
+    for(const seg of roads)if(seg.kind!=='road')roadSegment(ctx,v,seg,false,true);
+  }
   if(G.roadPlan?.segments)for(const seg of G.roadPlan.segments)roadSegment(ctx,v,seg,true);
   if(G.actionMode==='road'&&G.roadStart!=null)tacticalHex(ctx,v,G.roadStart,'rgba(220,197,143,.18)','#e3c58a',2);
   ctx.restore();
