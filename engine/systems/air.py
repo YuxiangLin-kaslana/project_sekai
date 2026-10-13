@@ -11,6 +11,10 @@
 最多攻击 FIGHTER_STRIKES 次（含起飞那次）；打满了、留空满了（PATROL_TURNS 回合）或下令“返航”就降落，
 降落占一个回合。战斗机始终不能飞出起飞机场的作战半径。打来袭的轰炸机伤害更高（combat._damage_scale）。
 
+防空圈（巡逻）：在空中巡逻的战斗机（攻击后留空的，或者下令“巡逻”起飞到某一格上空的）周围 PATROL_RADIUS 格
+是它的防空圈：敌方轰炸机的航线（去程、返航都算）一进来，它就飞过去拦截（每回合一次，计入这次出击的攻击次数）。
+巡逻：战斗机从机场 / 航母起飞，飞到作战半径内的某一格上空，在空中留 PATROL_TURNS 回合，不攻击也能形成防空圈。
+
 拦截：轰炸机飞到目标上空、投弹之前，交战国的一架战斗机（在空中巡逻、还能攻击的，或者在机场待命、
 这回合还能出击的；轰炸机在它机场的作战半径里）自动拦截一次——机场待命的战斗机就此起飞，算作这次出击
 的第一次攻击。每架轰炸机最多被拦截一次。
@@ -33,6 +37,7 @@ from __future__ import annotations
 from engine.ids import ref
 
 PATROL_TURNS = 2  # 战斗机最多在空中留几回合（含起飞当回合）
+PATROL_RADIUS = 5  # 防空圈：在空中巡逻的战斗机这么多格以内，敌方轰炸机的航线一进来就自动拦截
 FIGHTER_STRIKES = 2  # 战斗机一次出击最多攻击几次（含起飞当回合那次）
 
 
@@ -116,11 +121,13 @@ def flight_flak(state, rules, plane, src, dst) -> list[tuple]:
 
 
 def fly(ctx, plane, dst) -> bool:
-    """飞机从当前格飞到 dst（防空圈进出时挨打）；返回 False 表示被击落。"""
+    """飞机从当前格飞到 dst（防空圈进出时挨打；轰炸机进了敌方巡逻战斗机的防空圈还会被拦截）；
+    返回 False 表示被击落。"""
     from engine.systems.combat import _destroy, gain
 
     s = ctx.state
     src = plane.tile
+    path = flight_path(s.grid, src, dst)
     for gun, damage, why in flight_flak(s, ctx.rules, plane, src, dst):
         plane.hp -= damage
         plane.damaged_turn = s.turn
@@ -137,9 +144,112 @@ def fly(ctx, plane, dst) -> bool:
         if plane.hp <= 0:
             _destroy(ctx, plane, src, "被防空火力击落", by=gun)
             return False
-    if dst != plane.tile:
+    if not is_fighter(ctx.rules, plane) and not _patrol_zone(ctx, plane, path[1:]):
+        return False
+    if plane.id in s.units and dst != plane.tile:
         s.move_unit(plane, dst)
     return True
+
+
+def _patrol_zone(ctx, bomber, path) -> bool:
+    """轰炸机沿 path 飞：进了敌方巡逻战斗机的防空圈（PATROL_RADIUS 格）就在那一格被拦截。返回它还在不在。"""
+    from engine.actions import Attack
+    from engine.systems.combat import _execute, lock_reason
+    from engine.systems.diplomacy import at_war
+
+    s, rules, g = ctx.state, ctx.rules, ctx.state.grid
+    hunters = [
+        u
+        for u in s.units.values()
+        if u.layer == "air"
+        and u.sortie is not None
+        and u.sortie.get("stage") == "patrol"
+        and is_fighter(rules, u)
+        and at_war(s, u.nation, bomber.nation)
+        and lock_reason(s, rules, u) is None
+    ]
+    if not hunters:
+        return True
+    done = getattr(ctx, "patrol_hits", set())
+    ctx.patrol_hits = done
+    for t in path:
+        near = sorted(
+            (
+                u
+                for u in hunters
+                if (u.id, bomber.id) not in done and g.distance(u.tile, t) <= PATROL_RADIUS
+            ),
+            key=lambda u: (g.distance(u.tile, t), u.id),
+        )
+        for fighter in near:
+            if fighter.id not in s.units or lock_reason(s, rules, fighter) is not None:
+                continue
+            done.add((fighter.id, bomber.id))
+            if bomber.tile != t:
+                s.move_unit(bomber, t)  # 在防空圈边上被截住
+            order = Attack(
+                issuer=ref("nation", fighter.nation), unit=ref("unit", fighter.id), to=g.col_row(t)
+            )
+            ctx.automatic_attacks.add((order.type, order.unit, order.to))
+            ctx.log.add(
+                "air_intercept",
+                unit=ref("unit", fighter.id),
+                target=ref("unit", bomber.id),
+                tile=t,
+                nation=ref("nation", fighter.nation),
+                patrol=True,
+            )
+            _execute(ctx, order)
+            if bomber.id not in s.units:
+                return False
+    return True
+
+
+def patrol_problem(state, rules, plane, tile) -> str | None:
+    """战斗机不能去 tile 上空巡逻的原因；可以返回 None。"""
+    from engine.systems.combat import lock_reason
+    from engine.systems.movement import air_radius
+
+    if not is_fighter(rules, plane):
+        return "只有战斗机能巡逻"
+    if plane.sortie is not None:
+        return "已经在空中"
+    why = lock_reason(state, rules, plane)
+    if why:
+        return why
+    if state.grid.distance(plane.tile, tile) > air_radius(state.grid, rules.units[plane.type]):
+        return "超出作战半径"
+    return None
+
+
+def patrol(ctx, plane, tile) -> bool:
+    """战斗机起飞到 tile 上空巡逻（不攻击，形成防空圈；留空 PATROL_TURNS 回合，到时自动降落）。"""
+    s = ctx.state
+    base = plane.tile
+    plane.sortie = {
+        "stage": "patrol",
+        "target": tile,
+        "base": base,
+        "carrier": plane.carried_by,
+        "turn": s.turn,
+        "strikes": 0,
+        "cap": True,
+    }
+    plane.carried_by = None
+    plane.moves_left = plane.road_credit = 0
+    plane.fortified = False
+    plane.destination = None
+    ctx.log.add(
+        "air_sortie",
+        unit=ref("unit", plane.id),
+        unit_type=plane.type,
+        nation=ref("nation", plane.nation),
+        source=base,
+        tile=tile,
+        fighter=True,
+        patrol=True,
+    )
+    return fly(ctx, plane, tile)
 
 
 # ---------------------------------------------------------------- 出击

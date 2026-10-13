@@ -27,6 +27,7 @@ from engine.actions import (
     LeaveCorps,
     Move,
     Order,
+    Patrol,
     Pillage,
     RespondOffer,
     SetAgent,
@@ -326,7 +327,7 @@ def _apply(ctx: StepContext, order: Order) -> None:
         recall(unit)
         log.add("air_recalled", unit=order.unit, unit_type=unit.type, tile=unit.tile)
         return
-    if unit.sortie is not None and not isinstance(order, (UnitManagement, Attack)):
+    if unit.sortie is not None and not isinstance(order, (UnitManagement, Attack, Patrol)):
         raise Rejected("on_sortie", "飞机出击任务中（飞往目标 / 返航），完成前不能下别的命令")
     if isinstance(order, (Pillage, DemolishRoad, BuildFacility, FoundCity)):
         from engine.systems.naval import afloat
@@ -360,6 +361,18 @@ def _apply(ctx: StepContext, order: Order) -> None:
             if u.formation == formation:
                 u.formation, u.destination = None, None
         log.add("group_disbanded", formation=formation, tile=unit.tile)
+        return
+    if isinstance(order, Patrol):
+        from engine.systems.air import patrol, patrol_problem
+
+        try:
+            tile = state.grid.idx(*order.to)
+        except IndexError as e:
+            raise Rejected("bad_target", str(e)) from e
+        problem = patrol_problem(state, rules, unit, tile)
+        if problem:
+            raise Rejected("cannot_patrol", problem)
+        patrol(ctx, unit, tile)
         return
     if isinstance(order, Attack):
         try:

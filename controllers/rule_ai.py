@@ -3423,6 +3423,65 @@ def _air_evacuate(ctx, unit) -> bool:
     )
 
 
+def _bomber_threat(ctx, nation, tile) -> int:
+    """够得着 tile 的交战国轰炸机（不是战斗机的飞机，按它的机场量作战半径）有几架。"""
+    from engine.systems.air import base_of, is_fighter
+
+    s, rules, g = ctx.state, ctx.rules, ctx.state.grid
+    return sum(
+        1
+        for v in s.units.values()
+        if v.layer == "air"
+        and not is_fighter(rules, v)
+        and at_war(s, v.nation, nation)
+        and g.distance(base_of(v), tile) <= movement.air_radius(g, rules.units[v.type])
+    )
+
+
+def _cap(ctx, unit, plan) -> bool:
+    """战斗机巡逻（防空圈，engine/systems/air.py）：敌方轰炸机够得着本方部队时，没别的仗打的战斗机起飞到
+    本方部队最密的地方上空巡逻——轰炸机一进 5 格就自动拦截。几架战斗机错开各罩一片。"""
+    from engine.actions import Patrol
+    from engine.systems.air import PATROL_RADIUS, patrol_problem
+
+    s, rules, g = ctx.state, ctx.rules, ctx.state.grid
+    reach = movement.air_radius(g, rules.units[unit.type])
+    tiles = [
+        u.tile
+        for u in s.units.values()
+        if u.nation == unit.nation
+        and is_military(rules, u)
+        and rules.units[u.type].domain == "land"
+        and u.layer == "surface"
+        and g.distance(u.tile, unit.tile) <= reach
+    ]
+    if not tiles:
+        return False
+    zones = _ai(ctx).setdefault("cap", [])
+    covered = {x for z in zones for x in tiles if g.distance(x, z) <= PATROL_RADIUS}
+    spot = max(
+        tiles,
+        key=lambda t: (
+            sum(1 for x in tiles if x not in covered and g.distance(x, t) <= PATROL_RADIUS),
+            -g.distance(t, unit.tile),
+            -t,
+        ),
+    )
+    fresh = sum(1 for x in tiles if x not in covered and g.distance(x, spot) <= PATROL_RADIUS)
+    threat = _bomber_threat(ctx, unit.nation, spot)
+    if not threat or not fresh or patrol_problem(s, rules, unit, spot):
+        return False
+    if not emit(
+        ctx,
+        unit,
+        Patrol(issuer=ref("nation", unit.nation), unit=ref("unit", unit.id), to=g.col_row(spot)),
+        f"敌方轰炸机 {threat} 架够得着：起飞到本方部队上空巡逻，进防空圈就拦截",
+    ):
+        return False
+    zones.append(spot)
+    return True
+
+
 def _air_rebase(ctx, unit) -> bool:
     """这回合没仗打的飞机：转场到能把本方战线（主攻方向优先，其次进攻中的战线、离得最近的敌军）罩在
     作战半径里、又最安全（_air_danger 最低）的本国机场 / 航母——不往最前沿的机场挤，前线一推过来，
@@ -4410,6 +4469,14 @@ def decide_unit(ctx, unit, plan, guards, claimed):
                 ctx, unit, front.tile, "向前线城市靠拢，等待兵力补齐", stop_within=2
             ):
                 return
+    if (
+        ut.domain == "air"
+        and unit.sortie is None
+        and "air_superiority" in ut.tags
+        and health(rules, unit) >= 50
+        and _cap(ctx, unit, plan)
+    ):
+        return
     if ut.domain == "air" and unit.sortie is None and _air_rebase(ctx, unit):
         return
     if "scout" in ut.tags and plan.get("settlement") is not None:

@@ -131,6 +131,14 @@ class Attack(_Order):
     to: tuple[int, int]
 
 
+class Patrol(_Order):
+    """战斗机起飞，到 to 上空巡逻（engine/systems/air.py 的防空圈）。"""
+
+    type: Literal["patrol"] = "patrol"
+    unit: str
+    to: tuple[int, int]
+
+
 class CityAttack(_Order):
     type: Literal["city_attack"] = "city_attack"
     city: str
@@ -212,6 +220,7 @@ Order = Annotated[
     | BuildFacility
     | CityOrder
     | Attack
+    | Patrol
     | CityAttack
     | FormGroup
     | Ungroup
@@ -259,6 +268,7 @@ ORDER_PRIORITY = {
     "demolish_road": 4,
     "build_facility": 5,
     "move": 6,
+    "patrol": 6,  # 和移动同时：本回合战斗阶段之前就在空中，防空圈生效
     "attack": 7,
     "city_attack": 7,
 }

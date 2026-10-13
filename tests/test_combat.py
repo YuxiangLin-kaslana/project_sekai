@@ -1150,3 +1150,34 @@ def test_units_turn_to_face_the_biggest_threat_before_combat(board):
     me.facing = bearing(board.grid, me.tile, board.grid.idx(3, 3))  # 原来背对坦克
     s = step(board, [], RULES).state
     assert side(s.units[me.id].facing, bearing(s.grid, me.tile, tank.tile)) <= 1  # 坦克在正面
+
+
+def test_patrolling_fighters_intercept_bombers_entering_their_zone(board):
+    """防空圈：巡逻的战斗机 5 格以内，敌方轰炸机的航线一进来就自动拦截（不用等它飞到目标上空）。"""
+    board.relations["1:2"] = {"status": "war", "since": 0}
+    base(board, 1, 1, 3)
+    base(board, 2, 11, 3)
+    fighter = add(board, "fighter", 2, 11, 3)
+    out = action(board, order(fighter, "patrol", to=[8, 3]))
+    s = out.state
+    assert not out.rejected and s.units[fighter.id].sortie["stage"] == "patrol"
+    assert s.units[fighter.id].tile == s.grid.idx(8, 3)
+    bomber = add(s, "bomber", 1, 1, 3)
+    add(s, "infantry", 2, 6, 6)  # 轰炸目标：在防空圈里（离巡逻点 5 格内）
+    hit = action(s, order(bomber, "attack", to=[6, 6]))
+    events = [e for e in hit.events if e["type"] == "air_intercept"]
+    assert events and events[0].get("patrol")
+    assert events[0]["unit"] == f"unit:{fighter.id}"
+    assert hit.state.units.get(bomber.id) is None or hit.state.units[bomber.id].hp < 100
+
+
+def test_bombers_outside_the_patrol_zone_are_not_intercepted_by_it(board):
+    board.relations["1:2"] = {"status": "war", "since": 0}
+    base(board, 1, 1, 1)
+    base(board, 2, 11, 7)
+    fighter = add(board, "fighter", 2, 11, 7)
+    s = action(board, order(fighter, "patrol", to=[11, 7])).state
+    bomber = add(s, "bomber", 1, 1, 1)
+    add(s, "infantry", 2, 3, 1)  # 离巡逻点很远，航线也不经过防空圈
+    hit = action(s, order(bomber, "attack", to=[3, 1]))
+    assert not any(e["type"] == "air_intercept" and e.get("patrol") for e in hit.events)
