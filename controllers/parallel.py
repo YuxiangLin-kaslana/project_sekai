@@ -117,6 +117,8 @@ def plan(state, rules, job, *, share: bool) -> dict:
     state.territory_index()
     local = state.clone()
     local._encircled = state._encircled
+    # 规划时用回合开始时的包围状态估算（本国部队每下一道移动指令就重算一遍断补给太贵，大兵团时是热点）
+    local._encircled_lock = True
     local._territory_cache = state._territory_cache
     if share:
         # 路网没变时共用距离场（副本一改路网就换新字典，不影响别人）

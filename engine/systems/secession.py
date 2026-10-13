@@ -83,6 +83,8 @@ def secede(
     s._supply_cache.clear()
     s._power_cache.clear()
     s._encircled = None
+    s._occ = None  # 倒戈的部队换了国籍：占位表、控制区都要重算
+    s._zoc = {}
     s._support = None
     rebalance(s, (nid, old))  # 新旧两国：领土在各自的城市之间重新分
     _levy(ctx, nid, group)

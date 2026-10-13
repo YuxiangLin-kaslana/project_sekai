@@ -77,8 +77,11 @@ from engine.systems.learning import bias as learned_bias
 from engine.systems.orders import automatic
 from engine.systems.settlement import city_scale, geography, map_scale, site_score
 
-ACTOR_BUDGET = 128  # 每国每回合最多决策几支部队（开局设置 ai_budget，64–256）；超出的国内轮流
-ACTOR_BUDGET_RANGE = (64, 256)
+ACTOR_BUDGET = 256  # 每国每回合最多决策几支部队（开局设置 ai_budget，64–512）；超出的国内轮流
+ACTOR_BUDGET_RANGE = (64, 512)
+# 大兵团：部队多的国家名额随兵力放大——至少是待决策部队的 ACTOR_SHARE，最多放大到设置值的 ACTOR_STRETCH 倍
+# （1000 支部队的国家每回合约 300 支重新决策，平均 3 回合轮到一次；原来固定 128 支要等 8 回合）
+ACTOR_SHARE, ACTOR_STRETCH = 0.3, 2
 FLOWS_PER_ACTOR = 48 / 256  # 每支要决策的部队配多少张新距离场名额
 CITY_ATTACK_BUDGET = 128
 FLOW_BUILDS = 48  # 每回合最多新建几张共享距离场（Numba 算得快；不够的单位改用自己的 A*）
@@ -1072,6 +1075,14 @@ def _fast(rules, u):
     )
 
 
+def _near_field(g, tiles, limit) -> np.ndarray:
+    """每格到 tiles 里最近一格的步数（BFS，只算到 limit 步，更远的是 2^20）。大兵团时代替逐个算距离。"""
+    src = np.zeros(g.size, dtype=np.bool_)
+    if tiles:
+        src[np.fromiter(tiles, dtype=np.int64)] = True
+    return kernels.masked_bfs(src, np.ones(g.size, dtype=np.bool_), g.neighbors, limit)
+
+
 def plan_exploits(ctx, nid, units, guards, plan):
     """穿插：进攻战线上的快速部队钻到敌后（防守时保持防线完整，不穿插）。候选格是它们一回合够得着、敌军附近的空格（避开敌城射程）。
     每格打分（见 EXPLOIT_*）：在推演里放上本方部队连同它的控制区，附近敌军回补给源的路拉长了多少、
@@ -1131,6 +1142,10 @@ def plan_exploits(ctx, nid, units, guards, plan):
     for v in foes:
         near_foe.setdefault(v.tile, []).append(v)
     standable = encirclement._standable(rules, "land")
+    # 到最近的敌军 / 敌城 / 本方快速部队几步（整图算一次，候选格直接查）
+    foe_d = _near_field(g, {v.tile for v in foes}, 3)
+    city_d = _near_field(g, {c.tile for c in enemy_cities}, CITY_RANGE)
+    fast_d = _near_field(g, {u.tile for u in fast}, max(rules.units[u.type].moves for u in fast))
     candidates = {}
     for u in fast:
         reach = rules.units[u.type].moves
@@ -1140,11 +1155,9 @@ def plan_exploits(ctx, nid, units, guards, plan):
                 continue
             if occ.get(t) or (zone is not None and zone[t]):
                 continue  # 有人站着；不能无视控制区的（摩托化）进不了敌方控制区深处
-            if any(g.distance(t, c.tile) <= CITY_RANGE for c in enemy_cities):
-                continue
-            if not any(g.distance(t, v.tile) <= 3 for v in foes):
-                continue
-            candidates[t] = min(g.distance(t, w.tile) for w in fast)
+            if city_d[t] <= CITY_RANGE or foe_d[t] > 3:
+                continue  # 在敌城射程里；附近（3 格内）没有敌军
+            candidates[t] = int(fast_d[t])
     if not candidates:
         return out
     pool = sorted(candidates, key=lambda t: (candidates[t], t))[:EXPLOIT_CANDIDATES]
@@ -1159,11 +1172,16 @@ def plan_exploits(ctx, nid, units, guards, plan):
     mine = encirclement.network(s, rules, nid, occ)
     my_steps = None if mine is None else encirclement.steps(s, mine)
     plan_tiles = []
+    nearby_of = {}  # 候选格 → EXPLOIT_NEAR 内的敌军（只算一次）
 
     def value(t):
         blocks = (*plan_tiles, t)
         score = -EXPLOIT_TRAVEL * candidates[t]
-        nearby = [v for v in foes if g.distance(v.tile, t) <= EXPLOIT_NEAR and v.nation in nets]
+        nearby = nearby_of.get(t)
+        if nearby is None:
+            nearby = nearby_of[t] = [
+                v for v in foes if g.distance(v.tile, t) <= EXPLOIT_NEAR and v.nation in nets
+            ]
         for e in sorted({v.nation for v in nearby}):
             after = encirclement.steps(s, nets[e], blocks)
             for v in nearby:
@@ -1413,6 +1431,7 @@ def plan_screens(ctx, nid, units, guards):
     near_mine = {}
     for u in mine:
         near_mine.setdefault(u.tile, []).append(u)
+    own_d = _near_field(g, set(near_mine), 3)  # 到最近的本方部队几步
     threats = {}
     for v in raiders:
         for t in g.within(v.tile, rules.units[v.type].moves):
@@ -1420,13 +1439,11 @@ def plan_screens(ctx, nid, units, guards):
                 continue
             if s.city_at(t) is not None or any(n in foes for n in g.neighbors_of(t)):
                 continue  # 贴着敌军的格子是第一线，不是要堵的缺口
-            if any(g.distance(t, w) <= 3 for w in near_mine):
+            if own_d[t] <= 3:
                 threats[t] = 0
     if not threats:
         return {}
-    for t in sorted(threats, key=lambda t: (min(g.distance(t, w) for w in near_mine), t))[
-        :EXPLOIT_CANDIDATES
-    ]:
+    for t in sorted(threats, key=lambda t: (int(own_d[t]), t))[:EXPLOIT_CANDIDATES]:
         after = encirclement.steps(s, net, (t,))
         score = 0
         for u in mine:
@@ -4409,17 +4426,14 @@ def _air_cover(ctx, unit, plan):
         if tiles:
             # 已有高射炮罩住的部队不再算：几门炮分散开各罩一片，防空圈连起来轰炸机才没处下手
             reach = rules.units[unit.type].range
-            covered = {
-                x for t in _ai(ctx).get("air_cover", {}) for x in tiles if g.distance(x, t) <= reach
-            }
-            spot = max(
-                tiles,
-                key=lambda t: (
-                    sum(1 for x in tiles if x not in covered and g.distance(x, t) <= reach),
-                    -t,
-                ),
-            )
-            army = sum(1 for x in tiles if g.distance(x, spot) <= 3)
+            count = Counter(tiles)  # 格子 → 本方部队数（大兵团时按格子算，不两两比较）
+            done = _near_field(g, set(_ai(ctx).get("air_cover", {})), reach)
+
+            def fresh(t, r=reach):
+                return sum(count.get(x, 0) for x in g.within(t, r) if done[x] > reach)
+
+            spot = max(count, key=lambda t: (fresh(t), -t))
+            army = sum(count.get(x, 0) for x in g.within(spot, 3))
             anchors.append(
                 (
                     2 + army + 3 * air_threat(ctx, unit.nation, spot),
@@ -5194,8 +5208,9 @@ def resolve(ctx):
         else:
             by_nation.setdefault(u.nation, []).append(u)
     for mine in by_nation.values():
-        first = (s.turn - 1) * budget % len(mine)
-        active.update(mine[(first + i) % len(mine)].id for i in range(min(budget, len(mine))))
+        quota = max(budget, min(ACTOR_STRETCH * budget, round(ACTOR_SHARE * len(mine))))
+        first = (s.turn - 1) * quota % len(mine)
+        active.update(mine[(first + i) % len(mine)].id for i in range(min(quota, len(mine))))
     awake_ids = {u.id for u in awake}
     # 城市防御射击同样按全局轮转
     cities = [
@@ -5237,7 +5252,8 @@ def resolve(ctx):
 
 
 def actor_budget(state) -> int:
-    """每国每回合最多决策几支部队：开局设置 ai_budget（64–256），默认 ACTOR_BUDGET。"""
+    """每国每回合最多决策几支部队：开局设置 ai_budget（64–512），默认 ACTOR_BUDGET（大兵团再按兵力放大，
+    见 ACTOR_SHARE）。"""
     lo, hi = ACTOR_BUDGET_RANGE
     return max(lo, min(hi, int(state.grid.tuning.get("ai_budget", ACTOR_BUDGET))))
 

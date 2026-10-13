@@ -32,9 +32,12 @@ class Encirclement:
 
 
 def occupants(state, rules) -> dict[int, set[int]]:
-    """每格站着的地表军事单位属于哪些国家：{格子: {国家, ...}}（下了海的陆军不算）。"""
+    """每格站着的地表军事单位属于哪些国家：{格子: {国家, ...}}（下了海的陆军不算）。
+    按单位位置缓存（state._occ，单位一动就作废）；返回值只读。"""
     from engine.systems.naval import afloat
 
+    if state._occ is not None:
+        return state._occ
     out: dict[int, set[int]] = {}
     for (tile, layer), ids in state._at.items():
         if layer != "surface":
@@ -43,6 +46,7 @@ def occupants(state, rules) -> dict[int, set[int]]:
             u = state.units[i]
             if rules.units[u.type].category == "military" and not afloat(state, rules, u):
                 out.setdefault(tile, set()).add(u.nation)
+    state._occ = out
     return out
 
 

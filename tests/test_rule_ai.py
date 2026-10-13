@@ -565,11 +565,11 @@ def test_decision_budget_is_per_nation(board, monkeypatch):
 
     monkeypatch.setattr(parallel, "run", capture)
     step(board, [], RULES)
-    assert len(seen[1]["active"]) == 64  # 部队多的国家：本国内部轮流，最多 64 支
+    assert len(seen[1]["active"]) == 64  # 部队多的国家：本国内部轮流（90 支的 30% 不到 64，按 64 支）
     assert set(seen[2]["active"]) == {u.id for u in small}  # 部队少的国家：全部决策
     assert rule_ai.actor_budget(board) == 64 and len(big) == 90
     board.grid.tuning = {"ai_budget": 999}
-    assert rule_ai.actor_budget(board) == 256  # 每国最多 256 支
+    assert rule_ai.actor_budget(board) == 512  # 设置最多 512 支
 
 
 def test_ai_fighters_intercept_incoming_bombers(board):
@@ -686,3 +686,18 @@ def test_chokepoints_find_mountain_passes_not_open_ground(board):
     chokes = rule_ai._chokepoints(ctx)
     assert g.idx(16, 12) in chokes
     assert g.idx(8, 8) not in chokes and g.idx(25, 15) not in chokes
+
+
+
+def test_decision_budget_grows_with_huge_armies(board, monkeypatch):
+    """大兵团：部队多的国家决策名额随兵力放大（至少 30%），最多放大到设置值的 2 倍。"""
+    from controllers import parallel
+
+    board.grid.tuning = {"ai_budget": 64}
+    board.nations[1].ai_enabled = True
+    for k in range(300):
+        add(board, "infantry", 1, (1 + k % 30, 1 + k // 30))
+    seen = {}
+    monkeypatch.setattr(parallel, "run", lambda state, rules, jobs: seen.update({j["nation"]: j for j in jobs}) or [])
+    step(board, [], RULES)
+    assert len(seen[1]["active"]) == 90  # 300 支 × 30%，在 64 和 128 之间

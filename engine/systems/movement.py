@@ -82,13 +82,20 @@ def port_overrides(state: GameState, ut: UnitType, nation: int, rules=None) -> d
 def blocked_tiles(state: GameState, rules: Ruleset, unit: Unit, ut: UnitType) -> set[int]:
     """走不过去的格子：外国城市、有外国单位的格子。本方已满的格子可以借道穿过（只是不能停在那），
     见 has_room。"""
-    blocked = {c.tile for c in state.cities.values() if c.nation != unit.nation}
-    for (tile, layer), ids in state._at.items():
-        if layer != unit.layer or tile == unit.tile:
-            continue
-        if any(state.units[i].nation != unit.nation for i in ids):
-            blocked.add(tile)
-    return blocked
+    key = (unit.nation, unit.layer)
+    base = state._blocked.get(key)
+    if base is None:
+        # 按（国家, 层）缓存（大兵团时每次寻路都扫一遍全图单位太慢），单位一动就作废（GameState._moved）
+        found = {c.tile for c in state.cities.values() if c.nation != unit.nation}
+        for (tile, layer), ids in state._at.items():
+            if layer != unit.layer:
+                continue
+            if any(state.units[i].nation != unit.nation for i in ids):
+                found.add(tile)
+        base = state._blocked[key] = frozenset(found)
+    if unit.tile in base and state.city_at(unit.tile) is None:
+        return set(base - {unit.tile})  # 自己脚下（交战格）不算挡路
+    return set(base)
 
 
 def closed_for(state: GameState, unit: Unit):
@@ -247,9 +254,16 @@ def _planner(state, rules, unit, cost=None):
     # 和 edge_cost 同一套规则，预先把地形消耗、河流转成 Python 列表（寻路每条边都要算一次）
     land = move_domain(ut) in ("land", "amphibious")
     soldier = ut.domain == "land"  # 陆军能下海（下海、上岸各花一整回合）
-    costs = cost.tolist()
+    cached = state._edge_cache.get("cost_list")
+    if cached is not None and cached[0] is cost:
+        costs = cached[1]
+    else:
+        costs = cost.tolist()
+        state._edge_cache["cost_list"] = (cost, costs)
     roads = state.roads
-    rivers = state.grid.river_edges.tolist()
+    rivers = state._edge_cache.get("river_list")
+    if rivers is None:
+        rivers = state._edge_cache["river_list"] = state.grid.river_edges.tolist()
     directions = _topology(state.grid)[1]
     water = state._edge_cache.get("water_list")
     if water is None:

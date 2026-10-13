@@ -218,6 +218,10 @@ class GameState:
     )  # 六向通行费用表（道路、城市变了就清）
     _closed_cache: dict = field(default_factory=dict, repr=False)  # 关闭边境的格子（按回合、国家）
     _zoc: dict = field(default_factory=dict, repr=False)  # 控制区（engine/systems/zoc.py）
+    # 每格的地表军事单位属于哪些国家（engine/systems/encirclement.occupants），单位一动就作废
+    _occ: object = field(default=None, repr=False)
+    # 寻路时走不过去的格子（外国城市、有外国单位的格子），按（国家, 层）缓存，单位一动就作废
+    _blocked: dict = field(default_factory=dict, repr=False)
     _support: tuple | None = field(
         default=None, repr=False
     )  # (键, {城市: 供养的单位数})，见 cities.supported
@@ -243,11 +247,21 @@ class GameState:
         self._edge_cache = {}
         self._path_epoch = next(_PATH_EPOCHS)
 
-    def _moved(self) -> None:
+    def _moved(self, unit: Unit | None = None) -> None:
+        """单位增删移动后作废派生数据。给了 unit 时只作废受影响的：飞机不管包围和控制区；
+        某国的部队动了，只有别国眼里的控制区（mask(别国)）会变，这个国家自己的那份不用重算。"""
+        if self._blocked:
+            self._blocked = {}
+        if unit is not None and unit.layer == "air":
+            return
+        self._occ = None
         if not self._encircled_lock:
             self._encircled = None
         if self._zoc:
-            self._zoc = {}  # 控制区跟着单位位置变
+            if unit is None:
+                self._zoc = {}  # 控制区跟着单位位置变
+            else:
+                self._zoc = {k: v for k, v in self._zoc.items() if k[0] == unit.nation}
 
     # ---- 实体 ----
 
@@ -257,7 +271,7 @@ class GameState:
         return n
 
     def add_unit(self, unit: Unit) -> Unit:
-        self._moved()
+        self._moved(unit)
         self.units[unit.id] = unit
         self._at.setdefault((unit.tile, unit.layer), []).append(unit.id)
         self._at[(unit.tile, unit.layer)].sort()
@@ -279,7 +293,7 @@ class GameState:
         return [u for u in self.units_at(ship.tile, "air") if u.carried_by == ship.id]
 
     def remove_unit(self, unit_id: int) -> None:
-        self._moved()
+        self._moved(self.units.get(unit_id))
         for rider in self.aboard(self.units[unit_id]):  # 航母沉了，舰载机一起损失
             self.remove_unit(rider.id)
         u = self.units.pop(unit_id)
@@ -298,7 +312,7 @@ class GameState:
                     v.formation = None
 
     def move_unit(self, unit: Unit, tile: int) -> None:
-        self._moved()
+        self._moved(unit)
         stack = self._at[(unit.tile, unit.layer)]
         stack.remove(unit.id)
         if not stack:
