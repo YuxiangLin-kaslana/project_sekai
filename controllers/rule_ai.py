@@ -3296,6 +3296,7 @@ def _air_hop(ctx, unit, goal, bases):
 
 
 AIR_SAFE = 4  # 机场这么多格以内有敌方陆军就算受威胁（越近越危险）：飞机撤走，转场也不挑它
+AIR_DEAD_END = 15  # 转场挑机场：没有退路（转场半径内没有更靠后、离敌军更远的本方机场）的扣这么多分
 AIR_FLEE = 3  # 威胁到这么多（敌军已在两格内）：停在地上的飞机先撤离，不再从这里出击（攻击目标一走开就飞不起来）
 
 
@@ -3310,6 +3311,26 @@ def _air_danger(ctx, nation, tile) -> float:
         AIR_SAFE + 1 - g.distance(t, tile)
         for t, n in armies
         if g.distance(t, tile) <= AIR_SAFE and at_war(s, n, nation)
+    )
+
+
+def _air_overrun(ctx, nation, tile) -> bool:
+    """敌方陆军这一回合就能冲到机场 tile（或它旁边）：距离不超过它的移动力 + 1。坦克一回合走 4 格，
+    只看两格内的敌军来不及撤。"""
+    s, rules, g = ctx.state, ctx.rules, ctx.state.grid
+    ai = _ai(ctx)
+    if "land_reach" not in ai:
+        ai["land_reach"] = [
+            (u.tile, u.nation, movement.unit_moves(g, rules.units[u.type]))
+            for u in s.units.values()
+            if u.layer == "surface"
+            and is_military(rules, u)
+            and rules.units[u.type].domain == "land"
+            and not naval.afloat(s, rules, u)
+        ]
+    return any(
+        g.distance(t, tile) <= moves + 1 and at_war(s, n, nation)
+        for t, n, moves in ai["land_reach"]
     )
 
 
@@ -3391,9 +3412,10 @@ def _air_evacuate(ctx, unit) -> bool:
     foes = [t for t, n in _ai(ctx).get("land_armies", ()) if at_war(s, n, unit.nation)]
 
     def value(t):
-        # 受威胁越小越好；同样安全的，离敌军越远越好（别撤到另一座马上也要丢的前沿机场）
+        # 敌军这回合冲不到、受威胁越小越好；同样安全的，离敌军越远越好（别撤到另一座马上也要丢的前沿机场）
         far = min((g.distance(t, f) for f in foes), default=AIR_SAFE * 3)
-        return -10 * _air_danger(ctx, unit.nation, t) + min(far, AIR_SAFE * 3)
+        rush = 50 if _air_overrun(ctx, unit.nation, t) else 0
+        return -rush - 10 * _air_danger(ctx, unit.nation, t) + min(far, AIR_SAFE * 3)
 
     hop = _air_route(ctx, unit, _air_bases(ctx, unit.nation), value)
     return hop is not None and _send_path(
@@ -3429,13 +3451,21 @@ def _air_rebase(ctx, unit) -> bool:
             goal = min(foes, key=lambda t: (g.distance(t, unit.tile), t))
     reach = air_radius(g, rules.units[unit.type])
     cover = max(2, reach - 2)
+    foes = [t for t, n in _ai(ctx).get("land_armies", ()) if at_war(s, n, unit.nation)]
+
+    def depth(t):
+        return min((g.distance(t, f) for f in foes), default=99)
 
     def value(t):
-        danger = _air_danger(ctx, unit.nation, t)
+        danger = _air_danger(ctx, unit.nation, t) + (10 if _air_overrun(ctx, unit.nation, t) else 0)
+        # 退路：转场半径内有没有更靠后（离敌军更远）的本方机场——前线一垮，死胡同里的飞机只能投降
+        trapped = not any(
+            b != t and g.distance(b, t) <= reach and depth(b) > depth(t) for b in bases
+        )
         if goal is None:
-            return -danger
+            return -danger - AIR_DEAD_END * trapped
         d = g.distance(t, goal)
-        return (100 if d <= cover else -d) - 30 * danger
+        return (100 if d <= cover else -d) - 30 * danger - AIR_DEAD_END * trapped
 
     if _air_danger(ctx, unit.nation, unit.tile) > 0:
         hop = _air_route(ctx, unit, bases, value)
@@ -4169,7 +4199,10 @@ def decide_unit(ctx, unit, plan, guards, claimed):
     if (
         ut.domain == "air"
         and unit.sortie is None
-        and _air_danger(ctx, unit.nation, unit.tile) >= AIR_FLEE
+        and (
+            _air_danger(ctx, unit.nation, unit.tile) >= AIR_FLEE
+            or _air_overrun(ctx, unit.nation, unit.tile)
+        )
         and _air_evacuate(ctx, unit)
     ):
         return

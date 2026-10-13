@@ -15,12 +15,13 @@
 这回合还能出击的；轰炸机在它机场的作战半径里）自动拦截一次——机场待命的战斗机就此起飞，算作这次出击
 的第一次攻击。每架轰炸机最多被拦截一次。
 
-降落：原基地丢了、满了，就去最近的本国机场 / 航母；敌方陆军已经贴着的机场排在最后（落下去就跑不掉了）；
+降落：原基地丢了、满了，就去最近的本国机场 / 航母；敌方陆军下回合就冲得到的机场排在最后（落下去就跑不掉了）；
 哪里都降不了就坠毁。降落当回合不能再行动。
 
 机场失守（stranded，占领结算和动荡结算之后）：停在地上的飞机脚下的机场不再是本国的（被敌军占领、
-所属城市陷落、分裂出去）或者机场没了：敌方陆军就站在这格上的，飞机就地投降（记进那支部队的战绩）；
-否则紧急转场到作战半径内最近的本国机场 / 航母，哪里都去不了就放弃（损失）。
+所属城市陷落、分裂出去）或者机场没了：紧急转场到作战半径内最近的本国机场 / 航母（下回合就会被敌军
+冲到的排在最后）。敌方陆军就站在这格上、而这架飞机本回合已经行动过（刚出击、刚降落、刚转场，飞不起来）
+的，就地投降（记进那支部队的战绩）；哪里都去不了也就地投降（或者放弃）。
 
 防空：飞机每飞一段航线，航线进入敌方防空圈（高射炮 range、舰艇 flak_range 以内）时这个防空单位
 开火一次，飞出防空圈时再开火一次（同一段航线最多打掉 FLAK_CAP 点生命）。在防空圈里盘旋不挨打。
@@ -359,9 +360,9 @@ def stranded(ctx) -> None:
             ),
             None,
         )
-        if captor is not None:
+        if captor is not None and plane.attacked_turn == s.turn:
             _destroy(ctx, plane, plane.tile, "机场失守，就地投降", by=captor)
-            continue
+            continue  # 本回合刚出击 / 刚降落：飞不起来（只是原地驻守的照样能紧急起飞）
         reach = air_radius(g, rules.units[plane.type])
         bases = _airfields(s, rules, plane.nation) + [
             v.tile
@@ -370,7 +371,7 @@ def stranded(ctx) -> None:
         ]
         options = sorted(
             (t for t in set(bases) if g.distance(plane.tile, t) <= reach),
-            key=lambda t: (g.distance(plane.tile, t), t),
+            key=lambda t: (_menaced(s, rules, plane.nation, t), g.distance(plane.tile, t), t),
         )
         target = next(
             (
@@ -382,7 +383,10 @@ def stranded(ctx) -> None:
             None,
         )
         if target is None:
-            _destroy(ctx, plane, plane.tile, "机场失守，无处转场")
+            if captor is not None:
+                _destroy(ctx, plane, plane.tile, "机场失守，就地投降", by=captor)
+            else:
+                _destroy(ctx, plane, plane.tile, "机场失守，无处转场")
             continue
         source = plane.tile
         if not fly(ctx, plane, target):
@@ -404,19 +408,27 @@ def stranded(ctx) -> None:
         )
 
 
+MENACE_RADIUS = 6  # 降落挑机场：这么远以内的敌方陆军都看（坦克一回合走 4 格，加上占机场的一格）
+
+
 def _menaced(s, rules, nation, tile) -> bool:
-    """tile（机场）旁边一格以内有交战国的地表陆军。"""
+    """tile（机场）下一回合就可能被交战国陆军冲到：距离不超过它的移动力 + 1。"""
     from engine.systems.diplomacy import at_war
+    from engine.systems.movement import unit_moves
 
     g = s.grid
-    return any(
-        v.nation != nation
-        and rules.units[v.type].category == "military"
-        and rules.units[v.type].domain == "land"
-        and at_war(s, v.nation, nation)
-        for n in (tile, *g.neighbors_of(tile))
-        for v in s.units_at(n, "surface")
-    )
+    for n in g.within(tile, MENACE_RADIUS):
+        for v in s.units_at(n, "surface"):
+            ut = rules.units[v.type]
+            if (
+                v.nation != nation
+                and ut.category == "military"
+                and ut.domain == "land"
+                and at_war(s, v.nation, nation)
+                and g.distance(n, tile) <= unit_moves(g, ut) + 1
+            ):
+                return True
+    return False
 
 
 def _hostile(s, a, b) -> bool:

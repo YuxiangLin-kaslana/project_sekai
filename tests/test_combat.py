@@ -1061,14 +1061,15 @@ def test_planes_on_a_lost_airfield_surrender_or_flee(board):
         g.owner[t] = 1
         g.facility[t] = RULES.facility_index("airfield")
     captured = add(board, "fighter", 1, 2, 3)
+    captured.attacked_turn = board.turn  # 这回合刚出击回来：飞不起来
     fled = add(board, "bomber", 1, 2, 3)
     infantry = add(board, "infantry", 2, 2, 3)
     g.owner[near] = 2  # 敌军占了这座机场
     ctx = StepContext(board, RULES, [], EventLog(board.turn), RngTree(board.seed, "t"))
     stranded(ctx)
-    # 敌方陆军就在机场上：飞机就地投降（记进占领部队的战绩）——这里轰炸机也一起投降
-    assert captured.id not in board.units and fled.id not in board.units
-    assert board.units[infantry.id].kills == 2
+    # 敌方陆军冲上机场：这回合已经行动过的飞机就地投降（记进占领部队的战绩），没动过的紧急起飞转场
+    assert captured.id not in board.units and board.units[fled.id].tile == far
+    assert board.units[infantry.id].kills == 1
     # 机场所在的土地易手（比如城市陷落），但没有敌军站在上面：紧急转场到最近的本国机场
     g.owner[near] = 1
     plane = add(board, "fighter", 1, 2, 3)
