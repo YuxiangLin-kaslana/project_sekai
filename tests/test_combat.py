@@ -1187,3 +1187,21 @@ def test_bombers_outside_the_patrol_zone_are_not_intercepted_by_it(board):
     add(s, "infantry", 2, 3, 1)  # 离巡逻点很远，航线也不经过防空圈
     hit = action(s, order(bomber, "attack", to=[3, 1]))
     assert not any(e["type"] == "air_intercept" and e.get("patrol") for e in hit.events)
+
+
+def test_patrolling_fighter_lists_enemy_planes_in_its_zone_beyond_base_range(board):
+    from engine.systems.air import PATROL_RADIUS
+
+    g = board.grid
+    g.tuning["air_range"] = 25  # 作战半径缩到 2 格
+    base(board, 1, 1, 3)
+    fighter = add(board, "fighter", 1, 1, 3)
+    s = action(board, order(fighter, "patrol", to=[3, 3])).state
+    plane = s.units[fighter.id]
+    assert plane.sortie["stage"] == "patrol" and plane.tile == g.idx(3, 3)
+    raider = add(s, "bomber", 2, 7, 3)  # 离机场 6 格（超出作战半径），离巡逻点 4 格（在防空圈里）
+    assert g.distance(plane.sortie["base"], raider.tile) > 2
+    assert g.distance(plane.tile, raider.tile) <= PATROL_RADIUS
+    info = tactics(s, RULES, plane)
+    assert raider.tile in info["attack_tiles"]
+    assert any(t["tile"] == raider.tile for t in info["targets"])

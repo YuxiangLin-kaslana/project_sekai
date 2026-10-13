@@ -2931,6 +2931,19 @@ function drawTactics(ctx, v) {
   if (!t || t.actor !== G.actor || v.z < 3) return;
   const plane = G.units.get(G.actor);
   if (plane?.air_radius != null) drawAirRadius(ctx, v, plane);
+  if (plane?.sortie === 'patrol' && t.patrol_radius) {
+    // 巡逻中的战斗机：防空圈（离它 patrol_radius 格），圈里的敌机不受机场作战半径限制
+    const [px, py] = center(plane.tile);
+    const rr = (t.patrol_radius + 0.5) * SQRT3 * v.z;
+    ctx.save();
+    eachCopy(v, px, py, rr + 4, (x, y) => {
+      ctx.setLineDash([6, 5]); ctx.lineWidth = 2; ctx.strokeStyle = '#9fd0f2';
+      ctx.fillStyle = 'rgba(120,180,230,.08)';
+      ctx.beginPath(); ctx.arc(x, y, rr, 0, Math.PI * 2); ctx.fill(); ctx.stroke();
+      ctx.setLineDash([]);
+    });
+    ctx.restore();
+  }
   ctx.save();
   const attacking = G.actionMode === 'attack';
   const moving = G.actionMode === 'move' || G.actionMode === 'inspect';

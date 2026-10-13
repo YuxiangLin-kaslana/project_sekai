@@ -855,6 +855,11 @@ def tactics(state, rules, actor) -> dict:
     sortie = getattr(actor, "sortie", None)
     origin = sortie["base"] if sortie is not None else actor.tile
     tiles = state.grid.within(origin, reach)
+    if sortie is not None and sortie.get("stage") == "patrol":
+        # 巡逻中的战斗机：防空圈（离它 PATROL_RADIUS 格）里的敌机不受机场作战半径限制，也列出来
+        from engine.systems.air import PATROL_RADIUS
+
+        tiles = list(set(tiles) | set(state.grid.within(actor.tile, PATROL_RADIUS)))
     tiles = sorted(t for t in tiles if t != actor.tile or sortie is not None)
     reason = lock_reason(state, rules, actor)
     targets, obstructed = [], []
