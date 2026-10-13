@@ -234,6 +234,8 @@ def rules_json(rules: Ruleset) -> dict:
                 "ranged_strength": u.ranged_strength,
                 "anti_air": u.anti_air,
                 "torpedo": u.torpedo,
+                "torpedo_taken": u.torpedo_taken,
+                "damage_vs_types": u.damage_vs_types,
                 "deck_gun": u.deck_gun,
                 "flak": u.flak,
                 "flak_range": u.flak_range,
