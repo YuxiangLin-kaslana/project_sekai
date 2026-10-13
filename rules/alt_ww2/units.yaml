@@ -237,13 +237,13 @@ carrier:
   name: 航空母舰编队
   short: 航
   domain: sea
-  strength: 8
+  strength: 12           # 原来 8：一碰就沉，只敢躲在港里
   ranged_strength: 20    # 舰载机群：从海上对地、对海打击（不看视线），不靠另外搭载的飞机也能打
   range: 6
   damage_vs_city: 130
   moves: 9
   sight: 4
-  cost: 360
+  cost: 300              # 原来 360：实测每千造价只打出约 75 伤害
   population: 1
   gold: 120
   upkeep: 4
