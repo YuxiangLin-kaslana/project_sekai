@@ -173,6 +173,11 @@ STORM_HP = 80  # 城防低于这个数，近战不等炮火直接强攻城墙
 DROP_PER_TILE = 2  # 跨海登陆：每个登陆格每回合最多认领这么多支下船部队
 AIRFIELD_MARGIN = 2  # 机场离目标至少留这么多格（别修在敌城射程里）
 CARRIER_STANDOFF = 5  # 航母停在目标城外这么远（舰载机够得着，岸上火力打不着）
+# 航母作战群（plan_carrier_groups）：每艘航母就近编 CARRIER_ESCORTS 艘护航舰（巡洋舰优先，反驱逐），
+# 护航舰跟着航母走、贴身保护；造船时每艘航母要这么多艘护航舰
+CARRIER_ESCORTS = 3
+CARRIER_GATHER = 15  # 离航母这么远以内的战舰才编进它的作战群
+CRUISER_PREFERENCE = 4  # 挑护航舰：巡洋舰（打驱逐舰 ×2.5）相当于近这么多格
 # 海边陆战支援（_shore_support）：没有靠海目标城的舰船，去打挨着本舰开得到的海面、正在和本方陆军交战的敌军。
 # 打分：离本方陆军越近越像正在打的战线（SHORE_FRONT × 距离），路越远越扣分（SHORE_TRAVEL × 距离）
 SHORE_REACH = 3  # 敌军离本舰开得到的海面这么近，舰炮、舰载机才打得着
@@ -3085,12 +3090,14 @@ def _navy_plan(ctx, nation, p, units, cities):
     # 沿海敌舰最多按港口数算：不跟着邻国的船越造越多（军备竞赛）
     # 每个靠海的战线目标 3 艘炮击、每条跨海战线 1 艘（护航缺口另算 want_escort）
     want = 3 * len(shore) + len(across) + min(raiders, len(ports)) + (invaders + 1) // 2
+    want += CARRIER_ESCORTS * len(carriers)  # 航母作战群的护航舰
     if p.get("posture") == "战争":
         want += len(ports) // 2  # 打仗的国家常备一支海军：每两座港口一艘
     p["naval_want"] = max(0, want - len(warships)) if ports else 0
     # 航母自带舰载机群（不靠另外搭载的飞机也能对地打击）：打仗、有靠海的战线目标就要，最多 2 艘
-    if ports and shore and p.get("posture") == "战争":
-        p["carrier_want"] = max(0, min(2, len(shore)) - len(carriers))
+    if ports and (shore or p["enemy_fleet"]) and p.get("posture") == "战争":
+        # 航母作战群：有靠海的战线目标、或者沿海有敌方舰队（舰载机对舰 ×1.5）就要，最多 2 艘
+        p["carrier_want"] = max(0, min(2, max(len(shore), 1)) - len(carriers))
     else:
         p["carrier_want"] = 0
 
@@ -3704,6 +3711,64 @@ def _naval_power(rules, u) -> float:
     """一艘战舰的海战火力（鱼雷、舰炮、近战取大的），按剩余生命打折。"""
     ut = rules.units[u.type]
     return max(ut.strength, ut.ranged_strength or 0, ut.torpedo or 0) * u.hp / max(1, ut.hp)
+
+
+def plan_carrier_groups(ctx, nid, units):
+    """航母作战群：不归海军将领指挥的航母，每艘从同一片海里离它不远（CARRIER_GATHER）、没有别的护航任务的
+    战舰里挑 CARRIER_ESCORTS 艘护航（克制驱逐舰的优先，见 CRUISER_PREFERENCE）。返回 {护航舰 ID: 航母 ID}。"""
+    rules, g = ctx.rules, ctx.state.grid
+    carriers = sorted(
+        (
+            u
+            for u in units
+            if "carrier" in rules.units[u.type].tags and u.corps is None and u.layer == "surface"
+        ),
+        key=lambda u: u.id,
+    )
+    if not carriers:
+        return {}
+    pool = [
+        u
+        for u in units
+        if _warship(rules, u)
+        and u.corps is None
+        and u.layer == "surface"
+        and u.hp * 100 // rules.units[u.type].hp >= 40
+    ]
+    out = {}
+    for c in carriers:
+        seas = _sea_comps(ctx, c.tile)
+        options = [
+            u
+            for u in pool
+            if u.id not in out
+            and g.distance(u.tile, c.tile) <= CARRIER_GATHER
+            and _sea_comps(ctx, u.tile) & seas
+        ]
+
+        def key(u, c=c):
+            anti = any(rules.units[u.type].damage_vs_types.get(k, 100) > 100 for k in rules.units)
+            return (g.distance(u.tile, c.tile) - CRUISER_PREFERENCE * anti, u.id)
+
+        for u in sorted(options, key=key)[:CARRIER_ESCORTS]:
+            out[u.id] = c.id
+    return out
+
+
+def _carrier_escort(ctx, unit) -> bool:
+    """航母作战群的护航舰：跟着航母（它这回合要停的那一格旁边），身边的敌舰由攻击打分先打（在这之前）。"""
+    s, g = ctx.state, ctx.state.grid
+    cid = _ai(ctx).get("cv_escort", {}).get(unit.id)
+    carrier = s.units.get(cid) if cid is not None else None
+    if carrier is None:
+        return False
+    route = ctx.planned_routes.get(carrier.id)
+    spot = route[-1] if route else carrier.tile
+    why = "航母作战群：贴身护航航母"
+    if g.distance(unit.tile, spot) > 1 and march(ctx, unit, spot, why, stop_within=1):
+        return True
+    _hold(ctx, unit, why)
+    return True
 
 
 def _naval_danger(ctx, nation, tile) -> float:
@@ -4613,6 +4678,8 @@ def decide_unit(ctx, unit, plan, guards, claimed):
         return
     if ut.domain == "sea" and unit.corps is not None and _fleet_member(ctx, unit):
         return  # 编入舰队的舰船听海军将领的，不听国家海军的安排
+    if ut.domain == "sea" and _carrier_escort(ctx, unit):
+        return  # 航母作战群：贴身护航航母
     if ut.domain == "sea" and target is None:
         # 没分到战线的舰船（航母、战舰）：去支援开得到的陆上战线（进攻的、主攻方向优先），
         # 航母开到目标城外海让舰载机打击，战舰炮击——不在港里当摆设
@@ -5144,6 +5211,7 @@ def nation_turn(ctx, job):
         _ai(ctx)["exploit"] = plan_exploits(ctx, nid, ashore, guards, plan)
         _ai(ctx)["screen"] = plan_screens(ctx, nid, ashore, guards)
         _ai(ctx)["fort_job"] = plan_forts(ctx, nid, plan, ashore)
+        _ai(ctx)["cv_escort"] = plan_carrier_groups(ctx, nid, units)
         _prefetch_flows(ctx, {nid: plan})
     # 每支部队按所属战线决策（战线的目标、阶段、战线位置）；不在战线上的（守军、边境哨、侦察、
     # 开拓团、闲置舰船）按国家整体的计划
@@ -5172,7 +5240,10 @@ def nation_turn(ctx, job):
             return 1
         if naval.afloat(s, rules, u):
             return 0
-        return 2 if rules.units[u.type].domain == "sea" else 1
+        if rules.units[u.type].domain != "sea":
+            return 1
+        # 航母先定这回合去哪，作战群的护航舰再跟上去
+        return 3 if u.id in _ai(ctx).get("cv_escort", {}) else 2
 
     for uid in sorted(job["active"], key=order):
         u = s.units.get(uid)

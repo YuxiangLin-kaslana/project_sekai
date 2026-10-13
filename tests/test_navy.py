@@ -369,3 +369,22 @@ def test_naval_counter_cycle_multipliers(board):
     # 战列舰挨鱼雷只吃 50%（巡洋舰 70%），按同样的攻防比算伤害会更低
     assert RULES.units["battleship"].torpedo_taken < RULES.units["cruiser"].torpedo_taken
     assert hit_bb["damage"] < hit_ca["damage"] * 1.2
+
+
+def test_carriers_gather_escorts_preferring_anti_destroyer_cruisers(board):
+    """航母作战群：每艘航母就近编护航舰，巡洋舰（反驱逐）优先；护航舰跟着航母走。"""
+    from controllers import rule_ai
+    from engine.events import EventLog
+    from engine.rng import RngTree
+    from engine.systems.context import StepContext
+
+    carrier = add(board, "carrier", 1, 8, 3, hp=RULES.units["carrier"].hp)
+    near_dd = add(board, "destroyer", 1, 9, 3)
+    cruiser = add(board, "cruiser", 1, 11, 3)
+    far_dd = add(board, "destroyer", 1, 12, 5)
+    other = add(board, "destroyer", 1, 13, 7)
+    ctx = StepContext(board, RULES, [], EventLog(board.turn), RngTree(board.seed, "t", 1))
+    groups = rule_ai.plan_carrier_groups(ctx, 1, [carrier, near_dd, cruiser, far_dd, other])
+    assert set(groups.values()) == {carrier.id}
+    assert cruiser.id in groups and near_dd.id in groups
+    assert len(groups) == rule_ai.CARRIER_ESCORTS
