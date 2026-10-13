@@ -1308,6 +1308,11 @@ def _resolve(ctx: StepContext) -> None:
         _execute(ctx, order)
 
 
+def halt_and_fire(state, actor) -> bool:
+    """AI 自动下的攻击遇到“行军途中”时能不能就地停下开火（见 _execute）。"""
+    return actor.destination is not None
+
+
 def _execute(ctx: StepContext, order) -> None:
     """结算一条攻击指令（_resolve 按顺序调用；拦截来袭轰炸机的战斗机也走这里，air.intercept）。"""
     s, rules = ctx.state, ctx.rules
@@ -1330,6 +1335,11 @@ def _execute(ctx: StepContext, order) -> None:
     tile = s.grid.idx(*order.to)
     # 先移动后攻击（文明 6 式）：这时部队已经走完，按走到的位置和剩下的移动力结算（lock_reason）
     info, problem = preview(s, rules, actor, tile)
+    halted = None
+    if problem and automatic_order and isinstance(actor, Unit) and halt_and_fire(s, actor):
+        # AI 的先走再打被挡在半路（别国同时移动堵了路）：就地停下，原目标或备选目标够得着就照打
+        halted, actor.destination = actor.destination, None
+        info, problem = preview(s, rules, actor, tile)
     for alt in getattr(order, "alternates", None) or () if problem else ():
         # 原目标打不了（走开了、够不着）：按顺序改打备选目标里第一个打得了的
         other = s.grid.idx(*alt)
@@ -1337,6 +1347,8 @@ def _execute(ctx: StepContext, order) -> None:
         if alt_problem is None:
             tile, info, problem = other, alt_info, None
             break
+    if problem and halted is not None:
+        actor.destination = halted  # 停下也打不了：照旧接着走
     if problem:
         if automatic_order:
             ctx.log.add(
