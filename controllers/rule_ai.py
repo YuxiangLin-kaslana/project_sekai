@@ -3933,6 +3933,32 @@ def _air_cover(ctx, unit, plan):
                     f"随进攻 {target.name} 的野战军提供防空掩护",
                 )
             )
+    if plan.get("kind") == "land" and plan.get("units"):
+        # 陆上战线（进攻 / 防守）：给战线上的野战军防空——轰炸机炸的就是前线部队。位置挑本方部队最密的
+        # 一格（站在它旁边，3 格射程罩住尽量多的本方部队），部队越多、附近敌机越多越优先
+        members = [s.units[i] for i in plan["units"] if i in s.units and s.units[i].id != unit.id]
+        tiles = [u.tile for u in members if rules.units[u.type].domain == "land"]
+        if tiles:
+            # 已有高射炮罩住的部队不再算：几门炮分散开各罩一片，防空圈连起来轰炸机才没处下手
+            reach = rules.units[unit.type].range
+            covered = {
+                x for t in _ai(ctx).get("air_cover", {}) for x in tiles if g.distance(x, t) <= reach
+            }
+            spot = max(
+                tiles,
+                key=lambda t: (
+                    sum(1 for x in tiles if x not in covered and g.distance(x, t) <= reach),
+                    -t,
+                ),
+            )
+            army = sum(1 for x in tiles if g.distance(x, spot) <= 3)
+            anchors.append(
+                (
+                    2 + army + 3 * air_threat(ctx, unit.nation, spot),
+                    spot,
+                    "随战线上的野战军提供防空掩护",
+                )
+            )
     if not anchors:
         return
     cover = _ai(ctx).setdefault("air_cover", {})
