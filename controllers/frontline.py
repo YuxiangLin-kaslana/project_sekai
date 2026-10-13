@@ -511,36 +511,76 @@ def _slots(ctx, seg, ours=None):
             if forts.friendly(s, nation, t) or (t in chokes and s.city_at(t) is None)
         )
         free = [u for u in members if not (R.is_siege(rules, u) or R.is_air_defense(rules, u))]
-        for t in held:
-            if not free:
-                break
-            u = min(free, key=lambda u: (g.distance(u.tile, t), u.id))
-            free.remove(u)
-            members.remove(u)
-            fill[t] += 1
-            slots[u.id] = t
+        if held and free:
+            # 向量化：每个要守的格子挑离得最近（同样近挑编号小）的空闲近战部队
+            ftiles = np.array([u.tile for u in free], dtype=np.int64)
+            fids = np.array([u.id for u in free], dtype=np.int64)
+            taken = np.zeros(len(free), dtype=bool)
+            qa, ra = g.axial_q, g.axial_r
+            for t in held:
+                if taken.all():
+                    break
+                dr = ra[ftiles] - ra[t]
+                x = 2 * (qa[ftiles] - qa[t]) + dr
+                if g.wrap_x:
+                    x = (x + g.width) % (2 * g.width) - g.width
+                dr, x = np.abs(dr), np.abs(x)
+                dist = np.where(x <= dr, dr, (x + dr) >> 1)
+                key = np.where(taken, np.iinfo(np.int64).max, dist * (1 << 32) + fids)
+                i = int(np.argmin(key))
+                taken[i] = True
+                u = free[i]
+                members.remove(u)
+                fill[t] += 1
+                slots[u.id] = t
+    # 逐支挑位置：先铺满再加厚（填充程度低的先），同样的填充程度防守时先进本方堡垒，再挑近的、格子编号小的。
+    # 大兵团（上千支）时逐格比较很慢：每排的候选格、填充数、堡垒标记存成 numpy 数组，一支部队一次向量化算完
+    qa, ra = g.axial_q, g.axial_r
+    nation = members[0].nation if members else None
+    arrays = []  # 每排：(格子数组, 填充数数组, 不是本方堡垒的标记)
+
+    def row_arrays(k):
+        while len(arrays) <= k:
+            row = rows[len(arrays)]
+            tiles = np.asarray(row, dtype=np.int64)
+            fort = np.array(
+                [not (defending and forts.friendly(s, nation, t)) for t in row], dtype=np.int64
+            )
+            arrays.append((tiles, np.array([fill[t] for t in row], dtype=np.int64), fort))
+        return arrays[k]
+
+    def nearest(u, k):
+        tiles, filled, fort = row_arrays(k)
+        dr = ra[tiles] - ra[u.tile]
+        x = 2 * (qa[tiles] - qa[u.tile]) + dr
+        if g.wrap_x:
+            x = (x + g.width) % (2 * g.width) - g.width
+        dr, x = np.abs(dr), np.abs(x)
+        dist = np.minimum(np.where(x <= dr, dr, (x + dr) >> 1), 4095)
+        key = ((np.minimum(filled, LINE_STACK) * 2 + fort) * 4096 + dist) * (1 << 22) + tiles
+        return int(np.argmin(key))
+
     for u in members:
         rear = R.is_siege(rules, u) or R.is_air_defense(rules, u)
         k = 1 if rear else 0
-        while k < len(rows) and all(fill[t] >= LINE_STACK for t in rows[k]):
+        while k < len(rows) and bool((row_arrays(k)[1] >= LINE_STACK).all()):
             k = k + 1 if k > 0 or rear else 2  # 近战站满了战线就排到远程后面一排
             if k >= len(rows) and not deeper():
                 k = None
                 break
-        options = rows[k] if k is not None and k < len(rows) else (back if rear else line)
-        if not options:
+        if k is None or k >= len(rows):
+            k = 1 if rear and seg["back"] else 0  # 都站满了：硬挤进原来那一排
+        if not rows[k]:
             continue
-        # 先铺满再加厚：同样的填充程度先进本方堡垒（防守时），再挑近的
-        t = min(
-            options,
-            key=lambda t: (
-                min(fill[t], LINE_STACK),
-                not (defending and forts.friendly(s, u.nation, t)),
-                g.distance(u.tile, t),
-                t,
-            ),
-        )
+        i = nearest(u, k)
+        t = rows[k][i]
         fill[t] += 1
+        for (
+            tiles,
+            filled,
+            _,
+        ) in arrays:  # 同一格可能出现在别的排里（back 为空时就是 line）：一起记上
+            filled[tiles == t] += 1
         slots[u.id] = t
 
 
