@@ -2934,6 +2934,24 @@ function drawTactics(ctx, v) {
   ctx.save();
   const attacking = G.actionMode === 'attack';
   const moving = G.actionMode === 'move' || G.actionMode === 'inspect';
+  if (G.actionMode === 'patrol' && t.patrol_tiles?.length) {
+    // 战斗机巡逻：能去的格子（作战半径内），鼠标 / 选中的格子画出防空圈
+    for (const tile of t.patrol_tiles) tacticalHex(ctx, v, tile, 'rgba(120,180,230,.10)', 'rgba(159,208,242,.28)', .6);
+    drawRangeBoundary(ctx, v, t.patrol_tiles, '#9fd0f2');
+    const at = G.pending?.tile ?? G.hoverTile;
+    if (at != null && t.patrol_tiles.includes(at)) {
+      const [px, py] = center(at);
+      const rr = ((t.patrol_radius ?? 5) + 0.5) * SQRT3 * v.z;
+      eachCopy(v, px, py, rr + 4, (x, y) => {
+        ctx.setLineDash([6, 5]); ctx.lineWidth = 2; ctx.strokeStyle = '#9fd0f2';
+        ctx.fillStyle = 'rgba(120,180,230,.08)';
+        ctx.beginPath(); ctx.arc(x, y, rr, 0, Math.PI * 2); ctx.fill(); ctx.stroke();
+        ctx.setLineDash([]);
+      });
+      const actor = G.units.get(G.actor);
+      if (actor) traceTiles(ctx, v, [actor.tile, at], '#9fd0f2', true);
+    }
+  }
   const targetSet = new Set(t.targets.map(x => x.tile));
   const approach = new Map((attacking ? t.approach ?? [] : []).map(x => [x.tile, x.from])); // 先走过去再打的目标
   const blocked = new Set(t.obstructed);

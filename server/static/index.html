@@ -1904,6 +1904,7 @@ const ICONS = {
   pillage: '<path d="M12 3c2.5 3 5.5 5.5 5.5 10a5.5 5.5 0 0 1-11 0c0-2.4 1.2-3.8 2.4-4.8 0 2 1 3.2 2.2 3.4C11 9 10.6 6 12 3z"/>',
   group: '<rect x="3" y="9" width="12" height="10" rx="2"/><path d="M7 9V5h12v10h-4"/>',
   road: '<path d="M5 21L9 3m10 18L15 3M12 4v3m0 4v3m0 4v3"/>',
+  patrol: '<circle cx="12" cy="12" r="9" stroke-dasharray="3 3"/><path d="M12 8l3 6h-6z"/>',
 };
 function commandButton(label, icon, handler, disabled = false, title = '') {
   const b = document.createElement('button'); b.type = 'button'; b.className = 'command-button';
@@ -1945,7 +1946,7 @@ function updateCommandHint() {
   const visible = !!actor || mode === 'road'; el.hidden = !visible;
   if (!visible) return;
   const name = actor?.type ? unitName(actor.type) : actor?.name ?? '道路规划';
-  const instructions = {inspect:'蓝色：移动范围 · 红色：可攻击目标',move:'点选蓝色格子预览路线',attack:'点选红色目标预览战斗',road: game.G.roadStart == null ? '点选本国城市作为道路起点' : '点选目标（住宅区 / 工厂 / 本国城市 / 工兵），预览路线与生产力造价'};
+  const instructions = {inspect:'蓝色：移动范围 · 红色：可攻击目标',move:'点选蓝色格子预览路线',attack:'点选红色目标预览战斗',patrol:'点选作战半径内的格子：战斗机飞过去巡逻两回合，虚线圈是防空圈',road: game.G.roadStart == null ? '点选本国城市作为道路起点' : '点选目标（住宅区 / 工厂 / 本国城市 / 工兵），预览路线与生产力造价'};
   $('command-name').textContent = mode === 'road' ? '道路规划' : `${name}${actor?.formation!=null?' · 编队':''}`;
   $('command-hint').textContent = commandBusy ? '正在执行…' : instructions[mode];
   $('command-cancel').textContent = mode === 'inspect' ? '取消选择' : '取消';
@@ -2000,6 +2001,11 @@ function tacticalCard(actor) {
   const fighterPlane=air&&def.tags?.includes('air_superiority');
   const airTip=fighterPlane?'战斗机：起飞当回合就攻击，下回合还能留空再攻击一次（一次出击最多打两次），打来袭的轰炸机伤害更高；敌方轰炸机飞进作战半径时会自动起飞拦截':'轰炸机：起飞飞到目标上空当回合就轰炸（投弹前可能被敌方战斗机拦截）→ 下回合返航降落；目标优先级：军团 → 机场 → 城市 → 重要资源 → 部队 → 港口';
   if(!unit||def.category==='military')buttons.appendChild(commandButton(air?(actor.sortie?'攻击':'出击'):'攻击','attack',()=>setCommandMode('attack'),commandBusy||!!actor.attack_blocked,actor.attack_blocked??(air?airTip+'；航线进出敌方防空圈（高射炮、战舰）各挨一次':'')));
+  if(fighterPlane&&!actor.sortie){
+    // 巡逻（防空圈）：起飞到作战半径内某一格上空，留空两回合，周围的敌方轰炸机航线一进来就被拦截
+    const t=game.G.tactics,ok=!!t?.patrol_tiles?.length;
+    buttons.appendChild(commandButton('巡逻','patrol',()=>setCommandMode('patrol'),commandBusy||!ok,ok?`起飞到作战半径内某一格上空巡逻两回合：周围 ${t.patrol_radius} 格是防空圈，敌方轰炸机的航线一进来就被拦截`:(t?.patrol_blocked??'')));
+  }
   if(unit){
     if(def.tags?.includes('found_city'))buttons.appendChild(commandButton('建立城市','group',()=>executeCommand(actorOrder('found_city')),commandBusy||!!game.G.tactics?.found_city_blocked,game.G.tactics?.found_city_blocked??''));
     buttons.appendChild(commandButton(actor.managed?'接管单位':'交回单位 AI','group',()=>executeCommand(actorOrder('unit_management',{enabled:!actor.managed})),commandBusy));
@@ -2053,7 +2059,12 @@ function tacticalCard(actor) {
   if(pending){
     const preview=document.createElement('div');preview.className='command-preview';
     const [col,row]=[pending.tile%world.width,Math.floor(pending.tile/world.width)];
-    if(pending.kind==='move'){
+    if(pending.kind==='patrol'){
+      const r=game.G.tactics?.patrol_radius??5;
+      preview.innerHTML=`<small>巡逻预览</small><b>在 (${col}, ${row}) 上空巡逻</b><span>留空两回合，周围 ${r} 格是防空圈：敌方轰炸机的航线一进来就被拦截（每架轰炸机每回合拦一次）；之后自动返航降落</span>`;
+      const b=document.createElement('button');b.className='primary';b.textContent='起飞巡逻';b.disabled=commandBusy;
+      b.onclick=()=>executeCommand(actorOrder('patrol',{to:[col,row]}));preview.appendChild(b);
+    }else if(pending.kind==='move'){
       const path=game.G.tactics?.move_paths?.[pending.tile];
       preview.innerHTML=`<small>移动预览</small><b>前往 (${col}, ${row})</b><span>${Math.max(0,(path?.length??1)-1)} 格路线 · 本回合抵达</span>`;
       const b=document.createElement('button');b.className='primary';b.textContent=actor.formation!=null?'编队移动至此':'移动至此';b.disabled=commandBusy;
@@ -2076,6 +2087,11 @@ async function tacticalClick(tile) {
   if(commandBusy||tile==null)return;
   const mode=game.G.actionMode,t=game.G.tactics;
   if(mode==='road'){await roadClick(tile);return;}
+  if(mode==='patrol'){
+    if(!t)return;
+    if(!t.patrol_tiles?.includes(tile)){showCommandError(t.patrol_blocked??'超出作战半径，到不了那里巡逻');return;}
+    game.G.pending={kind:'patrol',tile};renderSelection();redraw();return;
+  }
   if(mode==='move'||mode==='attack'){
     if(!t)return;
     if(mode==='move'){

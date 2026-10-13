@@ -251,3 +251,28 @@ def test_compact_encoding_round_trip():
     assert [roads["kinds"][k] for k in roads["kind"]] == [
         state.roads[k]["kind"] for k in sorted(state.roads)
     ]
+
+
+def test_fighter_patrol_tiles_and_order():
+    snap = client.post("/api/games", json=SMALL).json()
+    gid = snap["id"]
+    fighter = next(u for u in snap["units"] if u["type"] == "fighter")
+    tactics = client.get(f"/api/games/{gid}/tactics", params={"actor": fighter["id"]}).json()
+    # 停在机场上的战斗机：作战半径内的格子都能去巡逻，带防空圈半径
+    assert tactics["patrol_blocked"] is None and tactics["patrol_radius"] >= 1
+    assert fighter["tile"] in tactics["patrol_tiles"] and len(tactics["patrol_tiles"]) > 7
+    far = max(tactics["patrol_tiles"], key=lambda t: abs(t - fighter["tile"]))
+    raw = {
+        "issuer": fighter["nation"],
+        "type": "patrol",
+        "unit": fighter["id"],
+        "to": [far % SMALL["width"], far // SMALL["width"]],
+    }
+    res = client.post(
+        f"/api/games/{gid}/actions", json={"orders": [raw], "expected_hash": snap["state_hash"]}
+    ).json()
+    assert not res["rejected"]
+    plane = next(u for u in res["units"] if u["id"] == fighter["id"])
+    assert plane["sortie"] == "patrol" and plane["tile"] == far
+    again = client.get(f"/api/games/{gid}/tactics", params={"actor": fighter["id"]}).json()
+    assert again["patrol_blocked"] and "patrol_tiles" not in again  # 已经在空中

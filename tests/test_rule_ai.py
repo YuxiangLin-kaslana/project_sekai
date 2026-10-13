@@ -668,4 +668,6 @@ def test_ai_screens_the_gap_an_enemy_tank_could_use_to_cut_it_off(board):
     assert g.col_row(tile)[0] < 18  # 堵在走廊里本方部队身后（敌军装甲会钻进来的地方）
     # 推演：敌军坦克站到那一格，本方前线就断补给了——所以值得堵
     net = encirclement.network(board, RULES, 1)
-    assert any(encirclement.steps(board, net, (tile,))[u.tile] >= encirclement.UNREACHED for u in front)
+    assert any(
+        encirclement.steps(board, net, (tile,))[u.tile] >= encirclement.UNREACHED for u in front
+    )

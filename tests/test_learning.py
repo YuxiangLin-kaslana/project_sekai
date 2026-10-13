@@ -65,7 +65,9 @@ def test_defense_memory_tracks_flank_and_pocket_losses():
                 "damage": 100, "retaliation": 0, "modifiers": mods}  # fmt: skip
 
     def turn(*events):
-        learning.update(SimpleNamespace(state=s, rules=RULES, log=SimpleNamespace(events=list(events))))
+        learning.update(
+            SimpleNamespace(state=s, rules=RULES, log=SimpleNamespace(events=list(events)))
+        )
 
     for _ in range(5):
         turn(hit(None))

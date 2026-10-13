@@ -442,6 +442,18 @@ def game_tactics(game_id: str, actor: str, col: int | None = None, row: int | No
 
             # 先移动再攻击能打到的目标（文明 6 式）：前端点了就连发“移动到 from + 攻击”
             result["approach"] = approach_targets(s, game.rules, entity)
+            from engine.systems import air as air_rules
+
+            if air_rules.is_fighter(game.rules, entity):
+                # 战斗机巡逻（防空圈）：能去的格子（作战半径内）、不能巡逻的原因、防空圈半径
+                problem = air_rules.patrol_problem(s, game.rules, entity, entity.tile)
+                result["patrol_blocked"] = problem
+                result["patrol_radius"] = air_rules.PATROL_RADIUS
+                if problem is None:
+                    from engine.systems.movement import air_radius
+
+                    reach = air_radius(s.grid, game.rules.units[entity.type])
+                    result["patrol_tiles"] = [int(t) for t in s.grid.within(entity.tile, reach)]
             from engine.systems.pillage import pillage_target
 
             target, problem = pillage_target(s, game.rules, entity)

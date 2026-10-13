@@ -1134,7 +1134,13 @@ def test_mirrored_duel_is_decided_by_who_moves_first_this_turn(board):
         board.turn = turn
         rank = rotation(board)
         out = action(board, *raw).state
-        survivor = 1 if a.id in out.units and b.id not in out.units else 2 if b.id in out.units and a.id not in out.units else 0
+        survivor = (
+            1
+            if a.id in out.units and b.id not in out.units
+            else 2
+            if b.id in out.units and a.id not in out.units
+            else 0
+        )
         first[min(rank, key=rank.get)] = survivor
     assert first == {1: 1, 2: 2}
 
