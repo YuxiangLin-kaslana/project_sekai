@@ -135,26 +135,42 @@ def stop_mask(state, rules, unit):
 
 
 FACE_RADIUS = 4  # 转向时看这么多格以内的敌军
+_FRONT = [tuple(b for b in range(6) if side(f, b) <= 1) for f in range(6)]  # 各朝向的正面三个方向
 
 
-def threat_facing(state, rules, unit, radius: int = FACE_RADIUS) -> int | None:
+def _threats_at(state, rules, tile) -> list[tuple[int, float]]:
+    """tile 上的威胁源 [(国家, 威胁值)]（按 units_at 的顺序）：有控制区的地表战斗单位，攻击力 × 剩余生命比例。"""
+    out = []
+    for v in state.units_at(tile, "surface"):
+        if exerts(rules, v, state):
+            ut = rules.units[v.type]
+            out.append((v.nation, max(ut.strength, ut.ranged_strength or 0) * v.hp / max(1, ut.hp)))
+    return out
+
+
+def threat_facing(state, rules, unit, radius: int = FACE_RADIUS, threats=None) -> int | None:
     """面向威胁最大的方向：radius 格内每支交战国战斗单位按（攻击力 × 剩余生命比例 ÷ 距离²）算威胁，
-    挑一个朝向让正面（朝向和它左右相邻的两个方向）罩住的威胁最多。附近没有敌军返回 None。"""
+    挑一个朝向让正面（朝向和它左右相邻的两个方向）罩住的威胁最多。附近没有敌军返回 None。
+    threats：预先算好的 {格子: _threats_at}（resolve_facing 一回合算一次；没有的格子算没有威胁源）。"""
     g = state.grid
     weights = [0.0] * 6
     for t in g.within(unit.tile, radius):
         if t == unit.tile:
             continue
+        here = threats.get(t) if threats is not None else _threats_at(state, rules, t)
+        if not here:
+            continue
         d = g.distance(unit.tile, t)
-        for v in state.units_at(t, "surface"):
-            if not exerts(rules, v, state) or not at_war(state, v.nation, unit.nation):
+        b = None
+        for nation, power in here:
+            if not at_war(state, nation, unit.nation):
                 continue
-            ut = rules.units[v.type]
-            power = max(ut.strength, ut.ranged_strength or 0) * v.hp / max(1, ut.hp)
-            weights[bearing(g, unit.tile, t)] += power / (d * d)
+            if b is None:
+                b = bearing(g, unit.tile, t)
+            weights[b] += power / (d * d)
     if max(weights) <= 0:
         return None
-    return max(range(6), key=lambda f: (sum(weights[b] for b in range(6) if side(f, b) <= 1), -f))
+    return max(range(6), key=lambda f: (sum(weights[b] for b in _FRONT[f]), -f))
 
 
 def resolve_facing(ctx) -> None:
@@ -163,6 +179,13 @@ def resolve_facing(ctx) -> None:
     s, rules = ctx.state, ctx.rules
     if ctx.immediate:
         return
+    # 各格的威胁源先整理一遍（转向不改位置、生命，整个循环里不变）：大兵团时逐格逐支查是热点
+    threats = {}
+    for tile, layer in s._at:
+        if layer == "surface":
+            here = _threats_at(s, rules, tile)
+            if here:
+                threats[tile] = here
     for (_tile, layer), ids in sorted(s._at.items()):
         if layer != "surface":
             continue
@@ -170,6 +193,6 @@ def resolve_facing(ctx) -> None:
             u = s.units[i]
             if not exerts(rules, u, s):
                 continue
-            f = threat_facing(s, rules, u)
+            f = threat_facing(s, rules, u, threats=threats)
             if f is not None:
                 u.facing = f
