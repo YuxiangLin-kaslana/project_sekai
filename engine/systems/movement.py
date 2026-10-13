@@ -79,9 +79,9 @@ def port_overrides(state: GameState, ut: UnitType, nation: int, rules=None) -> d
     return out
 
 
-def blocked_tiles(state: GameState, rules: Ruleset, unit: Unit, ut: UnitType) -> set[int]:
+def blocked_tiles(state: GameState, rules: Ruleset, unit: Unit, ut: UnitType) -> frozenset[int]:
     """走不过去的格子：外国城市、有外国单位的格子。本方已满的格子可以借道穿过（只是不能停在那），
-    见 has_room。"""
+    见 has_room。返回缓存的只读集合（不复制：寻路时每次复制上千格也是开销）。"""
     key = (unit.nation, unit.layer)
     base = state._blocked.get(key)
     if base is None:
@@ -94,8 +94,8 @@ def blocked_tiles(state: GameState, rules: Ruleset, unit: Unit, ut: UnitType) ->
                 found.add(tile)
         base = state._blocked[key] = frozenset(found)
     if unit.tile in base and state.city_at(unit.tile) is None:
-        return set(base - {unit.tile})  # 自己脚下（交战格）不算挡路
-    return set(base)
+        return base - {unit.tile}  # 自己脚下（交战格）不算挡路
+    return base
 
 
 def closed_for(state: GameState, unit: Unit):
@@ -247,19 +247,23 @@ def edge_cost(state, rules, unit, cost, overrides, a, b):
 
 def _planner(state, rules, unit, cost=None):
     ut = rules.units[unit.type]
+    domain = move_domain(ut)
     if cost is None:
-        cost = move_costs(state.grid, rules, move_domain(ut))
+        # 地形只在生成地图时改：按通行方式缓存（大兵团时每次寻路都重算整图是热点）
+        cost = state._edge_cache.get(("move_costs", domain))
+        if cost is None:
+            cost = state._edge_cache[("move_costs", domain)] = move_costs(state.grid, rules, domain)
     overrides = port_overrides(state, ut, unit.nation, rules)
     blocked = blocked_tiles(state, rules, unit, ut)
     # 和 edge_cost 同一套规则，预先把地形消耗、河流转成 Python 列表（寻路每条边都要算一次）
-    land = move_domain(ut) in ("land", "amphibious")
+    land = domain in ("land", "amphibious")
     soldier = ut.domain == "land"  # 陆军能下海（下海、上岸各花一整回合）
-    cached = state._edge_cache.get("cost_list")
+    cached = state._edge_cache.get(("cost_list", domain))
     if cached is not None and cached[0] is cost:
         costs = cached[1]
     else:
         costs = cost.tolist()
-        state._edge_cache["cost_list"] = (cost, costs)
+        state._edge_cache[("cost_list", domain)] = (cost, costs)
     roads = state.roads
     rivers = state._edge_cache.get("river_list")
     if rivers is None:
@@ -401,7 +405,7 @@ def route_for(state, rules, unit, dest, *, embark=None) -> list[int] | None:
     """unit 走到 dest 的路线（含两端），走不到返回 None。陆军先找陆路，陆路不通再算上海路（下海、上岸各花
     一回合）。embark：能不能下海绕路——None 时玩家指挥的部队能，AI 指挥的陆军（国家开了 AI、单位托管）
     只有已经在海上的能（AI 跨海作战自己安排下海）；走海路的开拓团（amphibious）本来就能。"""
-    ut, blocked, enter = _planner(state, rules, unit)
+    ut = rules.units[unit.type]
     if ut.domain == "air":
         best, _ = movement_map(state, rules, unit)
         return [unit.tile, dest] if dest in best and dest != unit.tile else None
@@ -416,6 +420,7 @@ def route_for(state, rules, unit, dest, *, embark=None) -> list[int] | None:
     g = state.grid
     shut = closed_for(state, unit)
     mask = np.zeros(g.size, dtype=np.bool_) if shut is None else shut.copy()
+    blocked = blocked_tiles(state, rules, unit, ut)
     if blocked:
         mask[np.fromiter(blocked, dtype=np.int64)] = True
     domains = [route_domain(state, rules, unit)]
