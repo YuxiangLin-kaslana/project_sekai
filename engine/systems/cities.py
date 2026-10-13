@@ -233,8 +233,8 @@ def facility_problem(
         return why
     if g.is_water[tile] and not b.on_water:
         return f"{b.name}只能建在陆地上"
-    if int(g.owner[tile]) != nation:
-        return "只能在本国领土内建设"
+    if int(g.owner[tile]) != nation and not (b.fort_hp and int(g.owner[tile]) < 0):
+        return "只能在本国领土内建设（堡垒也能修在无主的土地上）"
     if state.city_at(tile) is not None:
         return "市中心格不能再建别的"
     if g.facility[tile]:
@@ -286,7 +286,9 @@ def facility_options(state: GameState, rules: Ruleset, nation: int, tile: int) -
     return [
         b.id
         for b in rules.buildings.values()
-        if b.placement != "center" and facility_problem(state, rules, nation, tile, b) is None
+        if b.placement != "center"
+        and not b.fort_hp  # 堡垒只能工兵修
+        and facility_problem(state, rules, nation, tile, b) is None
     ]
 
 

@@ -374,11 +374,13 @@ def strength(
         _note(notes, "驻守", 25 if actor.fortified else 0)
         site = 0
         fac = rules.facility_at(int(state.grid.facility[actor.tile]))
-        if (
-            fac is not None
-            and int(state.grid.owner[actor.tile]) == actor.nation
-            and actor.tile not in state.damaged
-        ):
+        if fac is not None and fac.fort_hp:
+            from engine.systems.forts import friendly
+
+            mine = friendly(state, actor.nation, actor.tile)  # 本方的堡垒（可能修在无主的土地上）
+        else:
+            mine = int(state.grid.owner[actor.tile]) == actor.nation
+        if fac is not None and mine and actor.tile not in state.damaged:
             # 进驻本国的军事基地等设施：防守加成（设施的 tile defense 修正器）
             site = sum(
                 m.value
@@ -470,6 +472,9 @@ def bombable(state, rules, actor, tile) -> bool:
     if ut.domain != "air" or "air_superiority" in ut.tags or not ut.ranged_strength:
         return False
     g = state.grid
+    b = rules.facility_at(int(g.facility[tile]))
+    if b is not None and b.fort_hp:
+        return False  # 堡垒按血量算（engine/systems/forts.py），不是炸坏待修
     owner = int(g.owner[tile])
     return (
         bool(g.facility[tile])
@@ -570,6 +575,24 @@ def target_at(state, rules, actor, tile):
 
 
 def preview(state, rules, actor, tile) -> tuple[dict | None, str | None]:
+    """攻击预览：(结算信息, 不能打的原因)。堡垒格（engine/systems/forts.py）：打里面的部队时堡垒一起掉血
+    （fort_damage），打空堡垒按 fort_strike 结算。"""
+    from engine.systems import forts
+
+    info, problem = _preview(state, rules, actor, tile)
+    if (
+        info is not None
+        and not info.get("fort_strike")
+        and isinstance(actor, Unit)
+        and forts.hostile(state, actor.nation, tile)
+    ):
+        dmg = forts.damage_to(state, rules, actor, info["kind"] != "melee")
+        if dmg:
+            info = {**info, "fort_damage": dmg}
+    return info, problem
+
+
+def _preview(state, rules, actor, tile) -> tuple[dict | None, str | None]:
     problem = lock_reason(state, rules, actor)
     if problem:
         return None, problem
@@ -617,6 +640,35 @@ def preview(state, rules, actor, tile) -> tuple[dict | None, str | None]:
             "modifiers": [],
             "area": [],
         }, None
+    if target is None and isinstance(actor, Unit):
+        from engine.systems import forts
+
+        if forts.hostile(state, actor.nation, tile):
+            # 打没人守的敌方堡垒：只扣堡垒的血（炮兵、轰炸机、舰炮拆得快，近战打折）
+            dmg = forts.damage_to(state, rules, actor, kind != "melee")
+            if not dmg:
+                return None, "这种部队打不了堡垒"
+            shots = []
+            if kind == "air" and tile != actor.tile:
+                from engine.systems.air import flight_flak
+
+                shots = flight_flak(state, rules, actor, actor.tile, tile)
+            return {
+                "tile": tile,
+                "target": None,
+                "kind": kind,
+                "fort_strike": True,
+                "fort_damage": dmg,
+                "damage": 0,
+                "retaliation": 0,
+                "flak": sum(d for _, d, _ in shots),
+                "suppress": False,
+                "flak_from": ref("unit", shots[0][0].id) if shots else None,
+                "attacker_strength": strength(state, rules, actor, ranged=kind != "melee"),
+                "defender_strength": 0,
+                "modifiers": [],
+                "area": [],
+            }, None
     if target is None:
         return None, "这里没有可攻击的敌方军事单位或城市"
     if isinstance(target, Unit) and rules.units[target.type].category != "military":
@@ -1193,6 +1245,10 @@ def _advance(ctx: StepContext, actor, start: int, tile: int) -> None:
     s, rules = ctx.state, ctx.rules
     if s.units.get(actor.id) is not actor or actor.tile == tile or s.city_at(tile) is not None:
         return
+    from engine.systems.forts import hostile
+
+    if hostile(s, actor.nation, tile):
+        return  # 敌方堡垒还有血量：进不去
     here = s.units_at(tile, actor.layer)
     if any(u.nation != actor.nation and _military(rules, u) for u in here):
         return
@@ -1305,6 +1361,26 @@ def _execute(ctx: StepContext, order) -> None:
             actor.attacked_turn = s.turn
             gain(ctx, actor, 4, "unit")
             return
+    if info.get("fort_strike"):
+        from engine.systems import forts
+
+        if isinstance(actor, Unit) and actor.tile != tile and info["kind"] != "air":
+            from engine.systems.zoc import bearing
+
+            actor.facing = bearing(s.grid, actor.tile, tile)
+        forts.hit(ctx, tile, info["fort_damage"], by=actor)
+        actor.attacked_turn = s.turn
+        if isinstance(actor, Unit):
+            if actor.sortie is not None:
+                actor.sortie["strikes"] = actor.sortie.get("strikes", 0) + 1
+            actor.moves_left, actor.road_credit, actor.destination, actor.fortified = (
+                0,
+                0,
+                None,
+                False,
+            )
+        gain(ctx, actor, 4, "unit")
+        return
     if info.get("storm_city"):
         # 城防已空：近战开进去占领，城里剩下的敌方单位全部消灭（_capture）
         city = s.city_at(tile)
@@ -1383,6 +1459,10 @@ def _execute(ctx: StepContext, order) -> None:
         defender_hp=target.hp,
     )
     gain(ctx, actor, 4 + (8 if target.hp <= 0 else 0), key)
+    if info.get("fort_damage"):
+        from engine.systems import forts
+
+        forts.hit(ctx, tile, info["fort_damage"], by=actor)  # 打堡垒里的部队，堡垒一起掉血
     if info["kind"] == "air" and bombable(s, rules, actor, tile):
         bomb_facility(ctx, actor, tile)  # 轰炸格上的敌方设施一并炸坏
     gain(ctx, target, 3, "city" if isinstance(target, City) else "unit")

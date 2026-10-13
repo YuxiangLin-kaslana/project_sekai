@@ -48,6 +48,7 @@ from controllers.agent.directive import city_weight, nation_weight
 from engine.actions import (
     AssignCorps,
     Attack,
+    BuildFacility,
     CityAttack,
     CityOrder,
     DemolishRoad,
@@ -124,6 +125,15 @@ EXPLOIT_DEFENSIVE = 0.4  # 防守中的战线也会穿插反击，但要的分�
 EXPLOIT_LOCAL = 3  # 局部兵力：看这么多格以内
 EXPLOIT_OUTNUMBERED = 10  # 局部敌军比本方（连同已分好的穿插部队）每多一支：钻进去容易被反包围
 EXPLOIT_CANDIDATES = 40  # 每国每回合最多评估这么多个候选格
+# 堡垒（plan_forts，engine/systems/forts.py）：工兵在战线上修堡垒。打分（都是软性的）：附近敌军的威胁
+# （FORT_THREAT × 4 格内敌方陆军的战斗力 ÷ 距离）× 防守战线加成（FORT_DEFENSIVE），加上地形防御，
+# 减去附近已有本方堡垒（FORT_SPREAD 每座）和工兵路程（FORT_TRAVEL 每格）
+FORT_THREAT, FORT_DEFENSIVE, FORT_SPREAD, FORT_TRAVEL, FORT_MIN = 1.0, 1.6, 40, 3, 25
+FORT_COVER, FORT_CONTACT = 15, 30  # 有本方部队站着加分；两格内每有一支敌军扣分
+FORT_LINE = 10  # 战线格比后一排加分
+ENGINEER_MAX = 2  # 每国最多养几个工兵（只在防守时用来修堡垒）
+SENTRY_FORT = 3  # 边境哨挑位置：本方堡垒相当于离敌军远这么多格（优先进驻）
+FORT_VALUE = 0.6  # 攻击打分：每打掉堡垒 1 点血算这么多分（拆掉敌方堡垒，进攻才推得动）
 EXPLOIT_CAUTION = 0.4  # 侧翼暴露度（engine/systems/learning.exposure）每 +1，穿插的胆量打这么多折
 # 防穿插（plan_screens）：站在敌人的角度推演——敌方快速部队这回合够得着、站上去能切断 / 拉长我军补给线的格子，
 # 派附近不在第一线的部队去占住（保护侧翼、堵住战线缺口）。最近越常被侧击、背击、合围（暴露度越高），
@@ -463,6 +473,15 @@ def attack_choice(ctx, actor, *, only_static=False):
             continue
         bonus = _priority(ctx, actor, target)
         candidates.append((left - 2 * bonus, left, s.grid.distance(actor.tile, tile), tile, target))
+    # 敌方的空堡垒（没人守的也挡路、有控制区）：远程、空军、舰炮拆得快，近战也能拆
+    for t, f in s.forts.items():
+        if (
+            f["hp"] > 0
+            and at_war(s, f["nation"], actor.nation)
+            and s.grid.distance(origin, t) <= radius
+            and t not in {c[3] for c in candidates}
+        ):
+            candidates.append((-FORT_VALUE * f["hp"], 0, s.grid.distance(actor.tile, t), t, None))
     if _bomber(rules, actor) and actor.sortie is None:
         # 轰炸机：敌方的设施也是目标（机场炸坏了对方飞机就起降不了；住宅区、农场这类分很低）
         for tile, airfield in _enemy_facilities(ctx, actor.nation):
@@ -478,6 +497,12 @@ def attack_choice(ctx, actor, *, only_static=False):
     for _, left, _, tile, target in sorted(candidates, key=lambda c: (c[0], c[2], c[3]))[:8]:
         info, problem = combat.preview(s, rules, actor, tile)
         if problem:
+            continue
+        if info.get("fort_strike"):
+            # 拆空堡垒：每打掉 1 点血算 FORT_VALUE 分，减去防空火力
+            score = FORT_VALUE * info["fort_damage"] - info.get("flak", 0)
+            if score > 0:
+                best.append((-score, tile, info, None))
             continue
         if info.get("facility_strike"):
             if info["flak"] >= actor.hp:
@@ -507,6 +532,7 @@ def attack_choice(ctx, actor, *, only_static=False):
         if info.get("capture") or (isinstance(target, City) and _hp(ctx, target) == 0):
             score += 200
         score += _priority(ctx, actor, target)
+        score += FORT_VALUE * info.get("fort_damage", 0)  # 打堡垒里的部队，顺带拆堡垒
         kind = rules.units[actor.type] if isinstance(actor, Unit) else None
         if info.get("area"):
             # 炮击整格 / 地毯式轰炸：一起挨炸的敌军也算收益（打密集的部队更值）
@@ -1184,6 +1210,91 @@ def plan_exploits(ctx, nid, units, guards, plan):
         free.remove(u)
         plan_tiles.append(t)
         out[u.id] = (t, f"穿插到敌后，切断敌军退路、打击后方（{best:.0f} 分）")
+    return out
+
+
+def plan_forts(ctx, nid, plan, units):
+    """堡垒规划：每条陆上战线挑一格最值得修堡垒的战线格（见 FORT_*），分给离得最近的空闲工兵。
+    返回 {工兵 ID: (格子, 说明)}。"""
+    from engine.systems.cities import facility_problem
+    from engine.systems.diplomacy import at_war
+
+    s, rules, g = ctx.state, ctx.rules, ctx.state.grid
+    kinds = [b for b in rules.buildings.values() if b.fort_hp]
+    if not kinds:
+        return {}
+    b = kinds[0]
+    foes = [
+        (v.tile, combat.strength(s, rules, v))
+        for v in s.units.values()
+        if v.layer == "surface"
+        and is_military(rules, v)
+        and rules.units[v.type].domain == "land"
+        and at_war(s, v.nation, nid)
+    ]
+    if not foes:
+        return {}
+    mine = [t for t, f in s.forts.items() if f["nation"] == nid and f["hp"] > 0]
+    building = [
+        u.tile
+        for u in s.units.values()
+        if u.nation == nid and u.task is not None and u.task.facility == b.id
+    ]
+    crew = [
+        u
+        for u in units
+        if "build_facility" in rules.units[u.type].tags
+        and u.task is None
+        and u.layer == "surface"
+        and not naval.afloat(s, rules, u)
+    ]
+    own_at = {
+        u.tile
+        for u in s.units.values()
+        if u.nation == nid and is_military(rules, u) and u.layer == "surface"
+    }
+    foe_at = {ft for ft, _ in foes}
+    out = {}
+    for f in plan.get("fronts") or ():
+        if f.get("kind") != "land" or f.get("stance") == "进攻":
+            continue  # 只在防守的战线上修（进攻不需要工兵）
+        defensive = FORT_DEFENSIVE
+        line = set(f.get("tiles") or ())
+        options = sorted(line)  # 只修在战线格上（部队排兵就站在这里）
+        while True:
+            crew = [u for u in crew if u.id not in out]
+            if not crew:
+                break
+            best = None
+            for t in options:
+                if t in building or facility_problem(s, rules, nid, t, b) is not None:
+                    continue
+                threat = sum(
+                    p / max(1, g.distance(t, ft)) for ft, p in foes if g.distance(t, ft) <= 4
+                )
+                if not threat:
+                    continue
+                terrain = rules.terrain_at(int(g.terrain[t]))
+                near = sum(1 for x in mine + building if g.distance(x, t) <= 2)
+                travel = min(g.distance(u.tile, t) for u in crew)
+                contact = sum(1 for n in g.within(t, 2) if n in foe_at)  # 两格内的敌军
+                score = (
+                    FORT_THREAT * threat * defensive
+                    + terrain.defense / 5
+                    + FORT_COVER * (t in own_at)  # 有本方部队站着：工兵有掩护
+                    + FORT_LINE * (t in line)  # 战线格优先（部队排兵就站在这里），后一排次之
+                    - FORT_CONTACT * contact  # 离敌军太近：没修完就被打死
+                    - FORT_SPREAD * near
+                    - FORT_TRAVEL * travel
+                )
+                if best is None or (score, -t) > (best[0], -best[1]):
+                    best = (score, t)
+            if best is None or best[0] < FORT_MIN:
+                break
+            tile = best[1]
+            u = min(crew, key=lambda u: (g.distance(u.tile, tile), u.id))
+            out[u.id] = (tile, f"在战线上修堡垒（威胁分 {best[0]:.0f}），守住这一段")
+            building.append(tile)
     return out
 
 
@@ -1939,7 +2050,14 @@ def _ground(ctx, tile, enemy_tile):
     river = enemy_tile in ctx.state.grid.neighbors_of(tile) and crosses_river(
         ctx.state.grid, tile, enemy_tile
     )
-    return terrain.defense / 5 + terrain.attack / 2 - 15 * river
+    fort = 0
+    f = ctx.state.forts.get(tile)
+    if f is not None and f["hp"] > 0:
+        b = ctx.rules.facility_at(int(ctx.state.grid.facility[tile]))
+        if b is not None:
+            # 本方堡垒：按它的防守加成算（部队在战线上自然往堡垒里站）
+            fort = sum(m.value for m in b.modifiers if m.target == "tile" and m.stat == "defense")
+    return (terrain.defense + fort) / 5 + terrain.attack / 2 - 15 * river
 
 
 def _flank(ctx, unit):
@@ -2393,35 +2511,19 @@ def _corps_fronts(ctx, nation, p, units, gens, old, cities, components, replan, 
 
 
 def _assign_engineers(ctx, nation, p, fronts, units, components):
-    """每条陆上战线配一个工兵，沿进军路线修前线道路（跨海战线不配）。缺的交给城市托管去造。"""
+    """工兵只管防守：防守中的陆上战线修堡垒（plan_forts），进攻时不跟着往前冲（用户要求）。这里只算城市托管
+    还要造几个工兵：防守中的陆上战线（上回合的战略）每条一个，减去现有的，总数不超过防守战线数 + 1
+    （每个工兵都永久占一个人口）。"""
     s, rules = ctx.state, ctx.rules
     engineers = [
         u for u in units if "build_facility" in rules.units[u.type].tags and u.layer == "surface"
     ]
-    taken = set()
-    land_fronts = [f for f in fronts if not (f.get("target_info") or {}).get("overseas")]
-    for f in land_fronts:
-        f["engineers"] = [
-            uid for uid in f.get("engineers") or [] if uid in s.units and uid not in taken
-        ][:1]
-        taken.update(f["engineers"])
-    for f in land_fronts:
-        if f["engineers"]:
-            continue
-        comp = components[s.cities[f["target_city"]].tile]
-        free = [u for u in engineers if u.id not in taken and components[u.tile] == comp]
-        if free:
-            g = s.grid
-            target = s.cities[f["target_city"]].tile
-            pick = min(free, key=lambda u: (g.distance(u.tile, target), u.id))
-            f["engineers"] = [pick.id]
-            taken.add(pick.id)
-    # 缺工兵的战线数，减去闲着的工兵（在别的陆地上、一时分不过去的也算），总数不超过陆上战线数 + 1：
-    # 每个工兵都永久占一个人口，不能无限造
-    idle = sum(1 for u in engineers if u.id not in taken)
-    missing = sum(1 for f in land_fronts if not f["engineers"])
-    room = len(land_fronts) + 1 - len(engineers)
-    p["engineer_want"] = max(0, min(2, missing - idle, room))
+    for f in fronts:
+        f["engineers"] = []  # 不再随进攻战线前出引导修路
+    previous = (s.nations[nation.id].strategy or {}).get("fronts") or ()
+    defending = sum(1 for f in previous if f.get("kind") == "land" and f.get("stance") != "进攻")
+    # 每国最多 ENGINEER_MAX 个（防守的战线越多越要，但每个工兵都永久占一个人口）
+    p["engineer_want"] = max(0, min(defending, ENGINEER_MAX) - len(engineers))
 
 
 def _land_bases(ctx, nation, cities, components) -> set:
@@ -3798,9 +3900,45 @@ def _bodyguards(ctx, nid):
 
 
 def _engineer(ctx, unit, plan):
-    """工兵前出到战线：往战线中段走，到了就待命——城市会从市中心把道路修到工兵所在的位置
+    """工兵：正在修堡垒的原地施工（移动、驻守都会打断）；分到修堡垒任务的（plan_forts）走过去开工；
+    其余前出到战线：往战线中段走，到了就待命——城市会从市中心把道路修到工兵所在的位置
     （工兵自己不修路），前线就有路运兵了。"""
     s, g = ctx.state, ctx.state.grid
+    if unit.task is not None:
+        unit.ai_goal = "修建堡垒中，原地施工"
+        return True
+    job = _ai(ctx).get("fort_job", {}).get(unit.id)
+    if job is not None and s.city_at(unit.tile) is None:
+        exposed = any(
+            v.nation != unit.nation
+            and is_military(ctx.rules, v)
+            and at_war(s, v.nation, unit.nation)
+            for t in g.within(unit.tile, 2)
+            for v in s.units_at(t, "surface")
+        ) and not any(
+            v.nation == unit.nation and is_military(ctx.rules, v)
+            for v in s.units_at(unit.tile, "surface")
+        )
+        if exposed:
+            job = None  # 身边两格有敌军、又没有本方部队掩护：不去修了，先撤
+            _retreat(ctx, unit, "敌军逼近，工兵先撤下来")
+            return True
+    if job is not None:
+        tile, why = job
+        if unit.tile != tile:
+            if march(ctx, unit, tile, f"前往修堡垒的位置：{why}"):
+                return True
+        else:
+            fort = next(b.id for b in ctx.rules.buildings.values() if b.fort_hp)
+            if emit(
+                ctx,
+                unit,
+                BuildFacility(
+                    issuer=ref("nation", unit.nation), unit=ref("unit", unit.id), facility=fort
+                ),
+                why,
+            ):
+                return True
     target = s.cities.get(plan.get("target_city"))
     goal = plan.get("stage")
     if target is None or goal is None or plan.get("sea") or target.nation == unit.nation:
@@ -3926,12 +4064,20 @@ def _border_posts(ctx, nid):
             for t in np.flatnonzero(border & (g.city_of == c.id))
             if costs[int(t)] > 0 and s.city_at(int(t)) is None
         ]
+        # 本方的堡垒（战线挪走以后留在后面的也算）：边境哨优先进驻，别让它空着
+        mine = [
+            t
+            for t, f in s.forts.items()
+            if f["nation"] == nid and f["hp"] > 0 and g.distance(t, c.tile) <= watch
+        ]
+        tiles = sorted(set(tiles) | set(mine))
         if not tiles:
             continue
 
-        def danger(t, near=near):
+        def danger(t, near=near, mine=frozenset(mine)):
             terrain = rules.terrain_at(int(g.terrain[t]))
-            return min(g.distance(t, e) for e in near) - terrain.defense / 25
+            fort = SENTRY_FORT if t in mine else 0
+            return min(g.distance(t, e) for e in near) - terrain.defense / 25 - fort
 
         count = 1 + (len(near) >= 4)
         for t in sorted(tiles, key=lambda t: (danger(t), t)):
@@ -4659,7 +4805,9 @@ def resolve_attacks(ctx):
             tile = choice[0]
         target = combat.target_at(s, rules, actor, tile)
         info, problem = frontline.preview(ctx, actor, tile)
-        if problem or (target is None and not info.get("facility_strike")):
+        if problem or (
+            target is None and not (info.get("facility_strike") or info.get("fort_strike"))
+        ):
             continue
         if target is None:
             _submit(ctx, actor, tile, reason)
@@ -4995,6 +5143,7 @@ def nation_turn(ctx, job):
         _ai(ctx).setdefault("encircle", {}).update(plan_encirclements(ctx, nid, ashore, guards))
         _ai(ctx)["exploit"] = plan_exploits(ctx, nid, ashore, guards, plan)
         _ai(ctx)["screen"] = plan_screens(ctx, nid, ashore, guards)
+        _ai(ctx)["fort_job"] = plan_forts(ctx, nid, plan, ashore)
         _prefetch_flows(ctx, {nid: plan})
     # 每支部队按所属战线决策（战线的目标、阶段、战线位置）；不在战线上的（守军、边境哨、侦察、
     # 开拓团、闲置舰船）按国家整体的计划

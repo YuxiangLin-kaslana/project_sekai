@@ -37,8 +37,15 @@ def _construction(ctx: StepContext) -> None:
         if u.task.turns_left > 0:
             continue
         b = rules.buildings[u.task.facility]
-        if state.grid.facility[u.tile] == 0 and int(state.grid.owner[u.tile]) == u.nation:
+        owner = int(state.grid.owner[u.tile])
+        if state.grid.facility[u.tile] == 0 and (
+            owner == u.nation or (b.fort_hp and owner < 0)  # 堡垒也能修在无主的土地上
+        ):
             state.grid.facility[u.tile] = rules.facility_index(b.id)
+            if b.fort_hp:
+                from engine.systems.forts import build as build_fort
+
+                build_fort(ctx, u.tile, u.nation, b)
             ctx.log.add(
                 "facility_built",
                 facility=b.id,

@@ -92,13 +92,19 @@ def blocked_tiles(state: GameState, rules: Ruleset, unit: Unit, ut: UnitType) ->
 
 
 def closed_for(state: GameState, unit: Unit):
-    """unit 进不去的格子（和平国家的领土，外交的关闭边境），bool[N]；飞机不受限。
+    """unit 进不去的格子（和平国家的领土，外交的关闭边境；交战国还有血量的堡垒），bool[N]；飞机不受限。
     部队已经在关闭的领土里（和约签订时还没撤出来）就不限，让它走出来。没有限制返回 None。"""
     if unit.layer == "air":
         return None
-    from engine.systems.diplomacy import closed
+    from engine.systems.diplomacy import at_war, closed
 
     mask = closed(state, unit.nation)
+    walls = [
+        t for t, f in state.forts.items() if f["hp"] > 0 and at_war(state, f["nation"], unit.nation)
+    ]
+    if walls:
+        mask = mask.copy()
+        mask[walls] = True  # 敌方堡垒：拆掉之前进不去
     if mask[unit.tile] or not mask.any():
         return None
     return mask

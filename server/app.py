@@ -454,6 +454,19 @@ def game_tactics(game_id: str, actor: str, col: int | None = None, row: int | No
 
                     reach = air_radius(s.grid, game.rules.units[entity.type])
                     result["patrol_tiles"] = [int(t) for t in s.grid.within(entity.tile, reach)]
+            if "build_facility" in game.rules.units[entity.type].tags:
+                # 工兵修堡垒：脚下这一格能不能修（不能修的原因；None = 能修），堡垒的血量
+                from engine.systems.cities import facility_problem
+
+                forts_ = [b for b in game.rules.buildings.values() if b.fort_hp]
+                if forts_:
+                    b = forts_[0]
+                    if entity.task is not None:
+                        fort_why = "正在施工"
+                    else:
+                        fort_why = facility_problem(s, game.rules, entity.nation, entity.tile, b)
+                    result["fort_blocked"] = fort_why
+                    result["fort"] = {"facility": b.id, "turns": b.build_turns, "hp": b.fort_hp}
             from engine.systems.pillage import pillage_target
 
             target, problem = pillage_target(s, game.rules, entity)

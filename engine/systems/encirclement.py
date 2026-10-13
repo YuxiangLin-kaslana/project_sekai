@@ -105,6 +105,9 @@ def passable(state, rules, nation, occ=None, extra=(), domain="land") -> np.ndar
     for c in state.cities.values():
         if at_war(state, c.nation, nation):
             out[c.tile] = False
+    for t, f in state.forts.items():
+        if f["hp"] > 0 and at_war(state, f["nation"], nation):
+            out[t] = False  # 敌方堡垒：补给线过不去
     return out
 
 

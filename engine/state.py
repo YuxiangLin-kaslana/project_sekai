@@ -198,6 +198,8 @@ class GameState:
     region_xp: dict[int, int] = field(default_factory=dict)
     # 被占领划走的土地原来属于哪座城：格子 → 城市。那座城被攻下时，攻占方手里的这些土地还给它
     land_home: dict[int, int] = field(default_factory=dict)
+    # 堡垒（engine/systems/forts.py）：格子 → {"nation": 国家, "hp": 血量, "hit": 上次挨打的回合}
+    forts: dict[int, dict] = field(default_factory=dict)
     # 世界大事记：[{turn, kind, text, nations, tile}]（首都陷落、灭国、内战、叛变、反霸同盟……）
     chronicle: list[dict] = field(default_factory=list)
     # 外交（engine/systems/diplomacy.py）：{"a:b": {status, since, truce, progress}}；没有记录的按交战处理
@@ -351,6 +353,7 @@ class GameState:
             facility_xp=dict(self.facility_xp),
             damaged=dict(self.damaged),
             land_home=dict(self.land_home),
+            forts={t: dict(f) for t, f in self.forts.items()},
             chronicle=list(self.chronicle),
             region_xp=dict(self.region_xp),
             relations={k: dict(v) for k, v in self.relations.items()},
@@ -387,6 +390,7 @@ class GameState:
             "offers": self.offers,
             "damaged": sorted(self.damaged.items()),
             "land_home": sorted(self.land_home.items()),
+            "forts": sorted((t, sorted(f.items())) for t, f in self.forts.items()),
             "chronicle": self.chronicle,
             "region_xp": sorted(self.region_xp.items()),
             "roads": [[a, b, v] for (a, b), v in sorted(self.roads.items())],

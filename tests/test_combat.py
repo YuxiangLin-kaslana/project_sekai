@@ -1205,3 +1205,57 @@ def test_patrolling_fighter_lists_enemy_planes_in_its_zone_beyond_base_range(boa
     info = tactics(s, RULES, plane)
     assert raider.tile in info["attack_tiles"]
     assert any(t["tile"] == raider.tile for t in info["targets"])
+
+
+def test_engineers_build_forts_that_shield_troops_and_need_heavy_guns_to_break(board):
+    """堡垒：工兵两回合修好；里面的部队挨打少；炮兵拆堡垒比步兵快得多；打空就摧毁。"""
+    from engine.systems import forts
+    from engine.systems.zoc import mask
+
+    board.relations["1:2"] = {"status": "war", "since": 0}
+    sapper = add(board, "engineer", 1, 5, 3)
+    out = action(board, order(sapper, "build_facility", facility="fort"))
+    assert not out.rejected
+    s = out.state
+    for _ in range(RULES.buildings["fort"].build_turns):
+        s = step(s, [], RULES).state
+    fort = s.grid.idx(5, 3)
+    assert fort in s.forts and s.forts[fort]["nation"] == 1
+    assert s.forts[fort]["hp"] == RULES.buildings["fort"].fort_hp
+    # 没人守也有控制区；敌军进不去
+    assert mask(s, RULES, 2, "land")[s.grid.idx(6, 3)]
+    from engine.systems.movement import closed_for
+
+    walker = add(s, "infantry", 2, 7, 3)
+    assert closed_for(s, walker)[fort]
+    # 里面的部队挨打少
+    s.remove_unit(sapper.id)
+    guard = add(s, "infantry", 1, 5, 3)
+    gun = add(s, "artillery", 2, 7, 4)
+    inside, _ = combat_preview(s, gun, fort)
+    s.forts[fort]["hp"] = 0  # 假装没有堡垒（血量为 0 时不算）
+    outside, _ = combat_preview(s, gun, fort)
+    s.forts[fort]["hp"] = RULES.buildings["fort"].fort_hp
+    assert inside["damage"] < outside["damage"]
+    assert inside["fort_damage"] > 0
+    # 炮兵拆堡垒比步兵（近战打折）快得多
+    s.remove_unit(guard.id)
+    by_gun, _ = combat_preview(s, gun, fort)
+    s.move_unit(walker, s.grid.idx(6, 3))  # 近战要贴上去
+    by_foot, _ = combat_preview(s, walker, fort)
+    assert by_gun["fort_strike"] and by_gun["fort_damage"] > 2 * by_foot["fort_damage"]
+    # 一直轰到摧毁
+    for _ in range(20):
+        if fort not in s.forts:
+            break
+        gun = s.units[gun.id]
+        res = action(s, order(gun, "attack", to=list(s.grid.col_row(fort))))
+        s = step(res.state, [], RULES).state
+    assert fort not in s.forts and not s.grid.facility[fort]
+    assert forts.fort_at(s, fort) is None
+
+
+def combat_preview(s, actor, tile):
+    from engine.systems.combat import preview
+
+    return preview(s, RULES, actor, tile)

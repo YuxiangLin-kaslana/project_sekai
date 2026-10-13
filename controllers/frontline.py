@@ -496,8 +496,24 @@ def _slots(ctx, seg, ours=None):
             seen.update(nxt)
         return bool(nxt)
 
+    from engine.systems import forts
+
+    defending = seg.get("stance") != "进攻"
     fill = Counter()
     members = sorted((s.units[uid] for uid in seg["units"] if uid in s.units), key=lambda u: u.id)
+    if defending and members:
+        # 防守：这段战线前后两排里的本方堡垒，先各派一支离得最近的近战部队进驻（堡垒不能空着）
+        nation = members[0].nation
+        held = sorted(t for t in set(line) | set(back) if forts.friendly(s, nation, t))
+        free = [u for u in members if not (R.is_siege(rules, u) or R.is_air_defense(rules, u))]
+        for t in held:
+            if not free:
+                break
+            u = min(free, key=lambda u: (g.distance(u.tile, t), u.id))
+            free.remove(u)
+            members.remove(u)
+            fill[t] += 1
+            slots[u.id] = t
     for u in members:
         rear = R.is_siege(rules, u) or R.is_air_defense(rules, u)
         k = 1 if rear else 0
@@ -509,8 +525,16 @@ def _slots(ctx, seg, ours=None):
         options = rows[k] if k is not None and k < len(rows) else (back if rear else line)
         if not options:
             continue
-        # 先铺满再加厚：同样的填充程度挑近的
-        t = min(options, key=lambda t: (min(fill[t], LINE_STACK), g.distance(u.tile, t), t))
+        # 先铺满再加厚：同样的填充程度先进本方堡垒（防守时），再挑近的
+        t = min(
+            options,
+            key=lambda t: (
+                min(fill[t], LINE_STACK),
+                not (defending and forts.friendly(s, u.nation, t)),
+                g.distance(u.tile, t),
+                t,
+            ),
+        )
         fill[t] += 1
         slots[u.id] = t
 

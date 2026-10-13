@@ -229,6 +229,9 @@ class BuildingType(_Strict):
     requires_resources: list[str] = []  # 格子上必须有其中一种资源
     coastal: bool = False  # 必须临水（港口）
     air_base: bool = False  # 航空单位可以驻扎（城市本身就是）
+    # 堡垒（工兵修的野战工事，engine/systems/forts.py）：血量上限；> 0 就是堡垒（有控制区、敌军进不去，
+    # 打空血量才摧毁），只能工兵修，城市不能修
+    fort_hp: int = Field(0, ge=0)
     stacking: StackLimits = StackLimits()  # 该格堆叠上限加成
     modifiers: list[Modifier] = []
     icon: str  # 地图上的设施图标（前端内置）

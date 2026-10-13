@@ -272,6 +272,7 @@ def rules_json(rules: Ruleset) -> dict:
                 "population_tiers": b.population_tiers,  # 阶梯上限：[[人口, 最多几个], ...]
                 "enables": b.enables,
                 "terrain_yields": {k: v.model_dump() for k, v in b.terrain_yields.items()},
+                "fort_hp": b.fort_hp,  # 堡垒血量上限（> 0 就是堡垒，只能工兵修）
                 "icon": b.icon,
             }
             for b in rules.buildings.values()
@@ -591,6 +592,12 @@ def _snapshot(game: Game, rules: Ruleset) -> dict:
         "world": game.world,
         "settings": dict(s.grid.tuning),
         "damaged": sorted(s.damaged),  # 被炸坏的设施格
+        # 堡垒：[格子, 国家, 血量, 血量上限]（engine/systems/forts.py）
+        "forts": [
+            [t, f["nation"], f["hp"], rules.facility_at(int(s.grid.facility[t])).fort_hp]
+            for t, f in sorted(s.forts.items())
+            if rules.facility_at(int(s.grid.facility[t])) is not None
+        ],
         # 外交：有记录的国家对（没有记录的按交战）、给玩家国家的待处理提议
         "diplomacy": {
             "default": DIPLOMACY_DEFAULT,

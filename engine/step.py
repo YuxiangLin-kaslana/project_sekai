@@ -27,6 +27,7 @@ from engine.systems import (
     diplomacy,
     economy,
     encirclement,
+    forts,
     movement,
     occupation,
     progression,
@@ -66,6 +67,7 @@ PIPELINE: tuple[tuple[str, Callable[[StepContext], None]], ...] = (
     ("economy", economy.resolve),
     ("stability", stability.resolve),
     ("upheaval", upheaval.resolve),
+    ("forts", forts.resolve),
     ("progression", progression.resolve),
     ("refresh", _refresh),
 )

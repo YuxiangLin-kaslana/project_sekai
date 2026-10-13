@@ -12,6 +12,8 @@ def start(ctx, city, facility, to):
     b = rules.buildings.get(facility)
     if b is None:
         return "没有这种设施"
+    if b.fort_hp:
+        return "堡垒只能由工兵修建"
     try:
         tile = s.grid.idx(*to)
     except IndexError as e:

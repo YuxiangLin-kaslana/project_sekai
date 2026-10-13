@@ -95,6 +95,13 @@ def mask(state, rules, nation: int, domain: str) -> np.ndarray:
                 if bool(g.is_water[n]) == water:
                     out[n] = True
             break
+    if not water:
+        # 堡垒没人驻守也有控制区（engine/systems/forts.py）
+        for tile, f in state.forts.items():
+            if f["hp"] > 0 and at_war(state, f["nation"], nation):
+                for n in g.neighbors_of(tile):
+                    if not g.is_water[n]:
+                        out[n] = True
     state._zoc[key] = out
     return out
 

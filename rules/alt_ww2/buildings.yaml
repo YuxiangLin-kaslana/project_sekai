@@ -274,3 +274,17 @@ pasture:
   requires_resources: [horses]
   extracts: [horses]
   icon: pasture
+
+fort:
+  name: 堡垒
+  placement: tile
+  cost: 0                    # 工兵就地修，不花城市的生产力
+  build_turns: 2
+  upkeep: 0
+  jobs: 0
+  fort_hp: 120               # 血量：打空才摧毁；炮兵、轰炸机、舰炮按“打城市”的倍率拆得快，近战打折
+  modifiers:
+    - { target: tile, stat: defense, op: add, value: 60 }   # 驻守的本方部队防守 +60%
+  gold_assist: false
+  capturable: false
+  icon: fort
