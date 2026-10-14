@@ -38,6 +38,8 @@ AI（resolve，每回合在国家 AI 规划之前，按国家编号依次）：
 
 from __future__ import annotations
 
+import math
+
 import numpy as np
 
 from engine.ids import parse_ref, ref
@@ -82,6 +84,9 @@ ENDGAME_SPAN = (
 )
 CONSOLIDATE_PULL = 2.0  # 刚打下来的城每占本国 10%，要的兵力比再高 20%（巩固占领区）
 HATE_SPAN = 30  # 关系值从 WAR_AT + 10 往下这么多点，“关系差”这一项从 0 涨到满分
+CULTURE_WAR_SPAN = (
+    20  # 挑宣战对象时文化的倍率 exp(−亲疏 / 20)：同小类（+20）×0.37，东西方之间（−14）×2
+)
 OVERSEAS = 0.5  # 隔海的对象（不是陆上邻国）意愿打这么多折
 ENEMY_OF_ENEMY = 0.25  # 对方正在和我的敌人交战（敌人的敌人）：意愿打这么多折
 WAR_LOAD = 0.5  # 手上交战国的兵力合计占本国的比例到这么多时，开新仗的意愿降到 0（之前线性下降）
@@ -540,6 +545,12 @@ def _appetite(odds, need, hate, factor) -> float:
     return r / (1 + r) * hate * factor
 
 
+def culture_affinity(state, a, b) -> int:
+    from engine.systems.culture import affinity
+
+    return affinity(state, a, b)
+
+
 def _maybe_declare(ctx, nid, alive, pw, borders, rng) -> None:
     """AI 主动宣战：扩张期过了，对每个够得着、和平中的国家算宣战意愿（_appetite，全是平滑打分）——
     连同盟友越占优、关系越差越想打；国家越少越敢打（终局两强不会永远相安无事）；刚打下来的城越多、
@@ -582,6 +593,8 @@ def _maybe_declare(ctx, nid, alive, pw, borders, rng) -> None:
         factor = calm * (OVERSEAS if other in sea else 1.0)
         if foes & set(enemies(s, other)):
             factor *= ENEMY_OF_ENEMY  # 它正在和我的敌人交战：敌人的敌人，不太想打
+        # 文化：异文化的国家更想打，同文化的不太想打（平滑的倍率，同小类 ×0.37 … 东西方之间 ×2）
+        factor *= math.exp(-culture_affinity(s, nid, other) / CULTURE_WAR_SPAN)
         want = _appetite(odds, need, hate, factor)
         if best is None or (want, -other) > (best[0], -best[1]):
             best = (want, other)
