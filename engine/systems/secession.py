@@ -32,7 +32,7 @@ def secede(
     culture = people.culture  # 名字系列也跟着文化走
     nation = Nation(
         nid,
-        name or nation_name(s, rules, culture, from_city=seat.name),
+        name or nation_name(s, rules, culture, from_city=seat.name, subculture=people.subculture),
         # 新国家的颜色：和现存各国都分得开（不和原国家、邻国撞色）
         distinct_color(
             [n.color for n in s.nations.values() if not n.eliminated],

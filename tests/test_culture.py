@@ -75,5 +75,6 @@ def test_a_breakaway_state_takes_the_culture_of_its_capital_city():
     rebels = secede(ctx, 1, [lost], lost, [], gold=0, why="测试")
     # 被攻占的城独立：继承原主人的文化（“光复”），不是攻占者的
     assert s.nations[rebels].subculture == "latin" and s.nations[rebels].culture == "west"
+    assert s.nations[rebels].name in RULES.cultures["latin"].nations  # 国名也从这个文化小类里挑
     loyal = secede(ctx, 1, [home], home, [], gold=0, why="测试")
     assert s.nations[loyal].subculture == "zhongyuan"  # 本国的城分裂出去：和原国家同文化

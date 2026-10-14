@@ -9,11 +9,12 @@ from engine.systems.cities import found_city
 RULES = load_ruleset("alt_ww2")
 
 
-def test_each_series_has_20_nations_1000_cities_and_1000_people():
+def test_each_series_has_200_nations_2000_cities_and_1000_people():
     for side in ("east", "west"):
         pool = RULES.names[side]
-        assert len(pool.nations) == 20 and len(pool.cities) == 1000 and len(pool.people) == 1000
-        assert len(set(pool.cities)) == 1000 and len(set(pool.people)) == 1000
+        assert len(pool.nations) == 200 and len(pool.cities) == 2000 and len(pool.people) == 1000
+        assert len(set(pool.nations)) == 200 and len(set(pool.cities)) == 2000
+        assert len(set(pool.people)) == 1000
     assert not set(RULES.names["east"].cities) & set(RULES.names["west"].cities)
     assert RULES.nations["tianshu"].culture == "east" and RULES.nations["aurelia"].culture == "west"
 

@@ -22,8 +22,9 @@ import colorsys
 from engine.rng import RngTree
 
 SUFFIXES = (
-    "神圣同盟", "联合王国", "人民国", "大公国", "选侯国", "自由邦", "共和国", "合众国", "议会国",
-    "苏丹国", "王国", "帝国", "联邦", "邦联", "公国", "联盟", "王朝", "汗国", "国",
+    "神圣同盟", "联合王国", "哈里发国", "埃米尔国", "人民国", "大公国", "选侯国", "自由邦", "共和国",
+    "合众国", "议会国", "苏丹国", "沙皇国", "自治领", "王国", "帝国", "联邦", "邦联", "公国", "联盟",
+    "王朝", "汗国", "皇国", "藩国", "国",
 )  # fmt: skip
 CULTURES = ("west", "east")  # 模板用完后新国家按这个顺序交替
 
@@ -94,12 +95,21 @@ def city_name(state, rules, nation_id: int) -> str:
     return f"{base_name(nation.name)[:4]}{k + 1}号城"
 
 
-def nation_name(state, rules, culture: str, from_city: str | None = None) -> str:
-    """新国家的名字：本系列国名库里随机挑一个没人用过的（按种子和当前国家数，可复现）；用完了依次用
+def nation_name(
+    state, rules, culture: str, from_city: str | None = None, subculture: str | None = None
+) -> str:
+    """新国家的名字：本系列国名库里随机挑一个没人用过的（按种子和当前国家数，可复现）——给了文化小类
+    （subculture）时先在这个小类的国名里挑（cultures.yaml），挑完了再用整个系列的；都用完了依次用
     “后 + 灭亡国家名”、“城市名 + 国号”、“方位 + 国名”，都不重名。"""
     used = used_names(state)
     pool = _pool(rules, culture)
+    sub = rules.cultures.get(subculture) if subculture else None
     free = [
+        n
+        for n in (sub.nations if sub is not None else ())
+        if n not in used and base_name(n) not in used
+    ]
+    free = free or [
         n for n in (pool.nations if pool is not None else ())
         if n not in used and base_name(n) not in used
     ]  # fmt: skip
