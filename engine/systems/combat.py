@@ -858,6 +858,10 @@ def _preview(state, rules, actor, tile) -> tuple[dict | None, str | None]:
                     }
                 )
     retaliation = max(6, min(60, 25 * d // a)) if kind == "melee" and not at_sea else 0
+    if retaliation and isinstance(target, City) and target.id in ring_now.cities:
+        # 被包围的城市断了补给：反击和攻击一样只剩 city_penalty 之外的部分（孤城守不住强攻）
+        retaliation = retaliation * (100 - rules.encirclement.city_penalty) // 100
+        tactical = [*tactical, ("被围孤城反击减弱", -rules.encirclement.city_penalty)]
     if (city_defense(state, rules, target) if isinstance(target, City) else target.hp) <= 0:
         retaliation = 0
     if kind == "air" and isinstance(target, Unit):

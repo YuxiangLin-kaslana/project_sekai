@@ -174,7 +174,6 @@ LINE_START = 6  # 战线从目标城外这么多步开始往前推（随地图�
 BORDER_WATCH = 8  # 城市这么近（格，随地图放大）有外国军队，就往边境派哨兵
 HUNT_RADIUS = 8  # 战舰追击这么近（格，随地图放大）的敌舰
 FLEET_MIN = 3  # 舰队不到这么多艘先集结
-STORM_HP = 80  # 城防低于这个数，近战不等炮火直接强攻城墙
 DROP_PER_TILE = 2  # 跨海登陆：每个登陆格每回合最多认领这么多支下船部队
 AIRFIELD_MARGIN = 2  # 机场离目标至少留这么多格（别修在敌城射程里）
 CARRIER_STANDOFF = 5  # 航母停在目标城外这么远（舰载机够得着，岸上火力打不着）
@@ -2127,7 +2126,7 @@ def _fleet(ctx, unit, plan, target):
     op = plan.get("sea")
     if op is None or target is None or not _on_seas(ctx, unit, op):
         return False
-    rules, g = ctx.rules, ctx.state.grid
+    rules = ctx.rules
     if not _warship(rules, unit):
         return False
     mode = plan.get("mode")
@@ -2136,10 +2135,7 @@ def _fleet(ctx, unit, plan, target):
     if mode == "围城" and is_siege(rules, unit) and _siege(ctx, unit, plan, target):
         return True
     why = f"支援渡海：掩护 {target.name} 城外的登陆场"
-    if g.distance(unit.tile, op["beach"]) > 2 and march(ctx, unit, op["beach"], why, stop_within=2):
-        return True
-    _hold(ctx, unit, why)
-    return True
+    return _moor(ctx, unit, op["beach"], 1, 3, why)
 
 
 def _ground(ctx, tile, enemy_tile):
@@ -3362,9 +3358,64 @@ def _fleet_member(ctx, unit):
     if fleet["kind"] in ("muster", "port"):
         stop = 1
     why = f"{adm.title}：{fleet['name']}"
-    if g.distance(unit.tile, fleet["target"]) > stop and march(
-        ctx, unit, fleet["target"], why, stop_within=stop
-    ):
+    # 停成一团：集结、回港在港外 1–3 格；炮击在射程内的两圈里
+    lo, hi = (1, 3) if stop == 1 else (max(1, stop - 1), stop)
+    return _moor(ctx, unit, fleet["target"], lo, hi, why)
+
+
+def _berth(ctx, unit, center, lo, hi):
+    """舰船停哪：center 周围 lo..hi 格内、同一片海、开得进去的水面里，挑成一团的位置——离这一批已经
+    定好位置的本国舰船近（抱团，不沿航线、岸线排成一条线）、那一格船不多（每格最多 3 艘）、离自己近。
+    已经停在合适位置的返回自己脚下。没有合适的水面返回 None。"""
+    s, rules, g = ctx.state, ctx.rules, ctx.state.grid
+    wc = geography(s, rules)["water_components"]
+    seas = _sea_comps(ctx, unit.tile)
+    cost = ctx.costs("sea")
+    tiles = [
+        t
+        for t in g.within(center, hi)
+        if lo <= g.distance(t, center)
+        and g.is_water[t]
+        and cost[t] > 0
+        and int(wc[t]) in seas
+        and not any(v.nation != unit.nation for v in s.units_at(t, "surface"))
+    ]
+    if not tiles:
+        return None
+    key = (unit.nation, center, lo, hi)
+    booked = _ai(ctx).setdefault("berths", {}).setdefault(key, Counter())
+    load = Counter(booked)
+    for t in tiles:
+        load[t] += sum(
+            1
+            for v in s.units_at(t, "surface")
+            if v.id != unit.id and rules.units[v.type].domain == "sea"
+        )
+    # 抱团的锚点：这一带船最多的那一格（一样多取编号小的）——都往同一处靠，不在港口两侧各聚一团
+    anchor = max((t for t in tiles if load[t]), key=lambda t: (load[t], -t), default=None)
+
+    def score(t):
+        crowd = load[t] + (100 if load[t] >= 3 else 0)
+        huddle = g.distance(t, anchor) if anchor is not None else 0
+        return (2 * huddle + 1.5 * crowd + g.distance(unit.tile, t) / 3, t)
+
+    if unit.tile in tiles and load[unit.tile] < 3:
+        best = unit.tile
+    else:
+        best = min(tiles, key=score)
+    booked[best] += 1
+    return best
+
+
+def _moor(ctx, unit, center, lo, hi, why) -> bool:
+    """开到 center 周围 lo..hi 格内的泊位（_berth，舰队停成一团）；到了就驻守。"""
+    spot = _berth(ctx, unit, center, lo, hi)
+    if spot is None:
+        if ctx.state.grid.distance(unit.tile, center) > hi and march(
+            ctx, unit, center, why, stop_within=hi
+        ):
+            return True
+    elif spot != unit.tile and march(ctx, unit, spot, why):
         return True
     _hold(ctx, unit, why)
     return True
@@ -3454,12 +3505,9 @@ def _navy(ctx, unit, plan, target):
             if mode == "围城"
             else f"舰队开到 {target.name} 外海待命"
         )
-        if g.distance(unit.tile, target.tile) > stand and march(
-            ctx, unit, target.tile, why, stop_within=stand
-        ):
-            return True
-        _hold(ctx, unit, why)
-        return True
+        # 停成一团：炮击在射程内的两圈里，待命在城的火力之外的两圈里
+        lo, hi = (max(1, stand - 1), stand) if mode == "围城" else (stand, stand + 1)
+        return _moor(ctx, unit, target.tile, lo, hi, why)
     # 海岸防御：敌舰靠近、或敌军跨海登陆到本国沿海城市附近，开到那座城外的海面去拦截、炮击
     threatened = []
     for c in s.nation_cities(unit.nation):
@@ -3478,10 +3526,7 @@ def _navy(ctx, unit, plan, target):
     if threatened:
         c = min(threatened)[3]
         why = f"敌军逼近 {c.name}，开到城外海面防御海岸"
-        if g.distance(unit.tile, c.tile) > 1 and march(ctx, unit, c.tile, why, stop_within=1):
-            return True
-        _hold(ctx, unit, why)
-        return True
+        return _moor(ctx, unit, c.tile, 1, 3, why)
     return False
 
 
@@ -4478,7 +4523,11 @@ def _siege(ctx, unit, plan, target):
     # 近战部队各认领城市四周的一格把城围死（被围的城城防不回复、防御下降），城防打空时就近占领
     around = ring(ctx, target.tile)
     if unit.tile in around:
-        return _storm(ctx, unit, target)  # 已在包围圈上：没有炮火可等就强攻城墙，否则原地坚守
+        if _storm(ctx, unit, target):  # 已在包围圈上：一起冲划算就强攻城墙（不等炮火）
+            return True
+        # 否则原地坚守：围住不走（被包围的城城防不回复、防御射击减半），不被战线调去别处
+        _hold(ctx, unit, f"围住 {target.name}，等时机强攻")
+        return True
     if g.distance(unit.tile, target.tile) > 3:
         # 远处先沿共享的目标城距离场靠近，到了城外再认领包围圈缺口
         return march(ctx, unit, target.tile, f"向 {target.name} 推进，准备包围", stop_within=2)
@@ -4505,28 +4554,73 @@ def _siege(ctx, unit, plan, target):
     )
 
 
-def _storm(ctx, unit, target):
-    """强攻城墙：贴在城边的近战部队，射程里没有本方远程火力在轰城（炮兵伤亡、撤下去了）、或者
-    城防已经不高（STORM_HP 以下）时，自己冲城墙——一起冲的部队伤害累加，打空了就由占领接手。
-    预计反击会把自己打死、或打掉一半以上生命的不冲。"""
+STORM_HORIZON = 3  # 强攻：一起冲预计几回合能拿下——每多一回合，“拿得下”的把握按 e^(−回合 / 3) 往下掉
+STORM_CITY = (
+    600  # 一座城值多少分（每口人口再加 STORM_POP）：一击打掉的城防按它在拿下这座城里的份额折算
+)
+STORM_POP = 50
+
+
+def _assault(ctx, city):
+    """这回合一起冲城能打掉多少（按回合缓存）：贴在城边、还能攻击的本国近战陆军各自的预计伤害，
+    加上本回合远程、空军已经打算打这座城的伤害；预计几回合拿下（没被包围的城每回合还会回城防）。"""
+    cache = _ai(ctx).setdefault("assault", {})
+    if city.id in cache:
+        return cache[city.id]
     s, rules, g = ctx.state, ctx.rules, ctx.state.grid
-    if _hp(ctx, target) <= 0 or combat.lock_reason(s, rules, unit) or health(rules, unit) < 50:
-        return False
-    guns = any(
-        v.nation == unit.nation
-        and is_siege(rules, v)
-        and v.layer == "surface"
-        and g.distance(v.tile, target.tile) <= combat.attack_range(rules, v, g)
-        for t in g.within(target.tile, 4)
-        for v in s.units_at(t, "surface")
-    )
-    planned = _ai(ctx)["damage"].get(_target_key(target), 0)
-    if guns and _hp(ctx, target) - planned > STORM_HP:
+    nid = ctx.only_nation
+    total = _ai(ctx)["damage"].get(_target_key(city), 0)
+    for t in g.neighbors_of(city.tile):
+        for v in s.units_at(t, "surface"):
+            if (nid is not None and v.nation != nid) or not at_war(s, v.nation, city.nation):
+                continue
+            ut = rules.units[v.type]
+            if ut.domain != "land" or is_siege(rules, v) or not is_military(rules, v):
+                continue
+            if combat.lock_reason(s, rules, v) or health(rules, v) < WOUNDED:
+                continue
+            info, problem = combat.preview(s, rules, v, city.tile)
+            if not problem and info is not None:
+                total += info["damage"]
+    regen = 0
+    if city.id not in encirclement.status(s, rules).cities:
+        full = combat.city_max_hp(rules, city)
+        regen = max(1, full * rules.cities.defense_regen // 100)
+    turns = _hp(ctx, city) / max(1.0, total - regen)
+    cache[city.id] = (total, turns)
+    return cache[city.id]
+
+
+def _storm(ctx, unit, target):
+    """强攻城墙：贴在城边的近战部队冲城（不等炮火——本回合炮兵、飞机打这座城的伤害直接算进一起冲的总账）。
+    软性打分：这一击打掉的城防在拿下这座城里占的份额 × 城的价值 × 拿得下的把握（一起冲预计几回合拿下，
+    越快越高），加上伤害本身，减去挨的反击（按兵力优势、剩下的血加权）；会被反击打死的不冲。
+    一起冲的部队伤害累加，打空了就由占领接手。"""
+    s, rules = ctx.state, ctx.rules
+    left = _hp(ctx, target)
+    if left <= 0 or combat.lock_reason(s, rules, unit):
         return False
     info, problem = combat.preview(s, rules, unit, target.tile)
-    if problem or not info["damage"] or info["retaliation"] >= unit.hp // 2:
+    if problem or not info["damage"] or info["retaliation"] >= unit.hp:
         return False
-    intend_attack(ctx, unit, target.tile, info, target, f"强攻 {target.name} 城墙", priority=1)
+    total, turns = _assault(ctx, target)
+    sure = math.exp(-max(0.0, turns - 1) / STORM_HORIZON)
+    worth = STORM_CITY + STORM_POP * target.population
+    share = min(1.0, info["damage"] / max(1, left))
+    score = worth * sure * share + info["damage"]
+    score -= info["retaliation"] * _loss_weight(ctx, unit, target.nation)
+    if score <= 0:
+        return False
+    when = "这回合" if turns <= 1 else f"约 {math.ceil(turns)} 回合"
+    intend_attack(
+        ctx,
+        unit,
+        target.tile,
+        info,
+        target,
+        f"强攻 {target.name} 城墙（一起冲{when}拿下）",
+        priority=1,
+    )
     return True
 
 
@@ -4889,13 +4983,26 @@ def decide_unit(ctx, unit, plan, guards, claimed):
             return
     # 只挑本回合不会离开的目标：会走开的目标打不着，这回合还白白耗在原地；挑不到就照常行军
     choice = attack_choice(ctx, unit, only_static=True)
+    melee_land = rules.units[unit.type].domain == "land" and not is_siege(rules, unit)
+    if (
+        choice is not None
+        and melee_land
+        and isinstance(choice[2], City)
+        and _hp(ctx, choice[2]) > 0
+    ):
+        # 近战对着城防没打空的城：不是“占领”（占领只在城防打空时提交，原来挂上就被丢掉，部队整回合干等），
+        # 按强攻算（_storm：一起冲几回合能拿下）；不值得冲就别的目标或照常行动
+        if _storm(ctx, unit, choice[2]):
+            return
+        others = [
+            c
+            for c in attack_choice(ctx, unit, only_static=True, ranked=True) or []
+            if not isinstance(c[2], City)
+        ]
+        choice = others[0] if others else None
     if choice is not None:
         tile, info, victim = choice
-        capture = (
-            isinstance(victim, City)
-            and rules.units[unit.type].domain == "land"
-            and not is_siege(rules, unit)
-        )
+        capture = isinstance(victim, City) and melee_land
         intend_attack(
             ctx,
             unit,
@@ -5084,7 +5191,58 @@ def decide_unit(ctx, unit, plan, guards, claimed):
         return
     if _pillage(ctx, unit):
         return
+    if _go_home(ctx, unit):
+        return
     _hold(ctx, unit, "暂时驻守，等待建设和军备")
+
+
+HOME_NEAR = 3  # 没事做的部队：离本国城市这么多格（× 地图尺度的平方根）以内、站在本国领土上就算在家
+HOME_CROWD = (
+    2  # 挑回哪座城：那座城附近每多一支本国部队（连同这回合已经派去的），按远这么多格算（自然分散）
+)
+
+
+def _go_home(ctx, unit) -> bool:
+    """没有战事、没有任务的部队回国待命：陆军回本国城市附近（离城 HOME_NEAR 格内、本国领土上就地驻守），
+    舰船回本国港口外。挑哪座城：路近、那里本国部队少的（软性比较，自然分散到各城）；只挑同一块陆地 /
+    同一片海的。已经在家的返回 False（由调用方驻守）。"""
+    s, rules, g = ctx.state, ctx.rules, ctx.state.grid
+    ut = rules.units[unit.type]
+    if ut.domain not in ("land", "sea") or ut.category != "military":
+        return False
+    near = round(HOME_NEAR * math.sqrt(map_scale(g)))
+    cities = s.nation_cities(unit.nation)
+    if ut.domain == "land":
+        comps = geography(s, rules)["land_components"]
+        cities = [c for c in cities if comps[c.tile] == comps[unit.tile]]
+        home = int(g.owner[unit.tile]) == unit.nation
+        if home and any(g.distance(unit.tile, c.tile) <= near for c in cities):
+            return False
+    else:
+        seas = _sea_comps(ctx, unit.tile)
+        cities = [c for c in cities if coastal(g, c.tile) and _sea_comps(ctx, c.tile) & seas]
+        if any(g.distance(unit.tile, c.tile) <= 3 for c in cities):
+            return False
+    if not cities:
+        return False
+    sent = _ai(ctx).setdefault("home_sent", Counter())
+    army = Counter()
+    for v in s.units.values():
+        if v.nation == unit.nation and v.id != unit.id and rules.units[v.type].domain == ut.domain:
+            for c in cities:
+                if g.distance(v.tile, c.tile) <= near:
+                    army[c.id] += 1
+    city = min(
+        cities,
+        key=lambda c: (
+            g.distance(unit.tile, c.tile) + HOME_CROWD * (army[c.id] + sent[c.id]),
+            c.id,
+        ),
+    )
+    sent[city.id] += 1
+    if ut.domain == "sea":
+        return _moor(ctx, unit, city.tile, 1, 3, f"没有战事，回 {city.name} 港待命")
+    return march(ctx, unit, city.tile, f"没有战事，回 {city.name} 待命", stop_within=near - 1)
 
 
 # ---------------------------------------------------------------- 攻击提交

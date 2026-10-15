@@ -5,7 +5,8 @@
 - 防御：本方部队驻在本方堡垒里，防守按堡垒设施的 tile defense 修正器加成（engine/systems/combat.py）。
 - 血量：交战国攻击堡垒格时（打里面的部队，或者打空堡垒），堡垒也掉血：30 × 攻方战斗力 ÷ 堡垒强度
   （FORT_STRENGTH），按攻方的“打城市”倍率（damage_vs_city）放大——炮兵、轰炸机、舰炮拆堡垒特别快；
-  近战再按 cities.melee_reduction 打折。血量打空就摧毁（设施拆掉，加成和控制区随之消失）。
+  近战再打 MELEE_REDUCTION 的折（堡垒单独算，不跟城市的 cities.melee_reduction：城市可以被近战强攻，
+  堡垒仍然要靠炮兵、轰炸机、舰炮拆）。血量打空就摧毁（设施拆掉，加成和控制区随之消失）。
   没挨打的回合回 FORT_REPAIR 点。
 - 区域控制：没人驻守的堡垒也有控制区（engine/systems/zoc.py），交战国走到旁边就要停下；断补给的路
   也不能从敌方堡垒和它的控制区穿过（engine/systems/encirclement.py）。交战国的部队进不了还有血量的堡垒，
@@ -42,6 +43,9 @@ def friendly(state, nation, tile) -> bool:
     return f is not None and f["hp"] > 0 and f["nation"] == nation
 
 
+MELEE_REDUCTION = 70  # 近战拆堡垒的伤害 −70%
+
+
 def damage_to(state, rules, actor, ranged: bool) -> int:
     """actor 打一下堡垒能打掉多少血。"""
     from engine.systems.combat import attack_kind, strength
@@ -53,7 +57,7 @@ def damage_to(state, rules, actor, ranged: bool) -> int:
     raw = max(8, min(65, 30 * a // FORT_STRENGTH))
     out = raw * ut.damage_vs_city // 100
     if attack_kind(rules, actor) == "melee":
-        out = out * (100 - rules.cities.melee_reduction) // 100
+        out = out * (100 - MELEE_REDUCTION) // 100
     if attack_kind(rules, actor) in ("torpedo", "anti_air"):
         return 0
     return max(1, out)
