@@ -2638,6 +2638,7 @@ function drawFronts(ctx, v) {
   const near = z >= 10;
   const width = near ? 3 : Math.max(2.4, Math.min(5, z * 0.13));
   const tooth = near ? 5 : Math.max(3, Math.min(8, z * 0.22));
+  const arrows = [];
   for (const n of G.nations.values()) {
     // 只有一格的小段（被敌军围住的孤立据点）不画，地图上不满是小圈
     const fronts = (n.strategy?.fronts ?? []).filter(f => f.kind === 'land' && f.edges?.length > 1);
@@ -2678,7 +2679,116 @@ function drawFronts(ctx, v) {
         ctx.strokeStyle = 'rgba(18,14,10,0.6)'; ctx.lineWidth = 1; ctx.stroke(teeth);
       }
       ctx.restore();
-      if (attack && f.arrow && !near) drawPlanArrow(ctx, v, { kind: 'front', from: f.arrow[0], to: f.arrow[1] }, n.rgb, 0.5, false);
+      if (attack) arrows.push([n, f]);
+    }
+  }
+  // 进攻箭头画在所有战线之上（钢铁雄心式：粗、弯、半透明，箭身写部队名）
+  for (const [n, f] of arrows) drawFrontArrows(ctx, v, n, f, near);
+}
+
+// ---------------------------------------------------------------- 进攻箭头（钢铁雄心式）
+
+// 一段进攻中的战线：沿战线均匀挑 1–4 个出发点（每 ARROW_EVERY 格一支），各自朝目标城弯过去；
+// 长度到目标城的 ARROW_SHARE、最长 ARROW_MAX 格，不横穿半张地图
+const ARROW_EVERY = 7, ARROW_MAX = 9, ARROW_MIN = 2.5, ARROW_SHARE = 0.75;
+function frontArrowShapes(v, f) {
+  const city = G.cities.get(`city:${f.objective}`);
+  const tiles = f.tiles ?? [];
+  if (!city || !tiles.length) return [];
+  const PW = v.PW;
+  const [ox0, oy] = center(city.tile);
+  const pts = tiles.map((t) => center(t));
+  const cx0 = pts.reduce((a, p) => a + p[0], 0) / pts.length, cy = pts.reduce((a, p) => a + p[1], 0) / pts.length;
+  const ox = cx0 + wrapDelta(ox0 - cx0, PW);
+  const dl = Math.hypot(ox - cx0, oy - cy) || 1, dx = (ox - cx0) / dl, dy = (oy - cy) / dl;
+  // 出发点沿战线（垂直于进攻方向）排开，按分位数挑
+  const along = pts.map(([x, y], i) => [wrapDelta(x - cx0, PW) * -dy + (y - cy) * dx, i]).sort((a, b) => a[0] - b[0]);
+  const k = Math.max(1, Math.min(4, Math.round(tiles.length / ARROW_EVERY)));
+  const out = [];
+  for (let i = 0; i < k; i++) {
+    const [x0, y0] = pts[along[Math.floor(((i + 0.5) / k) * along.length)][1]];
+    const sx = cx0 + wrapDelta(x0 - cx0, PW), sy = y0;
+    const ddx = ox - sx, ddy = oy - sy, d = Math.hypot(ddx, ddy) || 1;
+    const len = Math.max(ARROW_MIN * SQRT3, Math.min(ARROW_MAX * SQRT3, d * ARROW_SHARE));
+    const ex = sx + (ddx / d) * len, ey = sy + (ddy / d) * len;
+    // 两侧的箭头往外弯一点（钳形），只有一支时微弯
+    const side = k === 1 ? 0.12 : ((i - (k - 1) / 2) / ((k - 1) / 2)) * 0.22;
+    const mx = (sx + ex) / 2 - (ddy / d) * side * len, my = (sy + ey) / 2 + (ddx / d) * side * len;
+    out.push({ sx, sy, mx, my, ex, ey });
+  }
+  return out;
+}
+
+// 箭身上写的名字：这段战线上的军团番号，没有军团就写“进攻 某城”
+function frontArrowLabel(f) {
+  const gens = (f.corps ?? []).map((id) => G.units.get(`unit:${id}`)).filter((u) => u && u.title);
+  if (gens.length) return gens.map((u) => u.title).join("、");
+  const city = G.cities.get(`city:${f.objective}`);
+  return city ? `进攻 ${city.name}` : "进攻";
+}
+
+function drawFrontArrows(ctx, v, n, f, near) {
+  const shapes = frontArrowShapes(v, f);
+  if (!shapes.length) return;
+  const main = !!f.main;
+  const W = Math.max(main ? 13 : 10, Math.min(main ? 36 : 28, v.z * (main ? 1.1 : 0.85))); // 箭身最宽处（屏幕像素）
+  const head = W * 1.9, alpha = near ? 0.8 : 0.95;
+  const [r, g, b] = n.rgb;
+  const light = (a) => `rgba(${Math.round(r + (255 - r) * 0.28)},${Math.round(g + (255 - g) * 0.28)},${Math.round(b + (255 - b) * 0.28)},${a})`;
+  const label = frontArrowLabel(f);
+  const fs = Math.round(Math.max(10, Math.min(16, W * 0.6)));
+  for (const a of shapes) {
+    for (let k = v.k0; k <= v.k1; k++) {
+      const s1 = [v.sx(a.sx, k), v.sy(a.sy)], c = [v.sx(a.mx, k), v.sy(a.my)], e = [v.sx(a.ex, k), v.sy(a.ey)];
+      const pad = head + 40;
+      if (Math.max(s1[0], c[0], e[0]) < -pad || Math.min(s1[0], c[0], e[0]) > v.vw + pad) continue;
+      if (Math.max(s1[1], c[1], e[1]) < -pad || Math.min(s1[1], c[1], e[1]) > v.vh + pad) continue;
+      const ul = Math.hypot(e[0] - c[0], e[1] - c[1]) || 1, ux = (e[0] - c[0]) / ul, uy = (e[1] - c[1]) / ul;
+      const total = Math.hypot(e[0] - s1[0], e[1] - s1[1]);
+      if (total < head * 1.2) continue;
+      const neck = [e[0] - ux * head, e[1] - uy * head];
+      // 箭身：二次曲线采样，尾窄头宽
+      const N = 18, left = [], right = [], mid = [];
+      for (let i = 0; i <= N; i++) {
+        const t = i / N, it = 1 - t;
+        const px = it * it * s1[0] + 2 * it * t * c[0] + t * t * neck[0], py = it * it * s1[1] + 2 * it * t * c[1] + t * t * neck[1];
+        const tx = 2 * it * (c[0] - s1[0]) + 2 * t * (neck[0] - c[0]), ty = 2 * it * (c[1] - s1[1]) + 2 * t * (neck[1] - c[1]);
+        const tl = Math.hypot(tx, ty) || 1, nx = -ty / tl, ny = tx / tl, hw = (W / 2) * (0.45 + 0.55 * t);
+        left.push([px + nx * hw, py + ny * hw]);
+        right.push([px - nx * hw, py - ny * hw]);
+        mid.push([px, py, Math.atan2(ty, tx)]);
+      }
+      const nx = -uy, ny = ux;
+      const path = new Path2D();
+      path.moveTo(left[0][0], left[0][1]);
+      for (const [x, y] of left) path.lineTo(x, y);
+      path.lineTo(neck[0] + nx * W * 0.95, neck[1] + ny * W * 0.95);
+      path.lineTo(e[0], e[1]);
+      path.lineTo(neck[0] - nx * W * 0.95, neck[1] - ny * W * 0.95);
+      for (let i = right.length - 1; i >= 0; i--) path.lineTo(right[i][0], right[i][1]);
+      path.closePath();
+      ctx.save();
+      ctx.globalAlpha = alpha;
+      const grad = ctx.createLinearGradient(s1[0], s1[1], e[0], e[1]);
+      grad.addColorStop(0, light(0.3));
+      grad.addColorStop(0.5, light(0.78));
+      grad.addColorStop(1, light(0.95));
+      ctx.fillStyle = grad;
+      ctx.fill(path);
+      ctx.lineJoin = "round";
+      ctx.strokeStyle = "rgba(255,250,235,0.35)"; ctx.lineWidth = 3.2; ctx.stroke(path); // 内侧亮边
+      ctx.strokeStyle = shade(n.rgb, -0.62); ctx.lineWidth = 2.2; ctx.stroke(path); // 深色描边
+      // 部队名沿箭身写（保持正着读）
+      if (W >= 9 && total > head * 2.2) {
+        const [lx, ly, ang0] = mid[Math.round(N * 0.42)];
+        const ang = ang0 > Math.PI / 2 || ang0 < -Math.PI / 2 ? ang0 + Math.PI : ang0;
+        ctx.translate(lx, ly); ctx.rotate(ang);
+        ctx.font = `600 ${fs}px ${FONT}`; ctx.textAlign = "center"; ctx.textBaseline = "middle";
+        ctx.lineWidth = Math.max(2.5, fs * 0.28); ctx.strokeStyle = "rgba(20,16,12,0.75)";
+        ctx.strokeText(label, 0, 0.5);
+        ctx.fillStyle = "rgba(255,252,242,0.96)"; ctx.fillText(label, 0, 0.5);
+      }
+      ctx.restore();
     }
   }
 }
