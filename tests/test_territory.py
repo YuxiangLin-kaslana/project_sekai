@@ -75,3 +75,22 @@ def test_peace_cedes_enclave_city_to_the_surrounding_nation():
     assert all(int(g.owner[t]) == 2 for t in g.within(pocket.tile, 1))
     assert int(g.owner[guard.tile]) == 1  # 城里的守军按停战遣返回到本国
     assert territory.enclaves(s, RULES, 1) == []
+
+
+def test_isolated_city_drifts_and_joins_the_surrounding_nation(monkeypatch):
+    from engine.systems import stability
+
+    s, a, b = board()
+    g = s.grid
+    diplomacy._set(s, 1, 2, "peace")
+    pocket = found_city(s, RULES, 1, g.idx(17, 2))
+    for t in g.within(pocket.tile, 1):
+        g.owner[t], g.city_of[t] = 1, pocket.id
+    s._territory_cache = None
+    pocket.stability = 2
+    monkeypatch.setattr(stability, "ISOLATION", 1.0)  # 被包围得严严实实：每回合都挨“孤悬境外”
+    out = step(s, [], RULES)
+    city = out.state.cities[pocket.id]
+    assert city.nation == 2  # 归附包围它的国家，不独立成新的小国
+    assert any(e["type"] == "city_joined" for e in out.events)
+    assert all(int(out.state.grid.owner[t]) == 2 for t in g.within(pocket.tile, 1))

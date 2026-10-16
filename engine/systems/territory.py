@@ -235,6 +235,7 @@ def cede_enclaves(ctx, a: int, b: int) -> None:
             to=ref("nation", taker),
             cities=[ref("city", c.id) for c in ceded],
             tiles=len(block),
+            tile=ceded[0].tile if ceded else int(block[0]),
         )
         from engine.systems.upheaval import record
 

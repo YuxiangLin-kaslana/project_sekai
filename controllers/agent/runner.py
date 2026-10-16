@@ -204,6 +204,8 @@ URGENT = {
     "general_defected",
     "coalition",
     "city_revolt",
+    "city_joined",
+    "cities_ceded",
 }
 
 
@@ -246,6 +248,8 @@ def remember(state, memories: dict[int, dict], events: list[dict]) -> None:
                 "civil_war",
                 "general_defected",
                 "city_revolt",
+                "city_joined",
+                "cities_ceded",
                 "city_independence",
                 "surrendered",
                 "coalition",

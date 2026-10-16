@@ -420,6 +420,9 @@ class StabilityConfig(_Strict):
     decay_start: int = Field(80, ge=0, le=5000)
     decay_spread: int = Field(150, ge=1, le=5000)
     far: int = Field(10, ge=1, le=200)  # 按地图尺度放大
+    # 孤城：陷在外国境内、和本国主体不连着的飞地城市（engine/systems/territory.py 的 enclaves），
+    # 外围被包围得越严实越可能挨，每次 −这么多；降到 0 时归附包围它的国家（不独立成新的小国）
+    isolated: int = Field(0, ge=0, le=100)
 
 
 class PillageConfig(_Strict):

@@ -26,6 +26,7 @@ from engine.systems.context import StepContext
 from engine.systems.diplomacy import at_war
 from engine.systems.settlement import city_scale, world_scale
 from engine.systems.soft import fade, ramp, roll
+from engine.systems.territory import ENCLAVE_SHARE
 from engine.systems.tide import boost
 
 SHORTAGE_NAMES = {"food": "缺粮", "gold": "缺钱", "production": "缺生产力"}
@@ -37,6 +38,7 @@ WAR_NAMES = {
     "conquest": "新占领",
     "overextension": "过度扩张",
     "decay": "离心",
+    "isolated": "孤悬境外",
 }
 REASON_NAMES = {**SHORTAGE_NAMES, **WAR_NAMES}
 
@@ -118,6 +120,7 @@ def war_pressures(ctx: StepContext) -> dict[int, list[str]]:
     sizes = Counter(c.nation for c in s.cities.values())
     drift = _drift(s, cfg)
     tide_factor = boost(s, -TIDE_OVEREXTENSION)
+    isolated = _isolated(ctx) if cfg.isolated else {}
     out = {}
     for city in sorted(s.cities.values(), key=lambda c: c.id):
         reasons = []
@@ -141,6 +144,10 @@ def war_pressures(ctx: StepContext) -> dict[int, list[str]]:
                 reasons.append("overextension")
         if roll(ctx, drift.get(city.id, 0.0), "drift", city.id):
             reasons.append("decay")
+        if city.id in isolated and roll(
+            ctx, ISOLATION * ramp(isolated[city.id][1], ENCLAVE_SHARE, 1.0), "isolated", city.id
+        ):
+            reasons.append("isolated")
         if city.damaged_turn == s.turn:
             reasons.append("attacked")
         if any(
@@ -216,11 +223,15 @@ def resolve(ctx: StepContext) -> None:
                 stability=city.stability,
                 reasons=[REASON_NAMES[k] for k in lack],
             )
+    isolated = _isolated(ctx) if cfg.isolated else {}
     for cid in sorted(s.cities):
         city = s.cities[cid]
         if city.stability <= 0:
             owner = city.captured_from
-            if (
+            host = isolated.get(cid)
+            if host is not None and host[1] >= ENCLAVE_SHARE and city.nation != host[0]:
+                _revolt(ctx, city, host[0], kind="city_joined")  # 孤城：归附包围它的国家
+            elif (
                 owner is not None
                 and s.nation_cities(owner)
                 and at_war(s, owner, city.nation)
@@ -232,10 +243,29 @@ def resolve(ctx: StepContext) -> None:
 
 
 TIDE_OVEREXTENSION = 0.5  # 过度扩张的概率乘 exp(−0.5 × 天下大势)（engine/systems/tide.py）
-REVOLT_TURNS = 60  # 稳定度降到 0 的城起义归附原主（而不是独立）的概率按这个尺度随占领时间衰减
+REVOLT_TURNS = 60
+ISOLATION = 0.8  # 孤城被包围得严严实实时，每回合挨“孤悬境外”的概率（外围被包围的比例从一半到全部线性涨）  # 稳定度降到 0 的城起义归附原主（而不是独立）的概率按这个尺度随占领时间衰减
 
 
-def _revolt(ctx: StepContext, city, owner: int) -> None:
+def _isolated(ctx) -> dict[int, tuple[int, float]]:
+    """孤城：各国飞地上的城市 → (包围它的国家, 外围被它占的比例)。"""
+    from engine.systems.territory import enclaves, owner_blocks
+
+    s = ctx.state
+    label = owner_blocks(s)
+    out = {}
+    for nid in sorted(s.nations):
+        for block, to, share in enclaves(s, ctx.rules, nid, label):
+            if to < 0:
+                continue
+            tiles = set(block.tolist())
+            for c in s.nation_cities(nid):
+                if c.tile in tiles:
+                    out[c.id] = (to, share)
+    return out
+
+
+def _revolt(ctx: StepContext, city, owner: int, kind: str = "city_revolt") -> None:
     """起义：刚被占领的城市不服新主，稳定度降到 0 时倒向原主——城里的占领军被起义军消灭，
     辖区归还原主（不独立成新的小国，前线来回拉锯）。"""
     s, rules = ctx.state, ctx.rules
@@ -274,7 +304,7 @@ def _revolt(ctx: StepContext, city, owner: int) -> None:
 
     rebalance(s, (owner, occupier))
     ctx.log.add(
-        "city_revolt",
+        kind,
         city=ref("city", city.id),
         tile=city.tile,
         nation=ref("nation", owner),

@@ -3411,6 +3411,10 @@ export function playEvents(events, before) {
       G.effects.push({type:'label', tile:e.tile, text:`破坏 · ${e.target}`, start:now+200*k, duration:1600*k});
     } else if (e.type === 'city_independence') {
       G.effects.push({type:'label', tile:e.tile, text:`独立 · ${e.name}`, start:now+400*k, duration:2600*k});
+    } else if ((e.type === 'city_joined' || e.type === 'city_revolt' || e.type === 'cities_ceded') && e.tile != null) {
+      // 孤城归附包围它的国家 / 新占领的城起义归附原主 / 和约割让飞地
+      const text = {city_joined:'孤城归附', city_revolt:'起义归附', cities_ceded:'和约割让'}[e.type];
+      G.effects.push({type:'label', tile:e.tile, text, start:now+400*k, duration:2600*k});
     } else if (e.type === 'battle_plan' || e.type === 'battle_ended') {
       if (e.tile != null) G.effects.push({type:'label', tile:e.tile, text:e.type==='battle_plan'?`开战 · ${e.name}`:`${e.name} · ${e.result}`, start:now+300*k, duration:2200*k});
     } else if (e.type === 'level_up' || e.type === 'city_captured') {
