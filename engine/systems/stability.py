@@ -24,7 +24,7 @@ from engine.systems import encirclement
 from engine.systems.cities import FOOD_PER_POP, city_yields, heads, population_upkeep
 from engine.systems.context import StepContext
 from engine.systems.diplomacy import at_war
-from engine.systems.settlement import city_scale
+from engine.systems.settlement import city_scale, world_scale
 from engine.systems.soft import fade, ramp, roll
 from engine.systems.tide import boost
 
@@ -114,6 +114,7 @@ def war_pressures(ctx: StepContext) -> dict[int, list[str]]:
     territory = s.territory_index()
     cfg = rules.stability
     far = max(1, cfg.far * city_scale(s.grid))
+    world = world_scale(s.grid)  # 帝国规模按全图城市数折算（大地图上城多）
     sizes = Counter(c.nation for c in s.cities.values())
     drift = _drift(s, cfg)
     tide_factor = boost(s, -TIDE_OVEREXTENSION)
@@ -130,7 +131,9 @@ def war_pressures(ctx: StepContext) -> dict[int, list[str]]:
             # 过度扩张：国家越大、离首都越远越可能挨（满了大约每两回合一次）
             p = (
                 0.5
-                * ramp(sizes[city.nation], cfg.empire_size - 4, cfg.empire_size + 4)
+                * ramp(
+                    sizes[city.nation], (cfg.empire_size - 4) * world, (cfg.empire_size + 4) * world
+                )
                 * ramp(s.grid.distance(capital.tile, city.tile), 0.6 * far, 1.4 * far)
                 * tide_factor  # 天下大势偏“分”时更容易离心
             )

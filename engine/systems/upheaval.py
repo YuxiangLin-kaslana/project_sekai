@@ -27,7 +27,7 @@ import numpy as np
 from engine.ids import parse_ref, ref
 from engine.state import Unit
 from engine.systems.diplomacy import at_war
-from engine.systems.settlement import city_scale
+from engine.systems.settlement import city_scale, world_scale
 from engine.systems.soft import fade, ramp, roll
 from engine.systems.tide import at as tide_at
 from engine.systems.tide import boost, phase, tide
@@ -252,6 +252,7 @@ def _civil_war(ctx, nid) -> bool:
     if capital is None or len(cities) < 3:
         return False
     others = [c for c in cities if c.id != capital.id]
+    world = world_scale(g)
     # 动荡程度：首都以外各城的不稳（稳定度越低越重，60 以上不算）的平均
     unrest = sum(ramp(60 - c.stability, 0, 45) for c in others) / len(others)
     cfg = ctx.rules.stability
@@ -261,7 +262,7 @@ def _civil_war(ctx, nid) -> bool:
     )
     p = (
         (CIVIL_RATE + (CIVIL_RATE_DRIFT - CIVIL_RATE) * drift)
-        * ramp(len(cities), 6, 14)  # 越大的国家越容易
+        * ramp(len(cities), 6 * world, 14 * world)  # 越大的国家越容易（城数按全图规模折算）
         * ramp(
             unrest, 0.1 - 0.05 * drift, 0.45 - 0.15 * drift
         )  # 越动荡越容易（离心中的帝国更低就够）
@@ -370,6 +371,7 @@ def _civil_war(ctx, nid) -> bool:
 
 def _defections(ctx) -> None:
     s, rules, g = ctx.state, ctx.rules, ctx.state.grid
+    world = world_scale(g)
     gens = sorted(
         (
             u
@@ -393,7 +395,7 @@ def _defections(ctx) -> None:
             * ramp(gen.rank, 1, 5)  # 星级越高越有野心
             * ramp(len(corps), 3, 15)  # 军团越大越有本钱
             * ramp(75 - mood, 0, 40)  # 本国越不稳越可能
-            * ramp(len(cities), 4, 12)  # 大国才有地方割据
+            * ramp(len(cities), 4 * world, 12 * world)  # 大国才有地方割据（按全图规模折算）
             * (1 - fade(s.turn - nation.upheaval_turn, UPHEAVAL_RECOVER))
             * boost(s, -TIDE_UPHEAVAL)
         )

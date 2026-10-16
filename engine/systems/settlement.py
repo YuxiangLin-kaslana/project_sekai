@@ -33,6 +33,13 @@ def city_scale(g) -> float:
     return map_scale(g) ** CITY_SCALE_EXP * g.tuning.get("city_size", 100) / 100
 
 
+def world_scale(g) -> float:
+    """全图能放的城市数是标准 80×50 地图的几倍（地图尺度² ÷ 城市尺度²，再乘开局设置的地区承载倍数）：
+    80×50 是 1，128×80 约 1.5，256×150 约 2.5。“多少座城算大国”这类按城市数的门槛乘它——
+    大地图上城多，十几座城还远谈不上称霸。"""
+    return (map_scale(g) / city_scale(g)) ** 2 * g.tuning.get("capacity", 100) / 100
+
+
 def geography(state, rules):
     if state._settlement_cache is not None and "water_components" in state._settlement_cache:
         return state._settlement_cache
