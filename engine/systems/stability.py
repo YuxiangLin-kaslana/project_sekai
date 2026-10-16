@@ -156,10 +156,11 @@ def war_pressures(ctx: StepContext) -> dict[int, list[str]]:
             reasons.append("occupied")
         if city.id in ring.cities:
             reasons.append("encircled")
-        # 厌战：本国这回合阵亡得越多越可能（weariness_losses 支左右过半）
+        # 厌战：本国这回合阵亡得越多越可能（weariness_losses 支左右过半；按全图规模折算——大地图上
+        # 军队大得多，一回合阵亡几支算不上伤筋动骨）
         k = rules.stability.weariness_losses
         if losses[city.nation] and roll(
-            ctx, ramp(losses[city.nation], k - 2, k + 2), "weary", city.nation
+            ctx, ramp(losses[city.nation] / world, k - 2, k + 2), "weary", city.nation
         ):
             reasons.append("weariness")
         out[city.id] = reasons
