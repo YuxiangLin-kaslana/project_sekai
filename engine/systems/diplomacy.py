@@ -219,7 +219,9 @@ def make_peace(ctx, a: int, b: int) -> None:
     _drop_offers(s, a, b)
     ctx.log.add("peace_signed", nation=ref("nation", a), target=ref("nation", b), truce=TRUCE)
     from engine.systems.borders import expel
+    from engine.systems.territory import cede_enclaves
 
+    cede_enclaves(ctx, a, b)  # 和约划界：陷在对方境内的飞地割让给对方，双方国土各自连成一片
     expel(ctx, a, b)  # 和约规定撤军：双方留在对方领土上的部队送回本国
 
 

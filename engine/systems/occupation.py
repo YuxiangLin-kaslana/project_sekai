@@ -17,7 +17,7 @@ def resolve(ctx) -> None:
     _occupy(ctx)
     # 这回合有土地易手（攻下城市、占领区域）的国家：把领土在自己的城市之间重新分一次，不留飞地
     from engine.ids import parse_ref
-    from engine.systems.territory import rebalance
+    from engine.systems.territory import rebalance, tidy
 
     touched = set()
     for e in ctx.log.events:
@@ -26,6 +26,9 @@ def resolve(ctx) -> None:
             touched.add(parse_ref(e["previous"], "nation"))
     if touched:
         rebalance(ctx.state, touched)
+    # 零碎国土归还：和本国别的国土不连着、没人据守、被外国包围的无城小块（engine/systems/territory.py）
+    if not ctx.immediate:
+        tidy(ctx)
     # 机场所在的土地易手了：停在上面的飞机投降或紧急转场
     from engine.systems.air import stranded
 
