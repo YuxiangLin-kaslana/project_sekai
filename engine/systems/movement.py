@@ -36,6 +36,13 @@ def group_members(state, unit):
     )
 
 
+def air_partners(state: GameState, nation: int) -> set[int]:
+    """能共用机场的国家：本国和盟国（盟友之间互相使用对方的机场）。"""
+    from engine.systems.diplomacy import allies
+
+    return {nation, *allies(state, nation)}
+
+
 def is_air_base(state: GameState, rules: Ruleset, nation: int, tile: int) -> bool:
     # 航空母舰是移动机场：海上任何地方都能起降
     if any(
@@ -43,8 +50,9 @@ def is_air_base(state: GameState, rules: Ruleset, nation: int, tile: int) -> boo
         for u in state.units_at(tile, "surface")
     ):
         return True
-    if int(state.grid.owner[tile]) != nation:
-        return False
+    owner = int(state.grid.owner[tile])
+    if owner != nation and owner not in air_partners(state, nation):
+        return False  # 本国或盟国的机场才能起降
     # 城市本身不能停飞机：只有机场（和航母）能起降
     b = rules.facility_at(int(state.grid.facility[tile]))
     if b is None or not b.air_base:

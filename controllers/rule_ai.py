@@ -3163,6 +3163,18 @@ def _navy_plan(ctx, nation, p, units, cities):
         and any(g.distance(u.tile, c.tile) <= 12 * map_scale(g) for c in ports)
     )
     p["enemy_fleet_types"] = dict(sorted(kinds.items()))
+    # 本国城市附近的交战国陆军按兵种分（城市托管按克制关系造：敌方坦克多就造反坦克）
+    near = 12 * map_scale(g)
+    land = Counter(
+        u.type
+        for u in s.units.values()
+        if u.layer == "surface"
+        and rules.units[u.type].domain == "land"
+        and is_military(rules, u)
+        and at_war(s, u.nation, nation.id)
+        and any(g.distance(u.tile, c.tile) <= near for c in cities)
+    )
+    p["enemy_land_types"] = dict(sorted(land.items()))
     components = geography(s, rules)["land_components"]
     home = {int(components[c.tile]) for c in cities}
     settled = {}
@@ -3602,7 +3614,7 @@ def _air_overrun(ctx, nation, tile) -> bool:
 
 
 def _air_bases(ctx, nation):
-    """本国现在能起降的机场和本方航母所在的格子。"""
+    """本国现在能起降的机场（含盟国的）和本方航母所在的格子。"""
     s, rules, g = ctx.state, ctx.rules, ctx.state.grid
     ai = _ai(ctx)
     if "land_armies" not in ai:
@@ -3613,9 +3625,11 @@ def _air_bases(ctx, nation):
             and is_military(rules, u)
             and rules.units[u.type].domain == "land"
         ]
+    # 本国和盟国的机场（盟友之间互相使用对方的机场）
+    partners = np.array(sorted(movement.air_partners(s, nation)), dtype=g.owner.dtype)
     bases = [
         int(t)
-        for t in np.flatnonzero((g.owner == nation) & (g.facility > 0))
+        for t in np.flatnonzero(np.isin(g.owner, partners) & (g.facility > 0))
         if movement.is_air_base(s, rules, nation, int(t))
     ]
     bases += [

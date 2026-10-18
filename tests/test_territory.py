@@ -94,3 +94,22 @@ def test_isolated_city_drifts_and_joins_the_surrounding_nation(monkeypatch):
     assert city.nation == 2  # 归附包围它的国家，不独立成新的小国
     assert any(e["type"] == "city_joined" for e in out.events)
     assert all(int(out.state.grid.owner[t]) == 2 for t in g.within(pocket.tile, 1))
+
+
+def test_allies_share_airfields():
+    """盟友之间互相使用对方的机场：能降落、能转场、合计占机场名额；同盟解除后算失去机场。"""
+    from engine.systems.movement import is_air_base
+    from engine.systems.stacking import has_room
+
+    s, a, b = board()
+    g = s.grid
+    field = g.idx(15, 6)  # B 境内的机场
+    g.facility[field] = RULES.facility_index("airfield")
+    g.city_of[field] = b.id
+    s._territory_cache = None
+    assert not is_air_base(s, RULES, 1, field)  # 交战中：别国的机场停不了
+    diplomacy._set(s, 1, 2, "alliance")
+    assert is_air_base(s, RULES, 1, field)
+    assert has_room(s, RULES, field, "air", 1)
+    diplomacy._set(s, 1, 2, "peace")
+    assert not is_air_base(s, RULES, 1, field)

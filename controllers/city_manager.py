@@ -129,6 +129,9 @@ class Budget:
     enemy_fleet_types: dict = field(
         default_factory=dict
     )  # 同上，按舰种分（克制关系：damage_vs_types）
+    enemy_land_types: dict = field(
+        default_factory=dict
+    )  # 本国城市附近交战国的陆军，按兵种分（敌方坦克多 → 反坦克）
     airfield: dict | None = None  # 国家要修的前线机场（rule_ai._airfield_plan）：格子、哪座城修
     want_admiral: int = (
         0  # 没人统率的战舰比海军将领的统御空位多出多少（多于 ADMIRAL_MIN 就造海军将领）
@@ -440,6 +443,7 @@ def budget_for(state, rules, nation, cities):
         expanding=expanding,
         enemy_fleet=strategy.get("enemy_fleet", 0),
         enemy_fleet_types=strategy.get("enemy_fleet_types") or {},
+        enemy_land_types=strategy.get("enemy_land_types") or {},
     )
 
 
@@ -739,15 +743,19 @@ def decide_city(state, rules, city, budget):
                 score += bonus
                 if bonus >= 30:
                     reason = f"附近海上有 {budget.enemy_fleet} 艘敌舰：造驱逐舰，用鱼雷对付敌方海军"
-            countered = sum(
-                n for k, n in budget.enemy_fleet_types.items() if k in u.damage_vs_types
-            )
+            near_foes = budget.enemy_land_types if u.domain == "land" else budget.enemy_fleet_types
+            countered = sum(n for k, n in near_foes.items() if k in u.damage_vs_types)
             if countered:
-                # 克制关系（damage_vs_types）：附近这类敌舰越多越该造克制它的（敌方驱逐舰扎堆 → 巡洋舰）
+                # 克制关系（damage_vs_types）：附近这类敌军越多越该造克制它的（敌方驱逐舰扎堆 → 巡洋舰，
+                # 敌方坦克压境 → 反坦克）
                 bonus = COUNTER_PULL * countered / (countered + 3)
                 score += bonus
                 if bonus >= 30:
-                    reason = f"附近海上有 {countered} 艘它克制的敌舰：造来反制"
+                    reason = (
+                        f"本国附近有 {countered} 支它克制的敌方部队：造来反制"
+                        if u.domain == "land"
+                        else f"附近海上有 {countered} 艘它克制的敌舰：造来反制"
+                    )
             if "carrier" in u.tags:
                 # 航母贵（360 生产力），按“战斗力 ÷ 造价”永远比不过步兵；国家要航母时给足加分，
                 # 让一座有港口的沿海城市真的造出来（其余城市看到在造了就不重复造）

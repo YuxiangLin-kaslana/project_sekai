@@ -65,6 +65,7 @@ from engine.systems.progression import LEVEL_BASE, THRESHOLDS, progress
 from engine.systems.settlement import (
     area_limits,
     area_usage,
+    capacity_of,
     city_environment,
     geography,
     usage,
@@ -782,8 +783,11 @@ def _snapshot(game: Game, rules: Ruleset) -> dict:
     result = {
         "settlement_regions": {
             "width": geography(s, rules)["zone_width"],
-            "capacities": geography(s, rules)["capacity"],
-            "cities": usage(s, rules),
+            # 名额含空地折算的额外名额（engine/systems/settlement.capacity_of）
+            "capacities": [
+                capacity_of(s, rules, z) for z in range(len(geography(s, rules)["capacity"]))
+            ],
+            "cities": {z: n for z, n in usage(s, rules).items() if isinstance(z, int)},
         },
         # 各大区：现有城市 / 最多城市 / 标签格
         "area_cities": {

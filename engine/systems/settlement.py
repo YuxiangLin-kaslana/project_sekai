@@ -128,13 +128,37 @@ def usage(state, rules):
     return state._settlement_usage
 
 
+FREE_ROOM = 1  # 片区里每空着这么多座城的初始辖区那么大的无主陆地，多给一个建城名额
+
+
+def capacity_of(state, rules, zone: int) -> int:
+    """片区的建城名额：按地力算的基础名额，加上还空着的无主陆地折算的名额（能通行的无主陆地 ÷
+    FREE_ROOM 座城的初始辖区）。森林、丘陵这类地力低的片区基础名额少，城建满了还剩大片荒地——
+    剩下的地越多越能再建城，直到可开拓的土地都开拓完（城市间距照旧）。"""
+    geo = geography(state, rules)
+    base = geo["capacity"][zone]
+    ledger = usage(state, rules)
+    free = ledger.get("free")
+    if free is None:
+        g = state.grid
+        passable = np.array(
+            [t.move_cost is not None and not t.water for t in rules.terrain.values()]
+        )[g.terrain]
+        open_land = passable & (g.owner < 0)
+        free = np.bincount(geo["zones"][open_land], minlength=len(geo["capacity"]))
+        ledger["free"] = free
+    r = max(1, round(rules.cities.radius * city_scale(state.grid)))
+    footprint = 3 * r * (r + 1) + 1
+    return base + int(free[zone]) // (FREE_ROOM * footprint)
+
+
 def site_score(state, rules, nation, tile, origin=None):
     geo, g = geography(state, rules), state.grid
     q = int(geo["quality"][tile])
     p = int(geo["potential"][tile])
     zone = int(geo["zones"][tile])
     ledger = usage(state, rules)
-    capacity = max(1, geo["capacity"][zone])
+    capacity = max(1, capacity_of(state, rules, zone))
     crowding = ledger.get(zone, 0) / capacity if rules.cities.regional_capacity else 0
     # 相邻城市形成市场与道路收益；过度扎堆会竞争土地。既不铺网格，也不只选最远空地。
     score = q * 2 + p - min(240, round(crowding * 75))
@@ -158,10 +182,10 @@ def city_environment(state, rules, city):
         "potential": q,
         "min_distance": spacing(state, rules, city.tile),
         "map_scale": round(map_scale(state.grid), 2),
-        "regional_capacity": geo["capacity"][z],
+        "regional_capacity": capacity_of(state, rules, z),
         "regional_cities": ledger.get(z, 0),
         "zone": z,
-        "regional_pressure": round(100 * ledger.get(z, 0) / max(1, geo["capacity"][z])),
+        "regional_pressure": round(100 * ledger.get(z, 0) / max(1, capacity_of(state, rules, z))),
         "description": "富饶" if q >= 60 else "贫瘠" if q < 28 else "一般",
     }
 
@@ -171,7 +195,7 @@ def founding_problem(state, rules, tile):
         return None
     z = int(geography(state, rules)["zones"][tile])
     ledger = usage(state, rules)
-    capacity = geography(state, rules)["capacity"][z]
+    capacity = capacity_of(state, rules, z)
     if ledger.get(z, 0) >= capacity:
         return f"区域城市名额已满（{ledger.get(z, 0)}/{capacity}），请选择其他区域"
     return None

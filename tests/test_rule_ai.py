@@ -138,9 +138,13 @@ def test_region_city_count_is_a_hard_limit_for_all_nations(board):
     tile = g.idx(18, 4)
     geo = geography(board, RULES)
     zone = int(geo["zones"][tile])
-    # 填满该区域，新增位置仍满足距离与归属条件。
-    for i in range(geo["capacity"][zone]):
+    # 填满该区域（名额含空地折算的额外名额，建城占地后会变少），新增位置仍满足距离与归属条件。
+    from engine.systems.settlement import capacity_of, usage
+
+    i = 0
+    while usage(board, RULES).get(zone, 0) < capacity_of(board, RULES, zone):
         found_city(board, RULES, 2, g.idx(12 + i, 0))
+        i += 1
     problem = found_city_problem(board, RULES, 1, tile)
     assert problem and "名额已满" in problem
     u = add(board, "settler", 1, g.col_row(tile))

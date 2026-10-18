@@ -142,6 +142,20 @@ anti_air:
   upkeep: 1
   icon: anti_air
 
+anti_tank:
+  name: 反坦克营
+  short: 反
+  strength: 9
+  hp: 150
+  moves: 3            # 和步兵一样
+  cost: 80
+  population: 1
+  gold: 20
+  upkeep: 1
+  damage_vs_types: { armor: 250 }   # 反坦克炮：打坦克 ×2.5（坦克打它照常；挨打反击时同样按 ×2.5）
+  tags: [defensive]
+  icon: anti_tank
+
 armor:
   name: 装甲师
   short: 装

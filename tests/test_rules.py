@@ -69,7 +69,7 @@ def test_extends_overrides_and_deletes(rules_root: Path):
     )
     # 删掉石油后，引用它的单位和设施也要删掉（否则引用检查不通过）
     (child / "units.yaml").write_text(
-        "armor: null\nbattleship: null\ncarrier: null\n", encoding="utf-8"
+        "armor: null\nanti_tank: null\nbattleship: null\ncarrier: null\n", encoding="utf-8"
     )
     (child / "buildings.yaml").write_text("oil_well: null\n", encoding="utf-8")
     # 给这些单位加成的科技也删掉

@@ -54,6 +54,17 @@ def has_room(
         )
         if here + adding > surface_limit(state, rules, tile):
             return False
+    if cls == "air" and nation is not None:
+        # 飞机按本国连同盟国合计：盟国共用一座机场时一起占名额（头顶飞过的敌机不算）
+        from engine.systems.movement import air_partners
+
+        partners = air_partners(state, nation)
+        here = sum(
+            1
+            for u in state.units_at(tile, "air")
+            if rules.units[u.type].stack_class == "air" and u.nation in partners
+        )
+        return here + adding <= stack_limit(state, rules, tile, cls)
     return stack_count(state, rules, tile, cls, nation) + adding <= stack_limit(
         state, rules, tile, cls
     )

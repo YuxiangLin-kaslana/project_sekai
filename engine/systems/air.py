@@ -430,13 +430,16 @@ def land(ctx, plane) -> None:
 
 
 def _airfields(s, rules, nation) -> list[int]:
-    """本国的机场格（不管现在能不能起降；调用方再用 is_air_base 筛）。"""
+    """本国和盟国的机场格（不管现在能不能起降；调用方再用 is_air_base 筛）。"""
     import numpy as np
 
+    from engine.systems.movement import air_partners
+
     g = s.grid
+    mine = np.isin(g.owner, np.array(sorted(air_partners(s, nation)), dtype=g.owner.dtype))
     return [
         int(t)
-        for t in np.flatnonzero((g.owner == nation) & (g.facility > 0))
+        for t in np.flatnonzero(mine & (g.facility > 0))
         if (b := rules.facility_at(int(g.facility[t]))) is not None and b.air_base
     ]
 
@@ -459,8 +462,8 @@ def stranded(ctx) -> None:
         if plane.id not in s.units:
             continue
         b = rules.facility_at(int(g.facility[plane.tile]))
-        if int(g.owner[plane.tile]) == plane.nation and b is not None and b.air_base:
-            continue
+        if b is not None and b.air_base and is_air_base(s, rules, plane.nation, plane.tile):
+            continue  # 还停在本国 / 盟国能用的机场上（同盟解除、机场失守才算失去机场）
         if any(
             rules.units[v.type].air_capacity
             for v in s.units_at(plane.tile, "surface")

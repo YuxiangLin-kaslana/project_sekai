@@ -1935,6 +1935,10 @@ function drawSymbol(ctx, icon, x, y, w, h, ink) {
       ctx.fill();
       break;
     }
+    case "anti_tank":
+      // 反坦克：北约军标的倒 V（从框底两角收到顶边中点）
+      ctx.moveTo(l, b); ctx.lineTo(x, t); ctx.lineTo(r, b);
+      break;
     case "recon":
       ctx.moveTo(l, b); ctx.lineTo(r, t);
       break;

@@ -342,7 +342,9 @@ def _civil_war(ctx, nid) -> bool:
             if a < b:
                 diplomacy._set(s, a, b, "war", progress=s.turn)
     nation.upheaval_turn = s.turn
-    nation.decay //= 2  # 分裂之后腐败减半，进入下一轮兴衰
+    nation.decay = (
+        nation.decay * 2 // 3
+    )  # 分裂之后腐败只消掉三分之一：元气一时难复，分出去的军阀不会马上被收复
     if len(made) == 1:
         new, group, seat, units = made[0]
         record(

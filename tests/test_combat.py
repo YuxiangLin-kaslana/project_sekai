@@ -1285,3 +1285,35 @@ def combat_preview(s, actor, tile):
     from engine.systems.combat import preview
 
     return preview(s, RULES, actor, tile)
+
+
+def test_anti_tank_hits_armor_hard_both_ways():
+    """反坦克营：移动力和步兵一样；打坦克伤害 ×2.5，坦克冲上来时反击也按 ×2.5。"""
+    from engine.hexmap.grid import HexGrid
+    from engine.state import GameState, Nation
+    from engine.systems import combat as cb
+    from engine.systems import diplomacy
+
+    assert RULES.units["anti_tank"].moves == RULES.units["infantry"].moves
+
+    def duel(a_type, d_type):
+        g = HexGrid.empty(10, 6, wrap_x=False)
+        g.terrain[:] = list(RULES.terrain).index("plains")
+        g.area[:] = 0
+        s = GameState(1, 3, RULES.id, g)
+        s.nations = {
+            1: Nation(1, "A", "#a00000", None, gold=100),
+            2: Nation(2, "B", "#0000a0", None, gold=100),
+        }
+        diplomacy._set(s, 1, 2, "war")
+        hp = RULES.units
+        a = s.add_unit(
+            Unit(s.new_id(), a_type, 1, g.idx(3, 3), "surface", hp=hp[a_type].hp, moves_left=3)
+        )
+        d = s.add_unit(Unit(s.new_id(), d_type, 2, g.idx(4, 3), "surface", hp=hp[d_type].hp))
+        info, problem = cb.preview(s, RULES, a, d.tile)
+        assert problem is None
+        return info
+
+    assert duel("anti_tank", "armor")["damage"] > 2 * duel("infantry", "armor")["damage"]
+    assert duel("armor", "anti_tank")["retaliation"] > duel("armor", "infantry")["retaliation"]

@@ -862,6 +862,12 @@ def _preview(state, rules, actor, tile) -> tuple[dict | None, str | None]:
         # 被包围的城市断了补给：反击和攻击一样只剩 city_penalty 之外的部分（孤城守不住强攻）
         retaliation = retaliation * (100 - rules.encirclement.city_penalty) // 100
         tactical = [*tactical, ("被围孤城反击减弱", -rules.encirclement.city_penalty)]
+    if retaliation and isinstance(target, Unit) and isinstance(actor, Unit):
+        # 兵种克制在挨打反击时同样算（反坦克被坦克冲上来，照样按 ×2.5 打回去）
+        counter = rules.units[target.type].damage_vs_types.get(actor.type, 100)
+        if counter != 100:
+            retaliation = retaliation * counter // 100
+            tactical = [*tactical, ("对方克制我方兵种（反击）", counter - 100)]
     if (city_defense(state, rules, target) if isinstance(target, City) else target.hp) <= 0:
         retaliation = 0
     if kind == "air" and isinstance(target, Unit):
